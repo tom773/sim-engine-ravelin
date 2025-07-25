@@ -1,5 +1,4 @@
 use crate::*;
-use uuid::Uuid;
 use serde::{Serialize, Deserialize};
 use rand::prelude::*;
 use crate::FeatureSource;
@@ -10,8 +9,7 @@ pub struct Consumer {
     pub age: u32,
     pub bank_id: AgentId,
     pub decision_model: Box<dyn DecisionModel>,
-    pub propensity_to_consume: f64,
-    pub income: f64,
+    pub income: f64, // Annual income
 }
 
 impl Consumer {
@@ -22,49 +20,38 @@ impl Consumer {
             bank_id,
             age,
             decision_model: dm,
-            propensity_to_consume: rng.random_range(0.3..0.7),
-            income: rng.random_range(30000.0..80000.0),
+            income: (rng.random_range(30000.0..80000.0))/52.0,
         }
     }
-    
-    pub fn save(&mut self, amount: f64, fs: &mut FinancialSystem) -> Result<(), String> {
-        if amount > self.income {
-            return Err("Insufficient income to save".to_string());
-        }
-        
-        let deposit = FinancialInstrument {
-            id: InstrumentId(Uuid::new_v4()),
-            creditor: self.id.clone(),
-            debtor: self.bank_id.clone(),
-            principal: amount,
-            maturity: None,
-            interest_rate: fs.central_bank.policy_rate + fs.commercial_banks[&self.bank_id].deposit_spread,
-            instrument_type: InstrumentType::DemandDeposit,
-            originated_date: 0,
-        };
-        
-        fs.create_instrument(deposit)?;
-        Ok(())
-    }
-    
+    pub fn snip_id(&self) -> String { self.id.0.to_string().chars().take(4).collect() }
     pub fn balance_sheet<'a>(&self, fs: &'a FinancialSystem) -> Option<&'a BalanceSheet> {
-        fs.balance_sheets.get(&self.id)
+        fs.get_bs_by_id(&self.id)
+    }
+    
+    pub fn get_cash_holdings(&self, fs: &FinancialSystem) -> f64 {
+        fs.get_cash_assets(&self.id)
+    }
+    
+    pub fn get_deposits(&self, fs: &FinancialSystem) -> f64 {
+        fs.get_deposits_at_bank(&self.id, &self.bank_id)
     }
 }
 
 impl Agent for Consumer {
-    fn act(&self, decision: &Decision) -> Action {
-        match decision {
-            Decision::Spend { amount } => Action::Buy { 
-                good_id: "goods".to_string(), 
-                quantity: (*amount / 10.0) as u32 
-            },
-            Decision::Save => Action::Save,
+    fn act(&self, decision: &Decision) -> Vec<Action> {
+        let mut actions = Vec::new();
+
+        // Save $1000 
+        if decision.save_amount > 0.0 {
+            actions.push(Action::DepositCash { amount: 1000.0 });
         }
+        
+        actions
     }
     
-    fn decide(&self, fs: &FinancialSystem, rng: &mut StdRng) -> Decision {
-        self.decision_model.decide(self, fs, rng)
+    fn decide(&self, _fs: &FinancialSystem, _rng: &mut StdRng) -> Decision {
+        //self.decision_model.decide(self, fs, rng)
+        Decision { spend_amount: 0.0, save_amount: 1000.0, total_available: 1000.0 }
     }
 }
 
@@ -78,12 +65,12 @@ impl FeatureSource for Consumer {
     }
     
     fn get_savings(&self) -> f64 {
-        // TODO
+        // TODO: Implement properly from balance sheet
         0.0
     }
     
     fn get_debt(&self) -> f64 {
-        // TODO
+        // TODO: Implement properly from balance sheet
         0.0
     }
 }

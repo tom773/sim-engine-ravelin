@@ -64,16 +64,36 @@ impl BalanceSheet {
 }
 
 pub trait BalanceSheetQuery {
+    fn get_bs_by_id(&self, agent_id: &AgentId) -> Option<&BalanceSheet>;
+    fn get_bs_mut_by_id(&mut self, agent_id: &AgentId) -> Option<&mut BalanceSheet>;
     fn get_total_assets(&self, agent_id: &AgentId) -> f64;
     fn get_total_liabilities(&self, agent_id: &AgentId) -> f64;
     fn get_liquid_assets(&self, agent_id: &AgentId) -> f64;
     fn get_deposits_at_bank(&self, agent_id: &AgentId, bank_id: &AgentId) -> f64;
+    fn get_cash_assets(&self, agent_id: &AgentId) -> f64; 
+    fn liquidity(&self, agent_id: &AgentId) -> f64;
+    fn get_central_bank_reserve_account(&self, agent_id: &AgentId) -> Option<&BalanceSheet>;
 }
 
 impl BalanceSheetQuery for FinancialSystem {
+    fn get_bs_by_id(&self, agent_id: &AgentId) -> Option<&BalanceSheet> {
+        self.balance_sheets.get(agent_id)
+    }
+    fn get_bs_mut_by_id(&mut self, agent_id: &AgentId) -> Option<&mut BalanceSheet> {
+        self.balance_sheets.get_mut(agent_id)
+    }
     fn get_total_assets(&self, agent_id: &AgentId) -> f64 {
         self.balance_sheets.get(agent_id)
             .map(|bs| bs.total_assets())
+            .unwrap_or(0.0)
+    }
+    fn get_cash_assets(&self, agent_id: &AgentId) -> f64 {
+        self.get_bs_by_id(agent_id)
+            .map(|bs| bs.assets.values()
+                .filter(|inst| matches!(inst.instrument_type, InstrumentType::Cash))
+                .map(|inst| inst.principal)
+                .sum::<f64>()
+            )
             .unwrap_or(0.0)
     }
     fn get_total_liabilities(&self, agent_id: &AgentId) -> f64 {
@@ -90,5 +110,13 @@ impl BalanceSheetQuery for FinancialSystem {
         self.balance_sheets.get(agent_id)
             .map(|bs| bs.deposits_at_bank(bank_id))
             .unwrap_or(0.0)
-    } 
+    }
+    fn liquidity(&self, agent_id: &AgentId) -> f64 {
+        self.balance_sheets.get(agent_id)
+            .map(|bs| bs.liquid_assets())
+            .unwrap_or(0.0)
+    }
+    fn get_central_bank_reserve_account(&self, _agent_id: &AgentId) -> Option<&BalanceSheet> {
+        self.balance_sheets.get(&self.central_bank.id)
+    }
 }

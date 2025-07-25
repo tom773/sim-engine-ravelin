@@ -5,9 +5,6 @@ use std::collections::HashMap;
 #[derive(Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentId(pub Uuid);
 
-//
-// Financial Instruments
-//
 
 #[derive(Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InstrumentId(pub Uuid);
@@ -20,17 +17,15 @@ pub struct FinancialInstrument {
     pub instrument_type: InstrumentType,
     pub principal: f64,
     pub interest_rate: f64,
-    pub maturity: Option<u32>, // None for perpetual/demand deposits
+    pub maturity: Option<u32>,
     pub originated_date: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum InstrumentType {
     CentralBankReserves,
-    // All Agents
     Cash,
     DemandDeposit,
-    // Covers Consumer Mortgages, Corporate Loans, etc.
     Bond {
         bond_type: BondType,
         coupon_rate: f64,
@@ -39,15 +34,11 @@ pub enum InstrumentType {
     },
     Loan {
         loan_type: LoanType,
-        collateral: Option<CollateralInfo>, // Optional collateral for secured loans
+        collateral: Option<CollateralInfo>,
     },
-    // Consumer
     SavingsDeposit { notice_period: u32 },
     
 }
-// 
-// Credit 
-//
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum LoanType {
@@ -95,13 +86,10 @@ impl CreditRating {
             CreditRating::CCC => 500,
             CreditRating::CC => 450,
             CreditRating::C => 400,
-            CreditRating::D => 300, // Defaulted
+            CreditRating::D => 300,
         }
     }
 }
-//
-// Real assets (non-financial)
-//
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct RealAsset {
     pub id: AssetId,
@@ -126,4 +114,103 @@ pub enum RealAssetType {
 pub struct InventoryItem {
     pub quantity: f64,
     pub unit_cost: f64,
+}
+
+// crates/shared/src/types/instrument_macros.rs
+
+#[macro_export]
+macro_rules! cash {
+    ($creditor:expr, $amount:expr, $cb_id:expr, $originated:expr) => {
+        FinancialInstrument {
+            id: InstrumentId(Uuid::new_v4()),
+            creditor: $creditor,
+            debtor: $cb_id,
+            principal: $amount,
+            interest_rate: 0.0,
+            maturity: None,
+            instrument_type: InstrumentType::Cash,
+            originated_date: $originated,
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! deposit {
+    ($depositor:expr, $bank:expr, $amount:expr, $rate:expr, $originated:expr) => {
+        FinancialInstrument {
+            id: InstrumentId(Uuid::new_v4()),
+            creditor: $depositor,
+            debtor: $bank,
+            principal: $amount,
+            interest_rate: $rate,
+            maturity: None,
+            instrument_type: InstrumentType::DemandDeposit,
+            originated_date: $originated,
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! reserves {
+    ($bank:expr, $cb_id:expr, $amount:expr, $rate:expr, $originated:expr) => {
+        FinancialInstrument {
+            id: InstrumentId(Uuid::new_v4()),
+            creditor: $bank,
+            debtor: $cb_id,
+            principal: $amount,
+            interest_rate: $rate,
+            maturity: None,
+            instrument_type: InstrumentType::CentralBankReserves,
+            originated_date: $originated,
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! loan {
+    ($lender:expr, $borrower:expr, $amount:expr, $rate:expr, $maturity:expr, $loan_type:expr, $originated:expr) => {
+        FinancialInstrument {
+            id: InstrumentId(Uuid::new_v4()),
+            creditor: $lender,
+            debtor: $borrower,
+            principal: $amount,
+            interest_rate: $rate,
+            maturity: Some($maturity),
+            instrument_type: InstrumentType::Loan {
+                loan_type: $loan_type,
+                collateral: None,
+            },
+            originated_date: $originated,
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! bond {
+    ($investor:expr, $issuer:expr, $principal:expr, $coupon_rate:expr, $maturity:expr, $face_value:expr, $rating:expr, $originated:expr) => {
+        FinancialInstrument {
+            id: InstrumentId(Uuid::new_v4()),
+            creditor: $investor,
+            debtor: $issuer,
+            principal: $principal,
+            interest_rate: $coupon_rate,
+            maturity: Some($maturity),
+            instrument_type: InstrumentType::Bond {
+                bond_type: BondType::Corporate { spread: 0.0 },
+                coupon_rate: $coupon_rate,
+                face_value: $face_value,
+                rating: $rating,
+            },
+            originated_date: $originated,
+        }
+    };
+}
+
+// Helper macro for creating and adding instruments to the financial system
+#[macro_export]
+macro_rules! create_instrument {
+    ($fs:expr, $macro_name:ident, $($args:expr),*) => {{
+        let instrument = $macro_name!($($args),*);
+        $fs.create_instrument(instrument)
+    }};
 }

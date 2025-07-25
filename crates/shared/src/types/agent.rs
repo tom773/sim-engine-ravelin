@@ -1,26 +1,49 @@
+
 use serde::{Serialize, Deserialize};
 use crate::{Consumer, FinancialSystem, SpendingPredictor, FeatureSource};
-use rand::{rngs::StdRng, Rng, RngCore};
+use rand::{rngs::StdRng, RngCore};
 use dyn_clone::{clone_trait_object, DynClone};
 use std::fmt::Debug;
 use ndarray::Array1;
 
 pub trait Agent {
-    fn act(&self, decision: &Decision) -> Action;
+    fn act(&self, decision: &Decision) -> Vec<Action>;
     fn decide(&self, fs: &FinancialSystem, rng: &mut StdRng) -> Decision;
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Action {
-    Buy { good_id: String, quantity: u32 },
-    Sell { good_id: String, quantity: u32 },
-    Save,
+    DepositCash { amount: f64 },
+    WithdrawCash { amount: f64 },
+    Buy { good_id: String, quantity: u32, amount: f64 },
+    Sell { good_id: String, quantity: u32, amount: f64 },
+    ReceiveIncome { amount: f64 },
 }
-
+impl Action {
+    pub fn name(&self) -> String {
+        match self {
+            Action::DepositCash { .. } => "Deposit Cash".to_string(),
+            Action::WithdrawCash { .. } => "Withdraw Cash".to_string(),
+            Action::Buy { .. } => "Buy Good".to_string(),
+            Action::Sell { .. } => "Sell Good".to_string(),
+            Action::ReceiveIncome { .. } => "Receive Income".to_string(),
+        }
+    }
+    pub fn amount(&self) -> f64 {
+        match self {
+            Action::DepositCash { amount } => *amount,
+            Action::WithdrawCash { amount } => *amount,
+            Action::Buy { amount, .. } => *amount,
+            Action::Sell { amount, .. } => *amount,
+            Action::ReceiveIncome { amount } => *amount,
+        }
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Decision {
-    Spend { amount: f64 },
-    Save,
+pub struct Decision {
+    pub spend_amount: f64,
+    pub save_amount: f64,
+    pub total_available: f64, // Income + existing cash
 }
 
 #[typetag::serde(tag = "type")]
@@ -38,22 +61,33 @@ impl Debug for dyn DecisionModel {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BasicDecisionModel {
-    pub wdf: f64, 
+    pub propensity_to_consume: f64, // 0.0 to 1.0
 }
 
 #[typetag::serde]
 impl DecisionModel for BasicDecisionModel {
-    fn decide(&self, consumer: &Consumer, _fs: &FinancialSystem, rng: &mut dyn RngCore) -> Decision {
-        let u_spend = self.wdf * rng.random_range(0.0..1.0);
-        let u_save = self.wdf * rng.random_range(0.0..1.0); 
+    fn decide(&self, consumer: &Consumer, fs: &FinancialSystem, _rng: &mut dyn RngCore) -> Decision {
+        let cash_holdings = fs.balance_sheets
+            .get(&consumer.id)
+            .map(|bs| bs.assets.values()
+                .filter(|inst| matches!(inst.instrument_type, crate::InstrumentType::Cash))
+                .map(|inst| inst.principal)
+                .sum::<f64>()
+            )
+            .unwrap_or(0.0);
         
-        if u_spend > u_save {
-            Decision::Spend { amount: consumer.income * consumer.propensity_to_consume }
-        } else {
-            Decision::Save
+        let total_available = consumer.income + cash_holdings;
+        let spend_amount = total_available * self.propensity_to_consume;
+        let save_amount = total_available * (1.0 - self.propensity_to_consume);
+        
+        Decision {
+            spend_amount,
+            save_amount,
+            total_available,
         }
     }
 }
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MLDecisionModel {
     #[serde(skip)]
@@ -65,38 +99,37 @@ pub struct MLDecisionModel {
 impl DecisionModel for MLDecisionModel {
     fn decide(&self, consumer: &Consumer, fs: &FinancialSystem, _rng: &mut dyn RngCore) -> Decision {
         if let Some(predictor) = &self.predictor {
-
             let features = extract_consumer_features(consumer, fs);
             let predicted_annual_spending = predictor.predict_spending(&features);
             
-            println!("Consumer ID {:?} Assets: ${:.2} | Income: ${:.2} | Liabilities: ${:.2}",
-                consumer.id, 
-                fs.balance_sheets.get(&consumer.id).map(|bs| bs.total_assets()).unwrap_or(0.0),
-                consumer.income, 
-                fs.balance_sheets.get(&consumer.id).map(|bs| bs.total_liabilities()).unwrap_or(0.0)
-            );
+            let cash_holdings = fs.balance_sheets
+                .get(&consumer.id)
+                .map(|bs| bs.assets.values()
+                    .filter(|inst| matches!(inst.instrument_type, crate::InstrumentType::Cash))
+                    .map(|inst| inst.principal)
+                    .sum::<f64>()
+                )
+                .unwrap_or(0.0);
             
-            let spending_rate = if consumer.income > 0.0 {
-                (predicted_annual_spending / consumer.income).min(1.0)
-            } else {
-                0.0
-            };
+            let total_available = consumer.income + cash_holdings;
+            let spending_per_period = predicted_annual_spending / 12.0; // Monthly
+            let spend_amount = spending_per_period.min(total_available);
+            let save_amount = total_available - spend_amount;
             
-            println!("Predicted annual spending: ${:.2} ({:.1}% of income)", 
-                predicted_annual_spending, 
-                spending_rate * 100.0
-            );
+            println!("ML Model Decision: Available ${:.2}, Spend ${:.2}, Save ${:.2}", 
+                total_available, spend_amount, save_amount);
             
-            let spending_per_tick = predicted_annual_spending / 12.0;
-            
-            Decision::Spend { amount: spending_per_tick }
+            Decision {
+                spend_amount,
+                save_amount,
+                total_available,
+            }
         } else {
-
-            Decision::Save
+            let basic = BasicDecisionModel { propensity_to_consume: 0.7 };
+            basic.decide(consumer, fs, _rng)
         }
     }
 }
-
 
 fn extract_consumer_features(consumer: &Consumer, _fs: &FinancialSystem) -> Array1<f64> {
     let income = consumer.get_income();
@@ -108,7 +141,6 @@ fn extract_consumer_features(consumer: &Consumer, _fs: &FinancialSystem) -> Arra
                         else if income < 100000.0 { 4.0 }
                         else if income < 150000.0 { 5.0 }
                         else { 6.0 };
-    
 
     let food_share = 0.15;
     let housing_share = 0.30;
