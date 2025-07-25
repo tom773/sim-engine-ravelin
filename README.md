@@ -1,10 +1,10 @@
-# Ravelin Analytics - Economic Simulation Engine 🚀
+# Ravelin Analytics - Economic Simulation Engine
 
-A Rust-based economic simulation engine that models consumer spending behavior using real-world data! This is the core simulation component extracted from the larger Ravelin Analytics platform.
+This engine simulates economic interactions between consumers, firms, and banks. It uses an Agent-Based Modelling approach, where each entity is an agent that will learn based on what happened to it the previous tick, and make a decision to improve its situation. 
 
-## What is this?
+It uses machine learning models trained on actual Consumer Expenditure Survey data from the Bureau of Labor Statistics to make realistic spending decisions. Firms will use Cobb-Douglas production functions to try and reach optimal production. 
 
-This engine simulates economic interactions between consumers, firms, and banks. It uses an Agent-Based Modelling approach, where each entity is an agent that will learn based on what happened to it the previous tick, and make a decision to improve its situation. It uses machine learning models trained on actual Consumer Expenditure Survey data from the Bureau of Labor Statistics to make realistic spending decisions. Firms will use Cobb-Douglas production functions to try and reach optimal production. Banks don't really make decisions, but there is a complex financial system built into the simulation that models the plumbing of an economy.
+Banks don't really make decisions, but there is a complex financial system built into the simulation that models the plumbing of an economy. 
 
 ## Features
 
