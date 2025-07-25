@@ -1,0 +1,50 @@
+.env
+*.bin
+*/node_modules
+*/debug
+*/target
+**/*.rs.bk
+.tmux-layout
+*.pdb
+**/mutants.out*/
+package-lock.json
+code.md
+CLAUDE.md
+.claude/
+.dockerignore
+Cargo.lock
+node_modules
+surrealdb_data/
+.svelte-kit/
+# Output
+.output
+.vercel
+.netlify
+.wrangler
+/.svelte-kit
+/build
+instructions.md
+*.json
+# OS
+.DS_Store
+Thumbs.db
+*.csv
+# Env
+.env
+.env.*
+!.env.example
+!.env.test
+
+# Vite
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+
+code.md
+.npmrc
+package-lock.json
+code.md
+Dockerfile.dev
+app/src/.svelte-kit/*
+/crates/api
+/crates/api/*
+/crates/api/**/* 
