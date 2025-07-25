@@ -38,7 +38,8 @@ impl Consumer {
 }
 
 impl Agent for Consumer {
-    fn act(&self, decision: &Decision) -> Vec<Action> {
+    type DecisionType = ConsumerDecision;
+    fn act(&self, decision: &ConsumerDecision) -> Vec<Action> {
         let mut actions = Vec::new();
 
         // Save $1000 
@@ -49,9 +50,9 @@ impl Agent for Consumer {
         actions
     }
     
-    fn decide(&self, _fs: &FinancialSystem, _rng: &mut StdRng) -> Decision {
+    fn decide(&self, _fs: &FinancialSystem, _rng: &mut StdRng) -> ConsumerDecision {
         //self.decision_model.decide(self, fs, rng)
-        Decision { spend_amount: 0.0, save_amount: 1000.0, total_available: 1000.0 }
+        ConsumerDecision { spend_amount: 0.0, save_amount: 1000.0, total_available: 1000.0 }
     }
 }
 

@@ -115,7 +115,48 @@ pub struct InventoryItem {
     pub quantity: f64,
     pub unit_cost: f64,
 }
-
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Transaction {
+    pub id: Uuid,
+    pub date: u32,
+    pub qty: f64,
+    pub from: AgentId,
+    pub to: AgentId,
+    pub tx_type: TransactionType,
+    pub instrument_id: Option<InstrumentId>,
+}
+impl Transaction {
+    pub fn new(tx_type: TransactionType, inst: InstrumentId, from: AgentId, to: AgentId, amount: f64) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            date: chrono::Utc::now().timestamp() as u32,
+            from,
+            to,
+            qty: amount,
+            tx_type,
+            instrument_id: Some(inst),
+        }
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum TransactionType {
+    Deposit {
+        holder: AgentId,
+        bank: AgentId,
+        amount: f64,
+    },
+    Withdrawal{
+        holder: AgentId,
+        bank: AgentId,
+        amount: f64,
+    },
+    Transfer {
+        from: AgentId,
+        to: AgentId,
+        amount: f64,
+    },
+    InterestPayment
+}
 // crates/shared/src/types/instrument_macros.rs
 
 #[macro_export]

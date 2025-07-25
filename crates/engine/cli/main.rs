@@ -8,12 +8,10 @@ use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
-use uuid::Uuid;
-use execution::*;
 
 #[tokio::main]
 async fn main() {
-    let ss = SimState::default();
+    let ss = initialize_economy(&SimConfig::default(), &mut StdRng::from_os_rng());
 
     let state = Arc::new(RwLock::new(ss));
 
@@ -29,10 +27,8 @@ async fn main() {
         )
         .route("/state", get(get_state))
         .route("/clear", get(clear_state))
-        .route("/make_bank", get(make_bank))
-        .route("/make_consumer", get(make_consumer))
-        .route("/make_firm", get(make_firm))
         .route("/consumer_action", get(consumer_action))
+        .route("/init", get(init))
         .with_state(state)
         .layer(cors);
 
@@ -45,7 +41,11 @@ async fn main() {
 
     axum::serve(listener, app).await.unwrap();
 }
-
+async fn init(State(state): State<Arc<RwLock<SimState>>>) -> Json<String> {
+    let mut state_guard = state.write().await;
+    *state_guard = initialize_economy(&SimConfig::default(), &mut StdRng::from_os_rng());
+    Json("State initialized".to_string())
+}
 async fn get_state(State(state): State<Arc<RwLock<SimState>>>) -> Json<Res> {
     let state_guard = state.read().await;
     Json(Res {
@@ -59,25 +59,6 @@ async fn get_state(State(state): State<Arc<RwLock<SimState>>>) -> Json<Res> {
     })
 }
 
-async fn make_bank(State(state): State<Arc<RwLock<SimState>>>) -> Json<String> {
-    let mut state_guard = state.write().await;
-    let mut factory = AgentFactory {
-        ss: &mut state_guard,
-        rng: &mut StdRng::from_os_rng(),
-    };
-    let bank = factory.create_bank("Test Bank".to_string(), 230.0, 50.0);
-    Json(json!(bank).to_string())
-}
-
-async fn make_firm(State(state): State<Arc<RwLock<SimState>>>) -> Json<String> {
-    let mut state_guard = state.write().await;
-    let mut factory = AgentFactory {
-        ss: &mut state_guard,
-        rng: &mut StdRng::from_os_rng(),
-    };
-    let firm = factory.create_firm("Test Firm".to_string(), AgentId(Uuid::new_v4()));
-    Json(json!(firm).to_string())
-}
 async fn clear_state(State(state): State<Arc<RwLock<SimState>>>) -> Json<String> {
     let mut state_guard = state.write().await;
     *state_guard = SimState::default();
@@ -160,41 +141,6 @@ async fn consumer_action(State(state): State<Arc<RwLock<SimState>>>) -> Json<Str
     };
 
     Json(json!(res).to_string())
-}
-
-async fn make_consumer(State(state): State<Arc<RwLock<SimState>>>) -> Json<String> {
-    let mut state_guard = state.write().await;
-
-    if state_guard.financial_system.commercial_banks.is_empty() {
-        return Json(
-            json!({
-                "error": "No banks found. Create a bank first."
-            })
-            .to_string(),
-        );
-    }
-
-    let bank_id = state_guard
-        .financial_system
-        .commercial_banks
-        .keys()
-        .next()
-        .unwrap()
-        .clone();
-
-    let mut factory = AgentFactory {
-        ss: &mut state_guard,
-        rng: &mut StdRng::from_os_rng(),
-    };
-
-    let consumer = factory.create_consumer(
-        bank_id,
-        Box::new(BasicDecisionModel {
-            propensity_to_consume: 0.0,
-        }), // 70% spending rate
-    );
-
-    Json(json!(consumer).to_string())
 }
 
 #[derive(Serialize, Deserialize, Debug)]

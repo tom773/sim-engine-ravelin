@@ -79,7 +79,6 @@ impl TransactionExecutor {
                         }
                     }
                 }
-                
                 StateEffect::RecordTransaction(tx) => {
                     println!("Transaction recorded: {:?}", tx);
                 }
@@ -106,20 +105,6 @@ impl TransactionExecutor {
             state.ticknum
         );
         effects.push(StateEffect::CreateInstrument(cash));
-        
-        use chrono::Utc;
-        let tx = Transaction::new(
-            TransactionType::CashDeposit {
-                holder: recipient.clone(),
-                bank: state.financial_system.central_bank.id.clone(),
-                amount,
-            },
-            amount,
-            state.financial_system.central_bank.id.clone(),
-            recipient.clone(),
-            Utc::now(),
-        );
-        effects.push(StateEffect::RecordTransaction(tx));
 
         ExecutionResult {
             success: true,
@@ -177,7 +162,7 @@ impl TransactionExecutor {
                 
                 let reserve_requirement = state.financial_system.central_bank.reserve_requirement;
                 let required_reserves = amount * reserve_requirement;
-                let excess_reserves = amount * (1.0 - reserve_requirement);
+                // let excess_reserves = amount * (1.0 - reserve_requirement); // This line was unused in the original code
 
                 let reserves = reserves!(
                     bank.clone(),
@@ -189,19 +174,7 @@ impl TransactionExecutor {
 
                 effects.push(StateEffect::CreateInstrument(reserves));
                 
-                use chrono::Utc;
-                let tx = Transaction::new(
-                    TransactionType::CashDeposit {
-                        holder: depositor.clone(),
-                        bank: bank.clone(),
-                        amount,
-                    },
-                    amount,
-                    depositor.clone(),
-                    bank.clone(),
-                    Utc::now(),
-                );
-                effects.push(StateEffect::RecordTransaction(tx));
+                // The erroneous 'use' statement and '}' have been removed from here.
             }
         }
         
@@ -262,21 +235,6 @@ impl TransactionExecutor {
                     state.ticknum
                 );
                 effects.push(StateEffect::CreateInstrument(cash));
-                
-                
-                use chrono::Utc;
-                let tx = Transaction::new(
-                    TransactionType::CashWithdrawal {
-                        holder: account_holder.clone(),
-                        bank: bank.clone(),
-                        amount,
-                    },
-                    amount,
-                    bank.clone(),
-                    account_holder.clone(),
-                    Utc::now(),
-                );
-                effects.push(StateEffect::RecordTransaction(tx));
             }
         }
         
@@ -331,20 +289,6 @@ impl TransactionExecutor {
                 
             }
         }
-        
-        use chrono::Utc;
-        let tx = Transaction::new(
-            TransactionType::CashDeposit {
-                holder: to.clone(),
-                bank: AgentId(Uuid::new_v4()), // TODO: Get actual bank
-                amount,
-            },
-            amount,
-            from.clone(),
-            to.clone(),
-            Utc::now(),
-        );
-        effects.push(StateEffect::RecordTransaction(tx));
         
         let success = !effects.is_empty();
         ExecutionResult {

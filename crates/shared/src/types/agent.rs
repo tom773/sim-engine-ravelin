@@ -7,8 +7,23 @@ use std::fmt::Debug;
 use ndarray::Array1;
 
 pub trait Agent {
-    fn act(&self, decision: &Decision) -> Vec<Action>;
-    fn decide(&self, fs: &FinancialSystem, rng: &mut StdRng) -> Decision;
+    type DecisionType;
+    
+    fn decide(&self, fs: &FinancialSystem, rng: &mut StdRng) -> Self::DecisionType;
+    fn act(&self, decision: &Self::DecisionType) -> Vec<Action>;
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ConsumerDecision {
+    pub spend_amount: f64,
+    pub save_amount: f64,
+    pub total_available: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FirmDecision {
+    pub production_quantity: u32,
+    pub hiring_count: i32,  // Can be negative for layoffs
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -18,6 +33,8 @@ pub enum Action {
     Buy { good_id: String, quantity: u32, amount: f64 },
     Sell { good_id: String, quantity: u32, amount: f64 },
     ReceiveIncome { amount: f64 },
+    Produce { amount: f64 }, // For firms
+    Hire { count: u32 },     // For firms
 }
 impl Action {
     pub fn name(&self) -> String {
@@ -27,6 +44,8 @@ impl Action {
             Action::Buy { .. } => "Buy Good".to_string(),
             Action::Sell { .. } => "Sell Good".to_string(),
             Action::ReceiveIncome { .. } => "Receive Income".to_string(),
+            Action::Produce { .. } => "Produce Goods".to_string(),
+            Action::Hire { .. } => "Hire Employees".to_string(),
         }
     }
     pub fn amount(&self) -> f64 {
@@ -36,6 +55,8 @@ impl Action {
             Action::Buy { amount, .. } => *amount,
             Action::Sell { amount, .. } => *amount,
             Action::ReceiveIncome { amount } => *amount,
+            Action::Produce { amount } => *amount,
+            Action::Hire { count } => *count as f64, // Treat hiring as a
         }
     }
 }
