@@ -4,23 +4,7 @@ This engine simulates economic interactions between consumers, firms, and banks.
 
 It uses machine learning models trained on actual Consumer Expenditure Survey data from the Bureau of Labor Statistics to make realistic spending decisions. Firms will use Cobb-Douglas production functions to try and reach optimal production. 
 
-Banks don't really make decisions, but there is a complex financial system built into the simulation that models the plumbing of an economy. 
-
-## Features
-
-- **ML-Powered Consumer Behavior**: Train decision models on real BLS consumer expenditure data
-- **Multi-Agent Simulation**: Consumers, firms, banks, and a central bank all interacting
-- **Financial System Modeling**: Balance sheets, various financial instruments (loans, deposits, bonds), and realistic banking operations
-- **REST API**: Run simulations via a simple HTTP interface
-- **Real-time State Management**: Watch the economy evolve tick by tick
-
-## Tech Stack
-
-- **Rust** (because we need that blazing fast performance ⚡)
-- **Machine Learning**: LightGBM for regression, custom feature engineering
-- **Web Framework**: Axum for the REST API
-- **Async Runtime**: Tokio for handling concurrent operations
-- **Data Processing**: Polars for fast CSV processing, ndarray for ML operations
+Banks don't really make decisions yet, but there is a complex financial system built into the simulation that models the plumbing of an economy. 
 
 ## Project Structure
 
@@ -31,13 +15,6 @@ crates/
 ├── ml/           # Machine learning model training and inference
 └── shared/       # Shared types used across all crates
 ```
-
-## Getting Started
-
-### Prerequisites
-
-- Rust (latest stable version)
-- About 500MB free space for the BLS data files
 
 ### Training the ML Model
 
@@ -113,13 +90,6 @@ The simulation follows this flow:
 
 The ML model is trained on actual consumer spending patterns, so the simulated consumers behave somewhat realistically!
 
-## Current Limitations
-
-- The simulation loop in the CLI is still WIP (you'll see it tries to run continuously but needs some work)
-- No persistence yet - everything is in-memory 
-- Limited behavior (consumers, firms, banks, etc... don't actually do anything)
-- The transaction processing is simplified for now
-
 ## Future Plans
 
 - Expand the types of decision for firms and consumers.
@@ -128,10 +98,3 @@ The ML model is trained on actual consumer spending patterns, so the simulated c
 - Allow the sim action API to be accessed from the Axum API, independant of a tick-based sim run. Purspose is to build the world out and watch it grow.
 - Market clearing mechanisms. All transactions should be checked and settled within the financial system, with double entry accounting taking place.
 - Way down the line: Model distance. Each agent should have a location. What happens to the coffee shops if a big firm goes bust in a certain region? 
-
-## Development Notes
-
-This is extracted from a larger project, so you might see references to an `api` crate that's not included here. The full platform includes a SvelteKit frontend and additional API services for enterprise risk analysis.
-
-The code is structured to be extensible - adding new agent types or financial instruments is pretty straightforward thanks to Rust's trait system.
-
