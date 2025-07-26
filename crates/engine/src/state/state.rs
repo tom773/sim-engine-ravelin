@@ -18,6 +18,15 @@ pub struct SimConfig {
     pub firm_count: u32,
     pub scenario: String,
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SimHistory {
+    pub actions: Vec<SimAction>,
+    pub financial_system_snapshots: Vec<FinancialSystem>,
+    pub consumer_snapshots: Vec<Consumer>,
+    pub firm_snapshots: Vec<Firm>,
+}
+
 impl Default for SimConfig {
     fn default() -> Self {
         Self {
@@ -69,7 +78,67 @@ pub fn initialize_economy(config: &SimConfig, rng: &mut StdRng) -> SimState {
         income_distribution.push(annual_income);
     }
     
+     
     drop(factory);
     
     ss
+}
+
+impl SimHistory {
+    pub fn new() -> Self {
+        Self {
+            actions: Vec::new(),
+            financial_system_snapshots: Vec::new(),
+            consumer_snapshots: Vec::new(),
+            firm_snapshots: Vec::new(),
+        }
+    }
+    pub fn record_action(&mut self, action: SimAction) {
+        self.actions.push(action);
+    }
+    pub fn record_snapshot(&mut self, fs: &FinancialSystem, consumers: &[Consumer], firms: &[Firm]) {
+        self.financial_system_snapshots.push(fs.clone());
+        self.consumer_snapshots.extend(consumers.to_vec());
+        self.firm_snapshots.extend(firms.to_vec());
+    }
+    pub fn get_last_n_snapshots(
+        &self,
+        n: usize,
+    ) -> (Vec<FinancialSystem>, Vec<Consumer>, Vec<Firm>) {
+        let fs_snapshots = self.financial_system_snapshots
+            .iter()
+            .rev()
+            .take(n)
+            .cloned()
+            .collect();
+        let consumer_snapshots = self.consumer_snapshots
+            .iter()
+            .rev()
+            .take(n)
+            .cloned()
+            .collect();
+        let firm_snapshots = self.firm_snapshots
+            .iter()
+            .rev()
+            .take(n)
+            .cloned()
+            .collect();
+        
+        (fs_snapshots, consumer_snapshots, firm_snapshots)
+    }
+    pub fn get_last_snapshot(&self) -> Option<(FinancialSystem, Vec<Consumer>, Vec<Firm>)> {
+        if self.financial_system_snapshots.is_empty() {
+            return None;
+        }
+        let fs = self.financial_system_snapshots.last().cloned()?;
+        let consumers = self.consumer_snapshots.clone();
+        let firms = self.firm_snapshots.clone();
+        Some((fs, consumers, firms))
+    }
+    pub fn clear(&mut self) {
+        self.actions.clear();
+        self.financial_system_snapshots.clear();
+        self.consumer_snapshots.clear();
+        self.firm_snapshots.clear();
+    }
 }

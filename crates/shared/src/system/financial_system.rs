@@ -104,7 +104,6 @@ impl FinancialSystem {
         
         m2
     }
-    
     pub fn monetary_aggregates_breakdown(&self) -> MonetaryAggregates {
         let mut public_cash = 0.0;
         let mut bank_cash = 0.0;

@@ -7,7 +7,7 @@ pub use state::*;
 pub use shared::*;
 use rand::prelude::*;
 
-pub fn tick(sim_state: &mut SimState) -> (&mut SimState, Vec<SimAction>) {
+pub fn tick(sim_state: &mut SimState) -> (&mut SimState, Vec<SimAction>, Vec<StateEffect>) {
     sim_state.ticknum += 1;
     let mut rng = StdRng::from_os_rng();
     
@@ -41,5 +41,14 @@ pub fn tick(sim_state: &mut SimState) -> (&mut SimState, Vec<SimAction>) {
         println!("Error applying effects: {}", e);
     }
     
-    (sim_state, all_sim_actions)
+    (sim_state, all_sim_actions, all_effects)
+}
+
+pub fn inject_liquidity(ss: &mut SimState) -> &mut SimState {
+    let ns = TransactionExecutor::execute_inject_liquidity(ss);
+    
+    if let Err(e) = TransactionExecutor::apply_effects(&ns.effects, ss) {
+        println!("Error applying liquidity effects: {}", e);
+    }
+    ss
 }

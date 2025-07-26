@@ -1,5 +1,5 @@
 use crate::*;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -21,41 +21,44 @@ impl BalanceSheet {
     }
 
     pub fn liquid_assets(&self) -> f64 {
-        self.assets.values()
-            .filter(|inst| matches!(
-                inst.instrument_type, 
-                InstrumentType::Cash | InstrumentType::DemandDeposit
-            ))
-            .map(|inst| inst.principal)
-            .sum()
-    }
-
-    pub fn deposits_at_bank(&self, bank_id: &AgentId) -> f64 {
-        self.assets.values()
+        self.assets
+            .values()
             .filter(|inst| {
-                inst.debtor == *bank_id && 
-                matches!(inst.instrument_type, 
-                    InstrumentType::DemandDeposit | InstrumentType::SavingsDeposit { .. }
+                matches!(
+                    inst.instrument_type,
+                    InstrumentType::Cash | InstrumentType::DemandDeposit
                 )
             })
             .map(|inst| inst.principal)
             .sum()
     }
 
-    pub fn total_assets(&self) -> f64 {
-        let financial = self.assets.values()
+    pub fn deposits_at_bank(&self, bank_id: &AgentId) -> f64 {
+        self.assets
+            .values()
+            .filter(|inst| {
+                inst.debtor == *bank_id
+                    && matches!(
+                        inst.instrument_type,
+                        InstrumentType::DemandDeposit | InstrumentType::SavingsDeposit { .. }
+                    )
+            })
             .map(|inst| inst.principal)
-            .sum::<f64>();
-        let real = self.real_assets.values()
+            .sum()
+    }
+
+    pub fn total_assets(&self) -> f64 {
+        let financial = self.assets.values().map(|inst| inst.principal).sum::<f64>();
+        let real = self
+            .real_assets
+            .values()
             .map(|asset| asset.market_value)
             .sum::<f64>();
         financial + real
     }
 
     pub fn total_liabilities(&self) -> f64 {
-        self.liabilities.values()
-            .map(|inst| inst.principal)
-            .sum()
+        self.liabilities.values().map(|inst| inst.principal).sum()
     }
 
     pub fn net_worth(&self) -> f64 {
@@ -70,9 +73,9 @@ pub trait BalanceSheetQuery {
     fn get_total_liabilities(&self, agent_id: &AgentId) -> f64;
     fn get_liquid_assets(&self, agent_id: &AgentId) -> f64;
     fn get_deposits_at_bank(&self, agent_id: &AgentId, bank_id: &AgentId) -> f64;
-    fn get_cash_assets(&self, agent_id: &AgentId) -> f64; 
+    fn get_cash_assets(&self, agent_id: &AgentId) -> f64;
     fn liquidity(&self, agent_id: &AgentId) -> f64;
-    fn get_central_bank_reserve_account(&self, agent_id: &AgentId) -> Option<&BalanceSheet>;
+    fn get_bank_reserves(&self, agent_id: &AgentId) -> Option<f64>; 
 }
 
 impl BalanceSheetQuery for FinancialSystem {
@@ -83,40 +86,57 @@ impl BalanceSheetQuery for FinancialSystem {
         self.balance_sheets.get_mut(agent_id)
     }
     fn get_total_assets(&self, agent_id: &AgentId) -> f64 {
-        self.balance_sheets.get(agent_id)
+        self.balance_sheets
+            .get(agent_id)
             .map(|bs| bs.total_assets())
             .unwrap_or(0.0)
     }
     fn get_cash_assets(&self, agent_id: &AgentId) -> f64 {
         self.get_bs_by_id(agent_id)
-            .map(|bs| bs.assets.values()
-                .filter(|inst| matches!(inst.instrument_type, InstrumentType::Cash))
-                .map(|inst| inst.principal)
-                .sum::<f64>()
-            )
+            .map(|bs| {
+                bs.assets
+                    .values()
+                    .filter(|inst| matches!(inst.instrument_type, InstrumentType::Cash))
+                    .map(|inst| inst.principal)
+                    .sum::<f64>()
+            })
             .unwrap_or(0.0)
     }
     fn get_total_liabilities(&self, agent_id: &AgentId) -> f64 {
-        self.balance_sheets.get(agent_id)
+        self.balance_sheets
+            .get(agent_id)
             .map(|bs| bs.total_liabilities())
             .unwrap_or(0.0)
     }
     fn get_liquid_assets(&self, agent_id: &AgentId) -> f64 {
-        self.balance_sheets.get(agent_id)
+        self.balance_sheets
+            .get(agent_id)
             .map(|bs| bs.liquid_assets())
             .unwrap_or(0.0)
     }
     fn get_deposits_at_bank(&self, agent_id: &AgentId, bank_id: &AgentId) -> f64 {
-        self.balance_sheets.get(agent_id)
+        self.balance_sheets
+            .get(agent_id)
             .map(|bs| bs.deposits_at_bank(bank_id))
             .unwrap_or(0.0)
     }
     fn liquidity(&self, agent_id: &AgentId) -> f64 {
-        self.balance_sheets.get(agent_id)
+        self.balance_sheets
+            .get(agent_id)
             .map(|bs| bs.liquid_assets())
             .unwrap_or(0.0)
     }
-    fn get_central_bank_reserve_account(&self, _agent_id: &AgentId) -> Option<&BalanceSheet> {
-        self.balance_sheets.get(&self.central_bank.id)
+    fn get_bank_reserves(&self, agent_id: &AgentId) -> Option<f64> {
+        self.balance_sheets
+            .get(agent_id)
+            .map(|bs| {
+                bs.assets
+                    .values()
+                    .filter(|inst| {
+                        matches!(inst.instrument_type, InstrumentType::CentralBankReserves)
+                    })
+                    .map(|inst| inst.principal)
+                    .sum::<f64>()
+            })
     }
 }

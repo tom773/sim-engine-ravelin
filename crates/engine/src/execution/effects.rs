@@ -1,5 +1,6 @@
 use super::*;
-
+use axum::extract::State;
+use serde::{Serialize, Deserialize};
 #[derive(Clone, Debug)]
 pub struct ExecutionResult {
     pub success: bool,
@@ -7,13 +8,19 @@ pub struct ExecutionResult {
     pub errors: Vec<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum StateEffect {
     CreateInstrument(FinancialInstrument),
     UpdateInstrument { id: InstrumentId, new_principal: f64 },
     TransferInstrument { id: InstrumentId, new_creditor: AgentId },
     RemoveInstrument(InstrumentId),
-    
+
+    SwapInstrument { 
+        id: InstrumentId, 
+        new_debtor: AgentId, 
+        new_creditor: AgentId 
+    },
+
     AddInventory { owner: AgentId, good_id: String, quantity: u32 },
     RemoveInventory { owner: AgentId, good_id: String, quantity: u32 },
     
@@ -24,7 +31,7 @@ pub enum StateEffect {
 
     Hire { firm: AgentId, count: u32 },
     Produce { firm: AgentId, good_id: GoodId, amount: f64 },
-
+    
 }
 
 impl StateEffect {
@@ -33,6 +40,7 @@ impl StateEffect {
             StateEffect::CreateInstrument(_) => "CreateInstrument".to_string(),
             StateEffect::UpdateInstrument { .. } => "UpdateInstrument".to_string(),
             StateEffect::TransferInstrument { .. } => "TransferInstrument".to_string(),
+            StateEffect::SwapInstrument { .. } => "SwapInstrument".to_string(),
             StateEffect::RemoveInstrument(_) => "RemoveInstrument".to_string(),
             StateEffect::AddInventory { .. } => "AddInventory".to_string(),
             StateEffect::RemoveInventory { .. } => "RemoveInventory".to_string(),
