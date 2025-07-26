@@ -44,7 +44,7 @@ impl Agent for Consumer {
 
         // Save $1000 
         if decision.save_amount > 0.0 {
-            actions.push(Action::DepositCash { amount: 1000.0 });
+            actions.push(Action::DepositCash { agent_id: self.id.clone(), amount: 1000.0 });
         }
         
         actions

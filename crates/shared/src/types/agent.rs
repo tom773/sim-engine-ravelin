@@ -1,6 +1,6 @@
 
 use serde::{Serialize, Deserialize};
-use crate::{Consumer, FinancialSystem, SpendingPredictor, FeatureSource};
+use crate::{AgentId, BalanceSheetQuery, Consumer, FeatureSource, FinancialSystem, SpendingPredictor};
 use rand::{rngs::StdRng, RngCore};
 use dyn_clone::{clone_trait_object, DynClone};
 use std::fmt::Debug;
@@ -28,15 +28,28 @@ pub struct FirmDecision {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Action {
-    DepositCash { amount: f64 },
-    WithdrawCash { amount: f64 },
-    Buy { good_id: String, quantity: u32, amount: f64 },
-    Sell { good_id: String, quantity: u32, amount: f64 },
-    ReceiveIncome { amount: f64 },
-    Produce { amount: f64 }, // For firms
-    Hire { count: u32 },     // For firms
+    DepositCash { agent_id: AgentId, amount: f64 },
+    WithdrawCash { agent_id: AgentId, amount: f64 },
+    Buy { agent_id: AgentId, good_id: String, quantity: u32, amount: f64 },
+    Sell { agent_id: AgentId, good_id: String, quantity: u32, amount: f64 },
+    ReceiveIncome { agent_id: AgentId, amount: f64 },
+    Produce { agent_id: AgentId, amount: f64 },
+    Hire { agent_id: AgentId, count: u32 },
 }
+
 impl Action {
+    pub fn agent_id(&self) -> &AgentId {
+        match self {
+            Action::DepositCash { agent_id, .. } => agent_id,
+            Action::WithdrawCash { agent_id, .. } => agent_id,
+            Action::Buy { agent_id, .. } => agent_id,
+            Action::Sell { agent_id, .. } => agent_id,
+            Action::ReceiveIncome { agent_id, .. } => agent_id,
+            Action::Produce { agent_id, .. } => agent_id,
+            Action::Hire { agent_id, .. } => agent_id,
+        }
+    }
+    
     pub fn name(&self) -> String {
         match self {
             Action::DepositCash { .. } => "Deposit Cash".to_string(),
@@ -48,15 +61,16 @@ impl Action {
             Action::Hire { .. } => "Hire Employees".to_string(),
         }
     }
+    
     pub fn amount(&self) -> f64 {
         match self {
-            Action::DepositCash { amount } => *amount,
-            Action::WithdrawCash { amount } => *amount,
+            Action::DepositCash { amount, .. } => *amount,
+            Action::WithdrawCash { amount, .. } => *amount,
             Action::Buy { amount, .. } => *amount,
             Action::Sell { amount, .. } => *amount,
-            Action::ReceiveIncome { amount } => *amount,
-            Action::Produce { amount } => *amount,
-            Action::Hire { count } => *count as f64, // Treat hiring as a
+            Action::ReceiveIncome { amount, .. } => *amount,
+            Action::Produce { amount, .. } => *amount,
+            Action::Hire { count, .. } => *count as f64,
         }
     }
 }
@@ -194,4 +208,31 @@ fn extract_consumer_features(consumer: &Consumer, _fs: &FinancialSystem) -> Arra
         income_bracket * age_group,
         income_bracket * education,
     ])
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ParametricMPC {
+    pub mpc_min: f64, // Minimum MPC
+    pub mpc_max: f64, // Maximum MPC
+    pub a: f64, // Parameter for income effect
+    pub b: f64, // Parameter for wealth effect
+    pub c: f64, // Parameter for age effect
+}
+
+#[typetag::serde]
+impl DecisionModel for ParametricMPC {
+    
+    fn decide(&self, consumer: &Consumer, fs: &FinancialSystem, _rng: &mut dyn RngCore) -> Decision {
+        let cash = fs.get_liquid_assets(&consumer.id);      // helper you already have
+        let total = consumer.income + cash;
+        let wealth_ratio = fs.get_total_assets(&consumer.id) / consumer.income.max(1.0);
+
+        let mpc = self.mpc_min + (self.mpc_max - self.mpc_min)
+                 / (1.0 + (self.a + self.b * consumer.income.ln()
+                                + self.c * wealth_ratio).exp());
+
+        let spend = mpc * total;
+        Decision { spend_amount: spend,
+                   save_amount: total - spend,
+                   total_available: total }
+    }
 }

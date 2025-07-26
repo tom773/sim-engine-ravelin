@@ -4,10 +4,10 @@ use engine::SimState;
 use engine::*;
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
+mod routes;
 
 #[tokio::main]
 async fn main() {
@@ -27,8 +27,8 @@ async fn main() {
         )
         .route("/state", get(get_state))
         .route("/clear", get(clear_state))
-        .route("/consumer_action", get(consumer_action))
         .route("/init", get(init))
+        .route("/tick", get(routes::tick))
         .with_state(state)
         .layer(cors);
 
@@ -63,84 +63,6 @@ async fn clear_state(State(state): State<Arc<RwLock<SimState>>>) -> Json<String>
     let mut state_guard = state.write().await;
     *state_guard = SimState::default();
     Json("State cleared".to_string())
-}
-
-
-async fn consumer_action(State(state): State<Arc<RwLock<SimState>>>) -> Json<String> {
-    let mut state_guard = state.write().await;
-
-    if state_guard.consumers.is_empty() {
-        return Json(
-            json!({
-                "error": "No consumers found. Create a consumer first."
-            })
-            .to_string(),
-        );
-    }
-
-    let consumer = state_guard.consumers.first().unwrap().clone();
-    let mut messages = Vec::new();
-    
-    let decision = consumer.decide(&state_guard.financial_system, &mut StdRng::from_os_rng());
-    let actions = consumer.act(&decision);
-    messages.push(format!(
-        "Step 1: Consumer {} decided to spend ${:.2} and save ${:.2}",
-        consumer.snip_id(), decision.spend_amount, decision.save_amount
-    ));
-    for (i, action) in actions.iter().enumerate() {
-        messages.push(format!(
-            "Step 2.{}: [C{} {:?}] Amount: ${:.2}",
-            i, consumer.snip_id(), action.name(), action.amount()
-        ));
-    }
-    let mut sim_actions = Vec::new();
-    for action in actions {
-        let sa = agent_action_to_sim_actions(&consumer.id, &action, &state_guard);
-        sim_actions.extend(sa);
-    }
-    for action in sim_actions {
-        let er = TransactionExecutor::execute_action(&action, &mut state_guard);
-        for (i, effect) in er.effects.iter().enumerate() {
-            messages.push(format!(
-                "Step 3.{}: [C{}] -> Effect: {}",
-                i, consumer.snip_id(), effect.name()
-            ));
-        }
-        let res = TransactionExecutor::apply_effects(&er.effects, &mut state_guard);
-        if let Err(e) = res {
-            messages.push(format!(
-                "Error applying effects: {}",
-                e.to_string()
-            ));
-        } else {
-            messages.push(format!(
-                "Step 4: Effects applied successfully for C{}",
-                consumer.snip_id()
-            ));
-        }
-    }
-    messages.push(format!(
-        "Step 5.1: Consumer {} now has ${:.2} in cash and ${:.2} in deposits",
-        consumer.snip_id(),
-        consumer.get_cash_holdings(&state_guard.financial_system),
-        consumer.get_deposits(&state_guard.financial_system)
-    ));
-    messages.push(format!(
-        "Step 5.2: Bank {} now has ${:.2} in total liabilities",
-        &consumer.bank_id.0.to_string()[0..4], &state_guard.financial_system.get_total_liabilities(&consumer.bank_id)
-    ));
-
-    let res = Res {
-        messages: Some(messages),
-        stats: Some(Stats {
-            m0: state_guard.financial_system.m0(),
-            m1: state_guard.financial_system.m1(),
-            m2: state_guard.financial_system.m2(),
-        }),
-        state: state_guard.clone(),
-    };
-
-    Json(json!(res).to_string())
 }
 
 #[derive(Serialize, Deserialize, Debug)]

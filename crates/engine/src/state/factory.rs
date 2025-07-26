@@ -77,7 +77,7 @@ impl<'a> AgentFactory<'a> {
         c
     }
     
-    pub fn create_consumer(&mut self, bank_id: AgentId, model: Box<dyn DecisionModel>) -> Consumer {
+    pub fn create_consumer(&mut self, bank_id: AgentId, _model: Box<dyn DecisionModel>) -> Consumer {
         let income_percentile = self.rng.random::<f64>();
         self.create_consumer_with_income(bank_id, income_percentile)
     }

@@ -52,43 +52,71 @@ impl SimAction {
         }
     }
 }
-
 pub fn agent_action_to_sim_actions(
-    agent_id: &AgentId,
     action: &Action,
     state: &SimState,
 ) -> Vec<SimAction> {
     let mut sim_actions = Vec::new();
+    let agent_id = action.agent_id();
+    
     match action {
-        Action::DepositCash { amount } => {
+        Action::DepositCash { amount, .. } => {
             if let Some(consumer) = state.consumers.iter().find(|c| c.id == *agent_id) {
                 sim_actions.push(SimAction::DepositCash {
                     depositor: agent_id.clone(),
                     bank: consumer.bank_id.clone(),
                     amount: *amount,
                 });
+            } else if let Some(firm) = state.firms.iter().find(|f| f.id == *agent_id) {
+                sim_actions.push(SimAction::DepositCash {
+                    depositor: agent_id.clone(),
+                    bank: firm.bank_id.clone(),
+                    amount: *amount,
+                });
             }
         }
         
-        Action::WithdrawCash { amount } => {
+        Action::WithdrawCash { amount, .. } => {
             if let Some(consumer) = state.consumers.iter().find(|c| c.id == *agent_id) {
                 sim_actions.push(SimAction::WithdrawCash {
                     account_holder: agent_id.clone(),
                     bank: consumer.bank_id.clone(),
                     amount: *amount,
                 });
+            } else if let Some(firm) = state.firms.iter().find(|f| f.id == *agent_id) {
+                sim_actions.push(SimAction::WithdrawCash {
+                    account_holder: agent_id.clone(),
+                    bank: firm.bank_id.clone(),
+                    amount: *amount,
+                });
             }
         }
         
-        Action::Buy { good_id, quantity, amount } => {
+        Action::Buy { good_id, quantity, amount, .. } => {
+            // TODO: Need to implement market matching to find seller
             sim_actions.push(SimAction::Purchase {
                 buyer: agent_id.clone(),
-                seller: AgentId(Uuid::new_v4()), // Placeholder for seller
+                seller: AgentId(Uuid::new_v4()), // Placeholder - needs market matching
                 good_id: good_id.clone(),
                 amount: *amount,
             });
         }
+        
+        Action::ReceiveIncome { amount, .. } => {
+            sim_actions.push(SimAction::IssueIncome {
+                recipient: agent_id.clone(),
+                amount: *amount,
+            });
+        }
+        
+        Action::Produce { amount, .. } => {
+        }
+        
+        Action::Hire { count, .. } => {
+        }
+        
         _ => {},    
     }
+    
     sim_actions
 }

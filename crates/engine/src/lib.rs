@@ -2,11 +2,11 @@
 
 #[allow(unused)]
 pub mod execution;
-pub use execution::{TransactionExecutor, agent_action_to_sim_actions};
+pub use execution::*;
 
 pub mod state;
 pub use state::*;
-
+use serde::{Deserialize, Serialize};
 pub use shared::*;
 use rand::prelude::*;
 
@@ -32,7 +32,7 @@ pub fn run_simulation() -> SimState {
             
             // Convert each action to sim actions
             for action in actions {
-                let sim_actions = agent_action_to_sim_actions(&consumer.id, &action, &sim_state);
+                let sim_actions = agent_action_to_sim_actions(&action, &sim_state);
                 all_sim_actions.extend(sim_actions);
             }
         }
@@ -52,61 +52,56 @@ pub fn run_simulation() -> SimState {
             }
         }
         
-        // Print summary
-        print_tick_summary(&sim_state);
     }
     
     sim_state
 }
 
-fn print_tick_summary(state: &SimState) {
-    println!("\n--- End of Tick {} Summary ---", state.ticknum);
-    
-    // Bank summary
-    for (bank_id, bank) in &state.financial_system.commercial_banks {
-        let assets = bank.total_assets(&state.financial_system);
-        let liabilities = bank.total_liabilities(&state.financial_system);
-        
-        let reserves = state.financial_system.balance_sheets
-            .get(bank_id)
-            .map(|bs| bs.assets.values()
-                .filter(|inst| matches!(inst.instrument_type, InstrumentType::CentralBankReserves))
-                .map(|inst| inst.principal)
-                .sum::<f64>()
-            )
-            .unwrap_or(0.0);
-            
-        let cash = state.financial_system.balance_sheets
-            .get(bank_id)
-            .map(|bs| bs.assets.values()
-                .filter(|inst| matches!(inst.instrument_type, InstrumentType::Cash))
-                .map(|inst| inst.principal)
-                .sum::<f64>()
-            )
-            .unwrap_or(0.0);
-            
-        println!("{}: Assets=${:.2}, Liabilities=${:.2}, Equity=${:.2}, Cash=${:.2}, CB Reserves=${:.2}",
-            bank.name, assets, liabilities, assets - liabilities, cash, reserves);
-    }
-    
-    // Consumer summary (aggregate)
-    let total_consumer_cash: f64 = state.consumers.iter()
-        .map(|c| c.get_cash_holdings(&state.financial_system))
-        .sum();
-        
-    let total_consumer_deposits: f64 = state.consumers.iter()
-        .map(|c| c.get_deposits(&state.financial_system))
-        .sum();
-        
-    let total_consumer_assets: f64 = state.consumers.iter()
-        .map(|c| state.financial_system.get_total_assets(&c.id))
-        .sum();
-        
-    let total_consumer_liabilities: f64 = state.consumers.iter()
-        .map(|c| state.financial_system.get_total_liabilities(&c.id))
-        .sum();
-    
-    println!("Consumers: Cash=${:.2}, Deposits=${:.2}, Total Assets=${:.2}, Liabilities=${:.2}, Net Worth=${:.2}",
-        total_consumer_cash, total_consumer_deposits, total_consumer_assets, total_consumer_liabilities, 
-        total_consumer_assets - total_consumer_liabilities);
+#[derive(Serialize, Deserialize, Debug)]
+pub struct TickActions {
+    pub stage1: AgentActions,
+    pub stage2: SimActions,
+}
+#[derive(Serialize, Deserialize, Debug)]
+pub struct AgentActions {
+    pub firm_actions: Vec<Action>,
+    pub consumer_actions: Vec<Action>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct SimActions {
+    pub firm_actions: Vec<SimAction>,
+    pub consumer_actions: Vec<SimAction>,
+}
+pub fn tick(sim_state: &mut SimState) -> (&mut SimState, TickActions) {
+    sim_state.ticknum += 1;
+    let mut rng = StdRng::from_os_rng();
+    let firm_actions = sim_state.firms.iter()
+        .flat_map(|firm| {
+            let decision = firm.decide(&sim_state.financial_system, &mut rng);
+            firm.act(&decision)
+        })
+        .collect::<Vec<_>>();
+    let consumer_actions = sim_state.consumers.iter()
+        .flat_map(|consumer| {
+            let decision = consumer.decide(&sim_state.financial_system, &mut rng);
+            consumer.act(&decision)
+        })
+        .collect::<Vec<_>>();
+    let agent_actions = AgentActions {
+        firm_actions,
+        consumer_actions,
+    };
+    let firm_sim_actions = agent_actions.firm_actions.iter()
+        .flat_map(|action| agent_action_to_sim_actions(action, sim_state))
+        .collect::<Vec<_>>();
+    let consumer_sim_actions = agent_actions.consumer_actions.iter()
+        .flat_map(|action| agent_action_to_sim_actions(action, sim_state))
+        .collect::<Vec<_>>();
+    let sim_actions = SimActions { firm_actions: firm_sim_actions, consumer_actions: consumer_sim_actions };
+     
+    return (sim_state, TickActions {
+        stage1: agent_actions,
+        stage2: sim_actions,
+    });
 }
