@@ -10,28 +10,34 @@ impl TransactionExecutor {
         state: &SimState,
     ) -> ExecutionResult {
         match action {
-            SimAction::IssueIncome { recipient, amount } => {
-                Self::execute_issue_income(recipient, *amount, state)
+            SimAction::IssueIncome { agent_id, amount } => {
+                Self::execute_issue_income(agent_id, *amount, state)
             }
             
-            SimAction::DepositCash { depositor, bank, amount } => {
-                Self::execute_deposit_cash(depositor, bank, *amount, state)
+            SimAction::DepositCash { agent_id, bank, amount } => {
+                Self::execute_deposit_cash(agent_id, bank, *amount, state)
             }
             
-            SimAction::WithdrawCash { account_holder, bank, amount } => {
-                Self::execute_withdraw_cash(account_holder, bank, *amount, state)
+            SimAction::WithdrawCash { agent_id, bank, amount } => {
+                Self::execute_withdraw_cash(agent_id, bank, *amount, state)
             }
             
-            SimAction::Transfer { from, to, amount } => {
+            SimAction::Transfer { agent_id: _, from, to, amount } => {
                 Self::execute_transfer(from, to, *amount, state)
             }
             
-            SimAction::Purchase { buyer, seller, good_id, amount } => {
-                Self::execute_purchase(buyer, seller, good_id, *amount, state)
+            SimAction::Purchase { agent_id, seller, good_id, amount } => {
+                Self::execute_purchase(agent_id, seller, good_id, *amount, state)
             }
             
             SimAction::UpdateReserves { bank, amount_change } => {
                 Self::execute_update_reserves(bank, *amount_change, state)
+            }
+            SimAction::Hire { agent_id, count } => { 
+                Self::execute_hire(agent_id, *count)
+            }
+            SimAction::Produce { agent_id, good_id, amount } => {
+                Self::execute_produce(agent_id, *amount, good_id)
             }
         }
     }
@@ -90,7 +96,36 @@ impl TransactionExecutor {
         Ok(())
     }
     
-    
+    fn execute_hire(firm: &AgentId, count: u32) -> ExecutionResult {
+        let mut effects = vec![];
+
+        effects.push(StateEffect::Hire {
+            firm: firm.clone(),
+            count: count,
+        });
+
+        ExecutionResult {
+            success: true,
+            effects,
+            errors: vec![],
+        }
+
+    }
+    fn execute_produce(firm: &AgentId, amount: f64, good_id: &GoodId) -> ExecutionResult {
+        let mut effects = vec![];
+
+        effects.push(StateEffect::Produce {
+            firm: firm.clone(),
+            good_id: good_id.clone(),
+            amount,
+        });
+
+        ExecutionResult {
+            success: true,
+            effects,
+            errors: vec![],
+        }
+    } 
     fn execute_issue_income(
         recipient: &AgentId,
         amount: f64,

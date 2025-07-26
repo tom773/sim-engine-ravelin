@@ -1,9 +1,6 @@
 use shared::*;
 use serde::{Serialize, Deserialize};
 use rand::prelude::*;
-use fake::Fake;
-use fake::faker::company::en::*;
-use uuid::Uuid;
 use crate::AgentFactory;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -50,9 +47,7 @@ pub fn initialize_economy(config: &SimConfig, rng: &mut StdRng) -> SimState {
     
     let bank_ids: Vec<AgentId> = (0..2)
         .map(|_| {
-            let bank = factory.create_bank_with_name();
-            println!("  Created {}: lending spread {:.0}bps, deposit spread {:.0}bps", 
-                bank.name, bank.lending_spread, bank.deposit_spread);
+            let bank = factory.create_bank();
             bank.id
         })
         .collect();
@@ -60,14 +55,7 @@ pub fn initialize_economy(config: &SimConfig, rng: &mut StdRng) -> SimState {
     println!("\n  Creating {} firms...", config.firm_count);
     for i in 0..config.firm_count {
         let bank_id = bank_ids[i as usize % bank_ids.len()].clone();
-        let firm = factory.create_firm_with_capital(bank_id.clone());
-        
-        let capital = factory.ss.financial_system.get_deposits_at_bank(&firm.id, &bank_id);
-        println!("    {} (Bank: {}, Initial capital: ${:.0})", 
-            firm.name, 
-            &bank_id.0.to_string()[0..4],
-            capital
-        );
+        let _firm = factory.create_firm(bank_id.clone());
     }
     
     println!("\n  Creating {} consumers...", config.consumer_count);
@@ -75,21 +63,10 @@ pub fn initialize_economy(config: &SimConfig, rng: &mut StdRng) -> SimState {
     
     for i in 0..config.consumer_count {
         let bank_id = bank_ids[i as usize % bank_ids.len()].clone();
-        let income_percentile = factory.rng.random::<f64>();
-        let consumer = factory.create_consumer_with_income(bank_id.clone(), income_percentile);
+        let consumer = factory.create_consumer(bank_id.clone());
         
         let annual_income = consumer.income * 52.0;
         income_distribution.push(annual_income);
-        
-        if i < 5 || i == config.consumer_count - 1 {
-            println!("    Consumer {}: Annual income ${:.0}, Bank: {}", 
-                &consumer.id.0.to_string()[0..4],
-                annual_income,
-                &bank_id.0.to_string()[0..4]
-            );
-        } else if i == 5 {
-            println!("    ... {} more consumers ...", config.consumer_count - 6);
-        }
     }
     
     drop(factory);

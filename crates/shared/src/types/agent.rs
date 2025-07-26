@@ -1,6 +1,5 @@
-
 use serde::{Serialize, Deserialize};
-use crate::{AgentId, BalanceSheetQuery, Consumer, FeatureSource, FinancialSystem, SpendingPredictor};
+use crate::*;
 use rand::{rngs::StdRng, RngCore};
 use dyn_clone::{clone_trait_object, DynClone};
 use std::fmt::Debug;
@@ -9,81 +8,42 @@ use ndarray::Array1;
 pub trait Agent {
     type DecisionType;
     
-    fn decide(&self, fs: &FinancialSystem, rng: &mut StdRng) -> Self::DecisionType;
-    fn act(&self, decision: &Self::DecisionType) -> Vec<Action>;
+    fn decide(&self, fs: &FinancialSystem, rng: &mut StdRng) -> Vec<Self::DecisionType>;
+    fn act(&self, decisions: &[Self::DecisionType]) -> Vec<SimAction>;
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ConsumerDecision {
-    pub spend_amount: f64,
-    pub save_amount: f64,
-    pub total_available: f64,
+pub enum ConsumerDecision {
+    Spend { 
+        agent_id: AgentId, 
+        seller_id: AgentId, 
+        amount: f64, 
+        good_id: GoodId 
+    },
+    Save { 
+        agent_id: AgentId, 
+        amount: f64 
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct FirmDecision {
-    pub production_quantity: u32,
-    pub hiring_count: i32,  // Can be negative for layoffs
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Action {
-    DepositCash { agent_id: AgentId, amount: f64 },
-    WithdrawCash { agent_id: AgentId, amount: f64 },
-    Buy { agent_id: AgentId, good_id: String, quantity: u32, amount: f64 },
-    Sell { agent_id: AgentId, good_id: String, quantity: u32, amount: f64 },
-    ReceiveIncome { agent_id: AgentId, amount: f64 },
-    Produce { agent_id: AgentId, amount: f64 },
-    Hire { agent_id: AgentId, count: u32 },
-}
-
-impl Action {
-    pub fn agent_id(&self) -> &AgentId {
-        match self {
-            Action::DepositCash { agent_id, .. } => agent_id,
-            Action::WithdrawCash { agent_id, .. } => agent_id,
-            Action::Buy { agent_id, .. } => agent_id,
-            Action::Sell { agent_id, .. } => agent_id,
-            Action::ReceiveIncome { agent_id, .. } => agent_id,
-            Action::Produce { agent_id, .. } => agent_id,
-            Action::Hire { agent_id, .. } => agent_id,
-        }
-    }
-    
-    pub fn name(&self) -> String {
-        match self {
-            Action::DepositCash { .. } => "Deposit Cash".to_string(),
-            Action::WithdrawCash { .. } => "Withdraw Cash".to_string(),
-            Action::Buy { .. } => "Buy Good".to_string(),
-            Action::Sell { .. } => "Sell Good".to_string(),
-            Action::ReceiveIncome { .. } => "Receive Income".to_string(),
-            Action::Produce { .. } => "Produce Goods".to_string(),
-            Action::Hire { .. } => "Hire Employees".to_string(),
-        }
-    }
-    
-    pub fn amount(&self) -> f64 {
-        match self {
-            Action::DepositCash { amount, .. } => *amount,
-            Action::WithdrawCash { amount, .. } => *amount,
-            Action::Buy { amount, .. } => *amount,
-            Action::Sell { amount, .. } => *amount,
-            Action::ReceiveIncome { amount, .. } => *amount,
-            Action::Produce { amount, .. } => *amount,
-            Action::Hire { count, .. } => *count as f64,
-        }
-    }
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Decision {
-    pub spend_amount: f64,
-    pub save_amount: f64,
-    pub total_available: f64, // Income + existing cash
+pub enum FirmDecision {
+    Produce { 
+        good_id: GoodId, 
+        quantity: u32 
+    },
+    Hire { 
+        quantity: u32 
+    },
+    SetPrice {
+        good_id: GoodId,
+        price: f64,
+    },
 }
 
 #[typetag::serde(tag = "type")]
 pub trait DecisionModel: DynClone + Send + Sync {
-    fn decide(&self, consumer: &Consumer, fs: &FinancialSystem, rng: &mut dyn RngCore) -> Decision;
+    fn decide(&self, consumer: &Consumer, fs: &FinancialSystem, rng: &mut dyn RngCore) -> Vec<ConsumerDecision>;
 }
 
 clone_trait_object!(DecisionModel);
@@ -96,12 +56,12 @@ impl Debug for dyn DecisionModel {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BasicDecisionModel {
-    pub propensity_to_consume: f64, // 0.0 to 1.0
+    pub propensity_to_consume: f64,
 }
 
 #[typetag::serde]
 impl DecisionModel for BasicDecisionModel {
-    fn decide(&self, consumer: &Consumer, fs: &FinancialSystem, _rng: &mut dyn RngCore) -> Decision {
+    fn decide(&self, consumer: &Consumer, fs: &FinancialSystem, _rng: &mut dyn RngCore) -> Vec<ConsumerDecision> {
         let cash_holdings = fs.balance_sheets
             .get(&consumer.id)
             .map(|bs| bs.assets.values()
@@ -110,16 +70,33 @@ impl DecisionModel for BasicDecisionModel {
                 .sum::<f64>()
             )
             .unwrap_or(0.0);
-        
+            
+        let mut decisions = Vec::new();
         let total_available = consumer.income + cash_holdings;
+
+        let seller_id = fs.exchange.goods_market(&GoodId::generic())
+            .and_then(|market| market.best_ask(&GoodId::generic()))
+            .map(|ask| ask.agent_id.clone());
+
         let spend_amount = total_available * self.propensity_to_consume;
-        let save_amount = total_available * (1.0 - self.propensity_to_consume);
-        
-        Decision {
-            spend_amount,
-            save_amount,
-            total_available,
+        if spend_amount > 0.0 && seller_id.is_some() {
+            decisions.push(ConsumerDecision::Spend {
+                agent_id: consumer.id.clone(),
+                seller_id: seller_id.unwrap(),
+                amount: spend_amount.min(1000.0), // Cap at 1000 for now
+                good_id: GoodId::generic(),
+            }); 
         }
+
+        let save_amount = total_available * (1.0 - self.propensity_to_consume);
+        if save_amount > 0.0 {
+            decisions.push(ConsumerDecision::Save {
+                agent_id: consumer.id.clone(),
+                amount: save_amount.min(1000.0), // Cap at 1000 for now
+            });
+        }
+        
+        decisions 
     }
 }
 
@@ -132,7 +109,7 @@ pub struct MLDecisionModel {
 
 #[typetag::serde]
 impl DecisionModel for MLDecisionModel {
-    fn decide(&self, consumer: &Consumer, fs: &FinancialSystem, _rng: &mut dyn RngCore) -> Decision {
+    fn decide(&self, consumer: &Consumer, fs: &FinancialSystem, _rng: &mut dyn RngCore) -> Vec<ConsumerDecision> {
         if let Some(predictor) = &self.predictor {
             let features = extract_consumer_features(consumer, fs);
             let predicted_annual_spending = predictor.predict_spending(&features);
@@ -147,18 +124,33 @@ impl DecisionModel for MLDecisionModel {
                 .unwrap_or(0.0);
             
             let total_available = consumer.income + cash_holdings;
-            let spending_per_period = predicted_annual_spending / 12.0; // Monthly
+            let spending_per_period = predicted_annual_spending / 52.0; // Weekly
             let spend_amount = spending_per_period.min(total_available);
             let save_amount = total_available - spend_amount;
             
-            println!("ML Model Decision: Available ${:.2}, Spend ${:.2}, Save ${:.2}", 
-                total_available, spend_amount, save_amount);
+            let mut decisions = Vec::new();
             
-            Decision {
-                spend_amount,
-                save_amount,
-                total_available,
+            let seller_id = fs.exchange.goods_market(&GoodId::generic())
+                .and_then(|market| market.best_ask(&GoodId::generic()))
+                .map(|ask| ask.agent_id.clone());
+            
+            if spend_amount > 0.0 && seller_id.is_some() {
+                decisions.push(ConsumerDecision::Spend {
+                    agent_id: consumer.id.clone(),
+                    seller_id: seller_id.unwrap(),
+                    amount: spend_amount,
+                    good_id: GoodId::generic(),
+                });
             }
+            
+            if save_amount > 0.0 {
+                decisions.push(ConsumerDecision::Save {
+                    agent_id: consumer.id.clone(),
+                    amount: save_amount,
+                });
+            }
+            
+            decisions
         } else {
             let basic = BasicDecisionModel { propensity_to_consume: 0.7 };
             basic.decide(consumer, fs, _rng)
@@ -209,20 +201,20 @@ fn extract_consumer_features(consumer: &Consumer, _fs: &FinancialSystem) -> Arra
         income_bracket * education,
     ])
 }
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ParametricMPC {
-    pub mpc_min: f64, // Minimum MPC
-    pub mpc_max: f64, // Maximum MPC
-    pub a: f64, // Parameter for income effect
-    pub b: f64, // Parameter for wealth effect
-    pub c: f64, // Parameter for age effect
+    pub mpc_min: f64,
+    pub mpc_max: f64,
+    pub a: f64,
+    pub b: f64,
+    pub c: f64,
 }
 
 #[typetag::serde]
 impl DecisionModel for ParametricMPC {
-    
-    fn decide(&self, consumer: &Consumer, fs: &FinancialSystem, _rng: &mut dyn RngCore) -> Decision {
-        let cash = fs.get_liquid_assets(&consumer.id);      // helper you already have
+    fn decide(&self, consumer: &Consumer, fs: &FinancialSystem, _rng: &mut dyn RngCore) -> Vec<ConsumerDecision> {
+        let cash = fs.get_liquid_assets(&consumer.id);
         let total = consumer.income + cash;
         let wealth_ratio = fs.get_total_assets(&consumer.id) / consumer.income.max(1.0);
 
@@ -230,9 +222,31 @@ impl DecisionModel for ParametricMPC {
                  / (1.0 + (self.a + self.b * consumer.income.ln()
                                 + self.c * wealth_ratio).exp());
 
-        let spend = mpc * total;
-        Decision { spend_amount: spend,
-                   save_amount: total - spend,
-                   total_available: total }
+        let spend_amount = mpc * total;
+        let save_amount = total - spend_amount;
+        
+        let mut decisions = Vec::new();
+        
+        let seller_id = fs.exchange.goods_market(&GoodId::generic())
+            .and_then(|market| market.best_ask(&GoodId::generic()))
+            .map(|ask| ask.agent_id.clone());
+        
+        if spend_amount > 0.0 && seller_id.is_some() {
+            decisions.push(ConsumerDecision::Spend {
+                agent_id: consumer.id.clone(),
+                seller_id: seller_id.unwrap(),
+                amount: spend_amount,
+                good_id: GoodId::generic(),
+            });
+        }
+        
+        if save_amount > 0.0 {
+            decisions.push(ConsumerDecision::Save {
+                agent_id: consumer.id.clone(),
+                amount: save_amount,
+            });
+        }
+        
+        decisions
     }
 }

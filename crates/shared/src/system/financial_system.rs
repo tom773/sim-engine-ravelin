@@ -11,6 +11,7 @@ pub struct FinancialSystem {
     pub balance_sheets: HashMap<AgentId, BalanceSheet>,
     pub central_bank: CentralBank,
     pub commercial_banks: HashMap<AgentId, Bank>,
+    pub exchange: Exchange, // Markets for goods
 }
 
 impl FinancialSystem {
@@ -182,6 +183,7 @@ impl Default for FinancialSystem {
         balance_sheets.insert(cb_id.clone(), BalanceSheet::new(cb_id.clone()));
         
         Self {
+            exchange: Exchange::new(),
             instruments: HashMap::new(),
             balance_sheets,
             central_bank,

@@ -21,6 +21,10 @@ pub enum StateEffect {
     
     UpdateConsumerIncome { id: AgentId, new_income: f64 },
     UpdateFirmRevenue { id: AgentId, revenue: f64 },
+
+    Hire { firm: AgentId, count: u32 },
+    Produce { firm: AgentId, good_id: GoodId, amount: f64 },
+
 }
 
 impl StateEffect {
@@ -35,6 +39,8 @@ impl StateEffect {
             StateEffect::RecordTransaction(_) => "RecordTransaction".to_string(),
             StateEffect::UpdateConsumerIncome { .. } => "UpdateConsumerIncome".to_string(),
             StateEffect::UpdateFirmRevenue { .. } => "UpdateFirmRevenue".to_string(),
+            StateEffect::Hire { .. } => "Hire".to_string(),
+            StateEffect::Produce { .. } => "Produce".to_string(),
         }
     }
 }
