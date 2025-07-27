@@ -49,6 +49,7 @@ pub enum SimAction {
         bank: AgentId,
         amount_change: f64,
     },
+    InjectLiquidity,
 }
 
 impl SimAction {
@@ -63,6 +64,7 @@ impl SimAction {
             SimAction::Hire { .. } => "Hire Employees".to_string(),
             SimAction::Produce { .. } => "Produce Goods".to_string(),
             SimAction::Consume { .. } => "Consume Goods".to_string(),
+            SimAction::InjectLiquidity => "Inject Liquidity".to_string(),
         }
     }
 }

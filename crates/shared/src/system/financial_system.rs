@@ -1,4 +1,3 @@
-
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 use crate::{*, types::*};
@@ -11,7 +10,7 @@ pub struct FinancialSystem {
     pub balance_sheets: HashMap<AgentId, BalanceSheet>,
     pub central_bank: CentralBank,
     pub commercial_banks: HashMap<AgentId, Bank>,
-    pub exchange: Exchange, // Markets for goods
+    pub exchange: Exchange,
 }
 
 impl FinancialSystem {
@@ -56,6 +55,46 @@ impl FinancialSystem {
         
         Ok(())
     }
+    pub fn find_consolidatable_instrument(&self, new_inst: &FinancialInstrument) -> Option<InstrumentId> {
+        if let Some(key) = new_inst.consolidation_key() {
+            if let Some(creditor_bs) = self.balance_sheets.get(&new_inst.creditor) {
+                for (id, existing) in &creditor_bs.assets {
+                    if existing.consolidation_key() == Some(key.clone()) {
+                        return Some(id.clone());
+                    }
+                }
+            }
+        }
+        None
+    }
+    pub fn create_or_consolidate_instrument(&mut self, instrument: FinancialInstrument) -> Result<InstrumentId, String> {
+        if let Some(existing_id) = self.find_consolidatable_instrument(&instrument) {
+            if let Some(existing) = self.instruments.get_mut(&existing_id) {
+                existing.principal += instrument.principal;
+
+                if let Some(creditor_bs) = self.balance_sheets.get_mut(&instrument.creditor) {
+                    if let Some(asset) = creditor_bs.assets.get_mut(&existing_id) {
+                        asset.principal += instrument.principal;
+                    }
+                }
+                
+                if let Some(debtor_bs) = self.balance_sheets.get_mut(&instrument.debtor) {
+                    if let Some(liability) = debtor_bs.liabilities.get_mut(&existing_id) {
+                        liability.principal += instrument.principal;
+                    }
+                }
+                
+                Ok(existing_id)
+            } else {
+                Err("Found consolidatable instrument but couldn't access it".to_string())
+            }
+        } else {
+            let id = instrument.id.clone();
+            self.create_instrument(instrument)?;
+            Ok(id)
+        }
+    }
+
     pub fn m0(&self) -> f64 {
         self.balance_sheets
             .get(&self.central_bank.id)
@@ -116,7 +155,7 @@ impl FinancialSystem {
             let is_central_bank = *agent_id == self.central_bank.id;
             
             if is_central_bank {
-                continue; // Central bank doesn't hold these assets
+                continue;
             }
             
             for inst in bs.assets.values() {
@@ -163,14 +202,14 @@ impl FinancialSystem {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MonetaryAggregates {
-    pub public_cash: f64,           // Cash held by non-banks
-    pub bank_cash: f64,             // Cash held by banks (part of reserves)
-    pub bank_reserves: f64,         // Reserves at central bank
-    pub demand_deposits: f64,       // Checking accounts
-    pub savings_deposits: f64,      // Savings accounts
-    pub m0: f64,                    // Monetary base
-    pub m1: f64,                    // M0 cash in public + demand deposits
-    pub m2: f64,                    // M1 + savings deposits
+    pub public_cash: f64,
+    pub bank_cash: f64,
+    pub bank_reserves: f64,
+    pub demand_deposits: f64,
+    pub savings_deposits: f64,
+    pub m0: f64,
+    pub m1: f64,
+    pub m2: f64,
 } 
 
 impl Default for FinancialSystem {

@@ -8,7 +8,22 @@ pub struct ProductionDomain {
 impl ProductionDomain {
     pub fn new() -> Self {
         ProductionDomain {
-            // Initialize fields if necessary
+        }
+    }
+    pub fn execute_hire(&self, action: &SimAction, state: &SimState) -> ExecutionResult {
+        //TODO
+        ExecutionResult {
+            success: true,
+            effects: vec![],
+            errors: vec![],
+        }
+    }
+    pub fn execute_produce(&self, action: &SimAction, state: &SimState) -> ExecutionResult {
+        //TODO
+        ExecutionResult {
+            success: true,
+            effects: vec![],
+            errors: vec![],
         }
     }
 }
@@ -26,17 +41,23 @@ impl ExecutionDomain for ProductionDomain {
         )
     }
     fn validate(&self, action: &SimAction, state: &SimState) -> bool {
-        // Logic to validate the action in the context of production
-        // This is a placeholder implementation
-        true
+        matches!(
+            action,
+            SimAction::Produce { .. }
+                | SimAction::Hire { .. }
+        )
     }
     fn execute(&self, action: &SimAction, state: &SimState) -> ExecutionResult {
-        // Logic to execute the action in the context of production
-        // This is a placeholder implementation
-        ExecutionResult {
-            success: true,
-            effects: vec![],
-            errors: vec![],
+        match action {
+            SimAction::Produce { .. } => { self.execute_produce(action, state) },
+            SimAction::Hire { .. } => { self.execute_hire(action, state) },
+            _ => {
+                ExecutionResult {
+                    success: true,
+                    effects: vec![],
+                    errors: vec![],
+                }
+            }
         }
     }
 }

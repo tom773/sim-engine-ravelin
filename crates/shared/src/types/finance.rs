@@ -157,7 +157,6 @@ pub enum TransactionType {
     },
     InterestPayment
 }
-// crates/shared/src/types/instrument_macros.rs
 
 #[macro_export]
 macro_rules! cash {
@@ -247,11 +246,88 @@ macro_rules! bond {
     };
 }
 
-// Helper macro for creating and adding instruments to the financial system
 #[macro_export]
 macro_rules! create_instrument {
     ($fs:expr, $macro_name:ident, $($args:expr),*) => {{
         let instrument = $macro_name!($($args),*);
         $fs.create_instrument(instrument)
     }};
+}
+
+pub trait Consolidatable {
+    fn can_consolidate_with(&self, other: &FinancialInstrument) -> bool;
+    fn consolidation_key(&self) -> Option<ConsolidationKey>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ConsolidationKey {
+    pub creditor: AgentId,
+    pub debtor: AgentId,
+    pub instrument_type: String,
+    pub subtype: Option<String>,
+}
+
+impl Consolidatable for FinancialInstrument {
+    fn can_consolidate_with(&self, other: &FinancialInstrument) -> bool {
+        if self.creditor != other.creditor || self.debtor != other.debtor {
+            return false;
+        }
+        
+        match (&self.instrument_type, &other.instrument_type) {
+            (InstrumentType::Cash, InstrumentType::Cash) => true,
+            
+            (InstrumentType::CentralBankReserves, InstrumentType::CentralBankReserves) => true,
+            
+            (InstrumentType::DemandDeposit, InstrumentType::DemandDeposit) => {
+                (self.interest_rate - other.interest_rate).abs() < 0.001
+            }
+            
+            (InstrumentType::SavingsDeposit { notice_period: p1 }, 
+             InstrumentType::SavingsDeposit { notice_period: p2 }) => {
+                p1 == p2 && (self.interest_rate - other.interest_rate).abs() < 0.001
+            }
+            
+            (InstrumentType::Loan { .. }, InstrumentType::Loan { .. }) => false,
+            
+            (InstrumentType::Bond { .. }, InstrumentType::Bond { .. }) => false,
+            
+            _ => false,
+        }
+    }
+    
+    fn consolidation_key(&self) -> Option<ConsolidationKey> {
+        let key = match &self.instrument_type {
+            InstrumentType::Cash => Some(ConsolidationKey {
+                creditor: self.creditor.clone(),
+                debtor: self.debtor.clone(),
+                instrument_type: "Cash".to_string(),
+                subtype: None,
+            }),
+            
+            InstrumentType::CentralBankReserves => Some(ConsolidationKey {
+                creditor: self.creditor.clone(),
+                debtor: self.debtor.clone(),
+                instrument_type: "Reserves".to_string(),
+                subtype: None,
+            }),
+            
+            InstrumentType::DemandDeposit => Some(ConsolidationKey {
+                creditor: self.creditor.clone(),
+                debtor: self.debtor.clone(),
+                instrument_type: "DemandDeposit".to_string(),
+                subtype: Some(format!("rate_{}", (self.interest_rate * 1000.0) as i32)),
+            }),
+            
+            InstrumentType::SavingsDeposit { notice_period } => Some(ConsolidationKey {
+                creditor: self.creditor.clone(),
+                debtor: self.debtor.clone(),
+                instrument_type: "SavingsDeposit".to_string(),
+                subtype: Some(format!("notice_{}_rate_{}", notice_period, (self.interest_rate * 1000.0) as i32)),
+            }),
+            
+            _ => None,
+        };
+        
+        key
+    }
 }

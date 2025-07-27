@@ -14,24 +14,18 @@ pub enum StateEffect {
     UpdateInstrument { id: InstrumentId, new_principal: f64 },
     TransferInstrument { id: InstrumentId, new_creditor: AgentId },
     RemoveInstrument(InstrumentId),
-
     SwapInstrument { 
         id: InstrumentId, 
         new_debtor: AgentId, 
         new_creditor: AgentId 
     },
-
     AddInventory { owner: AgentId, good_id: String, quantity: u32 },
     RemoveInventory { owner: AgentId, good_id: String, quantity: u32 },
-    
     RecordTransaction(Transaction),
-    
     UpdateConsumerIncome { id: AgentId, new_income: f64 },
     UpdateFirmRevenue { id: AgentId, revenue: f64 },
-
     Hire { firm: AgentId, count: u32 },
     Produce { firm: AgentId, good_id: GoodId, amount: f64 },
-    
 }
 
 impl StateEffect {

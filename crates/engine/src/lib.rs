@@ -41,14 +41,15 @@ pub fn tick(sim_state: &mut SimState) -> (&mut SimState, Vec<SimAction>, Vec<Sta
         println!("Error applying effects: {}", e);
     }
     
-    (sim_state, all_sim_actions, all_effects)
+    (sim_state, all_sim_actions.clone(), all_effects.clone())
 }
 
 pub fn inject_liquidity(ss: &mut SimState) -> &mut SimState {
-    let ns = TransactionExecutor::execute_inject_liquidity(ss);
-    
+    let action = SimAction::InjectLiquidity;
+    let ns = TransactionExecutor::execute_action(&action, ss);
+    println!("Injecting liquidity: {:?}", ns.effects);
     if let Err(e) = TransactionExecutor::apply_effects(&ns.effects, ss) {
-        println!("Error applying liquidity effects: {}", e);
+        println!("Error applying effects: {}", e);
     }
     ss
 }

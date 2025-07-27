@@ -50,7 +50,12 @@ impl Bank {
     pub fn liquidity(&self, fs: &FinancialSystem) -> f64 {
         fs.liquidity(&self.id)
     }
-    
+    pub fn get_deposit_rate(&self, fs: &FinancialSystem) -> f64 {
+        fs.central_bank.policy_rate - self.deposit_spread
+    }
+    pub fn get_lending_rate(&self, fs: &FinancialSystem) -> f64 {
+        fs.central_bank.policy_rate + self.lending_spread
+    }
     pub fn get_reserves(&self, fs: &FinancialSystem) -> f64 {
         fs.balance_sheets
             .get(&self.id)
