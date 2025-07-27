@@ -48,6 +48,14 @@ impl Default for SimState {
         }
     }
 }
+impl SimState {
+    pub fn get_first_agents(&self) -> (Option<&Consumer>, Option<&Firm>, Option<&Bank>) {
+        let consumer = self.consumers.first();
+        let firm = self.firms.first();
+        let bank = self.financial_system.commercial_banks.values().next();
+        (consumer, firm, bank)
+    }
+}
 pub fn initialize_economy(config: &SimConfig, rng: &mut StdRng) -> SimState {
     let mut ss = SimState::default();
     let mut factory = AgentFactory::new(&mut ss, rng);

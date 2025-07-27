@@ -3,18 +3,17 @@ use crate::*;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SimAction {
-    IssueIncome {
+    Wages {
         agent_id: AgentId,
         amount: f64,
     },
-    
-    DepositCash {
+    Deposit {
         agent_id: AgentId,
         bank: AgentId,
         amount: f64,
     },
     
-    WithdrawCash {
+    Withdraw {
         agent_id: AgentId,
         bank: AgentId,
         amount: f64,
@@ -41,7 +40,11 @@ pub enum SimAction {
         good_id: String,
         amount: f64,
     },
-    
+    Consume {
+        agent_id: AgentId,
+        good_id: GoodId,
+        amount: f64,
+    }, 
     UpdateReserves {
         bank: AgentId,
         amount_change: f64,
@@ -51,14 +54,15 @@ pub enum SimAction {
 impl SimAction {
     pub fn name(&self) -> String {
         match self {
-            SimAction::IssueIncome { .. } => "Issue Income".to_string(),
-            SimAction::DepositCash { .. } => "Deposit Cash".to_string(),
-            SimAction::WithdrawCash { .. } => "Withdraw Cash".to_string(),
+            SimAction::Wages { .. } => "Issue Income".to_string(),
+            SimAction::Deposit { .. } => "Deposit Cash".to_string(),
+            SimAction::Withdraw { .. } => "Withdraw Cash".to_string(),
             SimAction::Transfer { .. } => "Transfer Funds".to_string(),
             SimAction::Purchase { .. } => "Purchase Good".to_string(),
             SimAction::UpdateReserves { .. } => "Update Reserves".to_string(),
             SimAction::Hire { .. } => "Hire Employees".to_string(),
             SimAction::Produce { .. } => "Produce Goods".to_string(),
+            SimAction::Consume { .. } => "Consume Goods".to_string(),
         }
     }
 }

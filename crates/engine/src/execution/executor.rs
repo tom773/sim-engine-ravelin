@@ -6,17 +6,17 @@ pub struct TransactionExecutor;
 impl TransactionExecutor {
     pub fn execute_action(action: &SimAction, state: &SimState) -> ExecutionResult {
         match action {
-            SimAction::IssueIncome { agent_id, amount } => {
+            SimAction::Wages { agent_id, amount } => {
                 Self::execute_issue_income(agent_id, *amount, state)
             }
 
-            SimAction::DepositCash {
+            SimAction::Deposit {
                 agent_id,
                 bank,
                 amount,
             } => Self::execute_deposit_cash(agent_id, bank, *amount, state),
 
-            SimAction::WithdrawCash {
+            SimAction::Withdraw {
                 agent_id,
                 bank,
                 amount,
@@ -46,6 +46,11 @@ impl TransactionExecutor {
                 good_id,
                 amount,
             } => Self::execute_produce(agent_id, *amount, good_id),
+            SimAction::Consume {
+                agent_id,
+                good_id,
+                amount,
+            } => Self::execute_transfer(agent_id, &state.financial_system.central_bank.id, *amount, state),
         }
     }
 
@@ -137,10 +142,6 @@ impl TransactionExecutor {
                             }
                         }
 
-                        println!(
-                            "Updated instrument {} from ${:.2} to ${:.2}",
-                            id.0, old_principal, new_principal
-                        );
                     }
                 }
 
@@ -475,7 +476,7 @@ impl TransactionExecutor {
         for consumer in &state.consumers {
             let cash = cash!(
                 consumer.id.clone(),
-                100.0,
+                500.0,
                 state.financial_system.central_bank.id.clone(),
                 state.ticknum
             );

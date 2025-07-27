@@ -64,7 +64,7 @@ impl Agent for Consumer {
             match decision {
                 ConsumerDecision::Save { agent_id, amount } => {
                     if *amount > 0.0 {
-                        actions.push(SimAction::DepositCash {
+                        actions.push(SimAction::Deposit {
                             agent_id: agent_id.clone(),
                             bank: self.bank_id.clone(),
                             amount: amount.min(1000.0), // Cap at 1000 for now
