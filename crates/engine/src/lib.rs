@@ -1,30 +1,36 @@
 #[allow(unused)]
 pub mod execution;
 pub use execution::*;
-
+mod test;
 pub mod state;
-pub use state::*;
-pub use shared::*;
 use rand::prelude::*;
+pub use shared::*;
+pub use state::*;
 
 pub fn tick(sim_state: &mut SimState) -> (&mut SimState, Vec<SimAction>, Vec<StateEffect>) {
     sim_state.ticknum += 1;
     let mut rng = StdRng::from_os_rng();
-    
+
     let mut all_sim_actions = Vec::new();
-    
+
+    let banks: Vec<Bank> = sim_state.financial_system.commercial_banks.values().cloned().collect();
+    for bank in &banks {
+        let decisions = bank.decide(&sim_state.financial_system, &mut rng);
+        let actions = bank.act(&decisions);
+        all_sim_actions.extend(actions);
+    }
     for firm in &sim_state.firms {
         let decisions = firm.decide(&sim_state.financial_system, &mut rng);
         let actions = firm.act(&decisions);
         all_sim_actions.extend(actions);
     }
-    
+
     for consumer in &sim_state.consumers {
         let decisions = consumer.decide(&sim_state.financial_system, &mut rng);
         let actions = consumer.act(&decisions);
         all_sim_actions.extend(actions);
     }
-    
+
     let mut all_effects = Vec::new();
     for action in &all_sim_actions {
         let result = TransactionExecutor::execute_action(action, sim_state);
@@ -36,11 +42,11 @@ pub fn tick(sim_state: &mut SimState) -> (&mut SimState, Vec<SimAction>, Vec<Sta
             }
         }
     }
-    
+
     if let Err(e) = TransactionExecutor::apply_effects(&all_effects, sim_state) {
         println!("Error applying effects: {}", e);
     }
-    
+
     (sim_state, all_sim_actions.clone(), all_effects.clone())
 }
 

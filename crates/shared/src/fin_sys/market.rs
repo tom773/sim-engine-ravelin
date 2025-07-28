@@ -1,30 +1,16 @@
-use serde::{Serialize, Deserialize};
-use crate::*;
+use crate::{goods::*, *};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct GoodId(pub String);
-
-impl GoodId {
-    pub fn new(category: &str, name: &str) -> Self {
-        Self(format!("{}:{}", category, name))
-    }
-    
-    pub fn generic() -> Self {
-        Self("goods:generic".to_string())
-    }
-}
+use uuid::Uuid;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FinancialMarketId {
     SecuredOvernightFinancing, // Represents the market for interbank lending of reserves.
 }
 
-
 pub trait RatesMarket {
     fn price_to_daily_rate(&self, price: f64) -> f64;
-    
+
     fn daily_rate_to_annual_bps(&self, daily_rate: f64) -> f64;
 
     fn annual_bps_to_daily_rate(&self, annual_bps: f64) -> f64;
@@ -32,10 +18,12 @@ pub trait RatesMarket {
 
 impl RatesMarket for FinancialMarketId {
     fn price_to_daily_rate(&self, price: f64) -> f64 {
-        if price <= 0.0 { return f64::INFINITY; }
+        if price <= 0.0 {
+            return f64::INFINITY;
+        }
         (1.0 / price) - 1.0
     }
-    
+
     fn daily_rate_to_annual_bps(&self, daily_rate: f64) -> f64 {
         daily_rate * 360.0 * 10000.0
     }
@@ -50,7 +38,6 @@ pub enum MarketId {
     Goods(GoodId),
     Financial(FinancialMarketId),
 }
-
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Trade {
@@ -83,18 +70,14 @@ pub struct OrderBook {
 
 impl OrderBook {
     pub fn new() -> Self {
-        Self {
-            bids: Vec::new(),
-            asks: Vec::new(),
-        }
+        Self { bids: Vec::new(), asks: Vec::new() }
     }
-    
+
     pub fn sort_orders(&mut self) {
         self.asks.sort_by(|a, b| a.price.partial_cmp(&b.price).unwrap());
         self.bids.sort_by(|a, b| b.price.partial_cmp(&a.price).unwrap());
     }
 }
-
 
 pub trait Market: Send + Sync {
     fn quote(&self) -> Option<f64>;
@@ -113,10 +96,7 @@ pub struct GoodsMarket {
 
 impl GoodsMarket {
     pub fn new(good_id: GoodId) -> Self {
-        Self {
-            good_id,
-            order_book: OrderBook::new(),
-        }
+        Self { good_id, order_book: OrderBook::new() }
     }
 }
 
@@ -124,7 +104,7 @@ impl Market for GoodsMarket {
     fn quote(&self) -> Option<f64> {
         self.order_book.asks.first().map(|ask| ask.price)
     }
-    
+
     fn best_bid(&self) -> Option<&Bid> {
         self.order_book.bids.first()
     }
@@ -132,11 +112,11 @@ impl Market for GoodsMarket {
     fn best_ask(&self) -> Option<&Ask> {
         self.order_book.asks.first()
     }
-    
+
     fn post_ask(&mut self, seller: AgentId, qty: f64, price: f64) {
         self.order_book.asks.push(Ask { agent_id: seller, price, quantity: qty });
     }
-    
+
     fn post_bid(&mut self, buyer: AgentId, qty: f64, price: f64) {
         self.order_book.bids.push(Bid { agent_id: buyer, price, quantity: qty });
     }
@@ -155,10 +135,7 @@ pub struct FinancialMarket {
 
 impl FinancialMarket {
     pub fn new(market_id: FinancialMarketId) -> Self {
-        Self {
-            market_id,
-            order_book: OrderBook::new(),
-        }
+        Self { market_id, order_book: OrderBook::new() }
     }
 }
 
@@ -170,7 +147,7 @@ impl Market for FinancialMarket {
     fn best_bid(&self) -> Option<&Bid> {
         self.order_book.bids.first()
     }
-    
+
     fn best_ask(&self) -> Option<&Ask> {
         self.order_book.asks.first()
     }
@@ -188,6 +165,11 @@ impl Market for FinancialMarket {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Order {
+    Bid(Bid),
+    Ask(Ask),
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Exchange {
@@ -197,40 +179,33 @@ pub struct Exchange {
 
 impl Exchange {
     pub fn new() -> Self {
-        let mut exchange = Self {
-            goods_markets: HashMap::new(),
-            financial_markets: HashMap::new(),
-        };
-        
-        exchange.register_goods_market(GoodId::generic());
-        
+        let mut exchange = Self { goods_markets: HashMap::new(), financial_markets: HashMap::new() };
+
         exchange.register_financial_market(FinancialMarketId::SecuredOvernightFinancing);
-        
+
         exchange
     }
-    
+
     pub fn register_goods_market(&mut self, good_id: GoodId) {
-        self.goods_markets.entry(good_id.clone())
-            .or_insert_with(|| GoodsMarket::new(good_id));
+        self.goods_markets.entry(good_id.clone()).or_insert_with(|| GoodsMarket::new(good_id));
     }
-    
+
     pub fn register_financial_market(&mut self, market_id: FinancialMarketId) {
-        self.financial_markets.entry(market_id.clone())
-            .or_insert_with(|| FinancialMarket::new(market_id));
+        self.financial_markets.entry(market_id.clone()).or_insert_with(|| FinancialMarket::new(market_id));
     }
-    
+
     pub fn goods_market(&self, good_id: &GoodId) -> Option<&GoodsMarket> {
         self.goods_markets.get(good_id)
     }
-    
+
     pub fn goods_market_mut(&mut self, good_id: &GoodId) -> Option<&mut GoodsMarket> {
         self.goods_markets.get_mut(good_id)
     }
-    
+
     pub fn financial_market(&self, market_id: &FinancialMarketId) -> Option<&FinancialMarket> {
         self.financial_markets.get(market_id)
     }
-    
+
     pub fn financial_market_mut(&mut self, market_id: &FinancialMarketId) -> Option<&mut FinancialMarket> {
         self.financial_markets.get_mut(market_id)
     }

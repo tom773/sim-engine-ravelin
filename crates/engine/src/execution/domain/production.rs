@@ -1,30 +1,64 @@
-use shared::*; 
-use crate::{state::SimState, effects::ExecutionResult, domain::ExecutionDomain};
+use crate::{
+    domain::ExecutionDomain,
+    effects::{ExecutionResult, StateEffect},
+    state::SimState,
+};
+use shared::*;
 
-pub struct ProductionDomain {
-    // Add any necessary fields here
-}
+pub struct ProductionDomain {}
 
 impl ProductionDomain {
     pub fn new() -> Self {
-        ProductionDomain {
-        }
+        ProductionDomain {}
     }
     pub fn execute_hire(&self, action: &SimAction, state: &SimState) -> ExecutionResult {
-        //TODO
-        ExecutionResult {
-            success: true,
-            effects: vec![],
-            errors: vec![],
+        if let SimAction::Hire { agent_id, count } = action {
+            if let Some(f) = state.firms.iter().find(|f| f.id == *agent_id) {
+                return ExecutionResult {
+                    success: true,
+                    effects: vec![StateEffect::Hire { firm: f.id.clone(), count: *count }],
+                    errors: vec![],
+                };
+            } else {
+                return ExecutionResult {
+                    success: false,
+                    effects: vec![],
+                    errors: vec![format!("Firm {} not found", agent_id.0)],
+                };
+            }
         }
+        ExecutionResult { success: true, effects: vec![], errors: vec![] }
     }
     pub fn execute_produce(&self, action: &SimAction, state: &SimState) -> ExecutionResult {
-        //TODO
-        ExecutionResult {
-            success: true,
-            effects: vec![],
-            errors: vec![],
+        if let SimAction::Produce { agent_id, recipe_id, batches } = action {
+            if let Some(recipe) = state.financial_system.goods.recipes.get(recipe_id) {
+                let mut effects = vec![];
+                for _ in 0..*batches {
+                    for (good_id, qty) in &recipe.inputs {
+                        effects.push(StateEffect::RemoveInventory {
+                            owner: agent_id.clone(),
+                            good_id: *good_id,
+                            quantity: *qty,
+                        });
+                    }
+                    let (output_good, output_qty) = &recipe.output;
+                    effects.push(StateEffect::AddInventory {
+                        owner: agent_id.clone(),
+                        good_id: *output_good,
+                        quantity: *output_qty * recipe.efficiency,
+                        unit_cost: (recipe.labour_hours * 40.0 * 10.0) / recipe.efficiency, // TODO unhardcoded unit cost
+                    });
+                }
+                return ExecutionResult { success: true, effects, errors: vec![] };
+            } else {
+                return ExecutionResult {
+                    success: false,
+                    effects: vec![],
+                    errors: vec![format!("Recipe {:?} not found", recipe_id)],
+                };
+            }
         }
+        ExecutionResult { success: false, effects: vec![], errors: vec!["Invalid Produce action".to_string()] }
     }
 }
 
@@ -32,32 +66,31 @@ impl ExecutionDomain for ProductionDomain {
     fn name(&self) -> &'static str {
         "ProductionDomain"
     }
-    
+
     fn can_handle(&self, action: &SimAction) -> bool {
-        matches!(
-            action,
-            SimAction::Produce { .. }
-                | SimAction::Hire { .. }
-        )
+        matches!(action, SimAction::Produce { .. } | SimAction::Hire { .. })
     }
     fn validate(&self, action: &SimAction, state: &SimState) -> bool {
-        matches!(
-            action,
-            SimAction::Produce { .. }
-                | SimAction::Hire { .. }
-        )
+        match action {
+            SimAction::Produce { agent_id: _, recipe_id, batches: _ } => {
+                if !state.financial_system.goods.recipes.contains_key(recipe_id) {
+                    return false;
+                }
+                true
+            }
+            SimAction::Hire { .. } => true,
+            _ => false,
+        }
     }
     fn execute(&self, action: &SimAction, state: &SimState) -> ExecutionResult {
         match action {
-            SimAction::Produce { .. } => { self.execute_produce(action, state) },
-            SimAction::Hire { .. } => { self.execute_hire(action, state) },
-            _ => {
-                ExecutionResult {
-                    success: true,
-                    effects: vec![],
-                    errors: vec![],
-                }
-            }
+            SimAction::Produce { .. } => self.execute_produce(action, state),
+            SimAction::Hire { .. } => self.execute_hire(action, state),
+            _ => ExecutionResult {
+                success: false,
+                effects: vec![],
+                errors: vec!["Action not handled by ProductionDomain".to_string()],
+            },
         }
     }
 }

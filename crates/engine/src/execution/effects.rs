@@ -1,6 +1,6 @@
 use super::*;
 use axum::extract::State;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug)]
 pub struct ExecutionResult {
     pub success: bool,
@@ -14,19 +14,15 @@ pub enum StateEffect {
     UpdateInstrument { id: InstrumentId, new_principal: f64 },
     TransferInstrument { id: InstrumentId, new_creditor: AgentId },
     RemoveInstrument(InstrumentId),
-    SwapInstrument { 
-        id: InstrumentId, 
-        new_debtor: AgentId, 
-        new_creditor: AgentId 
-    },
-    AddInventory { owner: AgentId, good_id: String, quantity: u32 },
-    RemoveInventory { owner: AgentId, good_id: String, quantity: u32 },
+    SwapInstrument { id: InstrumentId, new_debtor: AgentId, new_creditor: AgentId },
+    AddInventory { owner: AgentId, good_id: GoodId, quantity: f64, unit_cost: f64 },
+    RemoveInventory { owner: AgentId, good_id: GoodId, quantity: f64 },
     RecordTransaction(Transaction),
     UpdateConsumerIncome { id: AgentId, new_income: f64 },
     UpdateFirmRevenue { id: AgentId, revenue: f64 },
     Hire { firm: AgentId, count: u32 },
     Produce { firm: AgentId, good_id: GoodId, amount: f64 },
-    PostBid { agent: AgentId, instrument: InstrumentType, price: f64, quantity: u32 },
+    PlaceOrderInBook { market_id: MarketId, order: Order },
 }
 
 impl StateEffect {
@@ -44,7 +40,7 @@ impl StateEffect {
             StateEffect::UpdateFirmRevenue { .. } => "UpdateFirmRevenue".to_string(),
             StateEffect::Hire { .. } => "Hire".to_string(),
             StateEffect::Produce { .. } => "Produce".to_string(),
-            StateEffect::PostBid { .. } => "PostBid".to_string(),
+            StateEffect::PlaceOrderInBook { .. } => "PlaceOrderInBook".to_string(),
         }
     }
 }

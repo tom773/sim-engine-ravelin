@@ -4,15 +4,11 @@ use crate::{effects::ExecutionResult, state::SimState};
 use shared::*;
 use uuid::Uuid;
 use shared::validation::FinancialValidator;
-pub struct BankingDomain {
-    reserve_calculator: ReserveCalculator,
-}
+pub struct BankingDomain {}
 
 impl BankingDomain {
     pub fn new() -> Self {
-        BankingDomain {
-            reserve_calculator: ReserveCalculator::new(),
-        }
+        BankingDomain {}
     }
     fn execute_deposit(
         &self,
@@ -55,11 +51,6 @@ impl BankingDomain {
                     state.ticknum
                 );
                 effects.push(StateEffect::CreateInstrument(deposit));
-
-                let reserve_effects = self
-                    .reserve_calculator
-                    .calculate_reserve_effects(bank, amount, state);
-                println!("Reserve effects: {:?}", reserve_effects.clone());
             }
         }
 
@@ -245,49 +236,5 @@ impl ExecutionDomain for BankingDomain {
                 )],
             },
         }
-    }
-}
-
-struct ReserveCalculator;
-
-impl ReserveCalculator {
-    fn new() -> Self {
-        Self
-    }
-
-    fn calculate_reserve_effects(
-        &self,
-        bank: &AgentId,
-        deposit_amount: f64,
-        state: &SimState,
-    ) -> Vec<StateEffect> {
-        let mut effects = vec![];
-        println!("\n\n\nCalculating reserve effects, deposit amount: {}", deposit_amount);
-
-
-        let reserve_requirement = state.financial_system.central_bank.reserve_requirement;
-        let current_reserves = state
-            .financial_system
-            .get_bank_reserves(bank)
-            .unwrap_or(0.0);
-        let total_deposits_after =
-            state.financial_system.get_total_liabilities(bank) + deposit_amount;
-        let total_required_reserves = total_deposits_after * reserve_requirement;
-        println!(
-            "Current reserves: {}, Total deposits after: {}, Total required reserves: {}\n\n\n",
-            current_reserves, total_deposits_after, total_required_reserves
-        );
-        if current_reserves < total_required_reserves {
-            let reserve_shortfall = total_required_reserves - current_reserves;
-
-            effects.push(StateEffect::PostBid {
-                agent: bank.clone(),
-                instrument: InstrumentType::CentralBankReserves,
-                price: state.financial_system.central_bank.policy_rate,
-                quantity: reserve_shortfall as u32,
-            });
-        }
-
-        effects
     }
 }

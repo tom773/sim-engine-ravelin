@@ -1,0 +1,8 @@
+max_width          = 120
+
+use_small_heuristics = "Max"
+
+fn_call_width      = 120      # same as max_width above
+attr_fn_like_width = 120      # for `#[derive(...)]`‑style macros
+
+fn_params_layout   = "Compressed"  # renamed from `fn_args_layout` :contentReference[oaicite:3]{index=3}

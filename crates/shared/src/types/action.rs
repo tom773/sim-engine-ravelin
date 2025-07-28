@@ -1,68 +1,25 @@
-use serde::{Serialize, Deserialize};
 use crate::*;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SimAction {
-    Wages {
-        agent_id: AgentId,
-        amount: f64,
-    },
-    Deposit {
-        agent_id: AgentId,
-        bank: AgentId,
-        amount: f64,
-    },
-    
-    Withdraw {
-        agent_id: AgentId,
-        bank: AgentId,
-        amount: f64,
-    },
-    
-    Transfer {
-        agent_id: AgentId,
-        from: AgentId,
-        to: AgentId,
-        amount: f64,
-    },
-    Hire {
-        agent_id: AgentId,
-        count: u32,
-    },
-    Produce {
-        agent_id: AgentId,
-        good_id: GoodId,
-        amount: f64,
-    },
-    Purchase {
-        agent_id: AgentId,
-        seller: AgentId,
-        good_id: String,
-        amount: f64,
-    },
-    Consume {
-        agent_id: AgentId,
-        good_id: GoodId,
-        amount: f64,
-    }, 
-    UpdateReserves {
-        bank: AgentId,
-        amount_change: f64,
-    },
+    // Banks
+    Deposit { agent_id: AgentId, bank: AgentId, amount: f64 },
+    Withdraw { agent_id: AgentId, bank: AgentId, amount: f64 },
+    Transfer { agent_id: AgentId, from: AgentId, to: AgentId, amount: f64 },
+    // Firms
+    Wages { agent_id: AgentId, amount: f64 },
+    Hire { agent_id: AgentId, count: u32 },
+    Produce { agent_id: AgentId, recipe_id: RecipeId, batches: u32 },
+    // Households 
+    Purchase { agent_id: AgentId, seller: AgentId, good_id: GoodId, amount: f64 },
+    Consume { agent_id: AgentId, good_id: GoodId, amount: f64 },
+    // Central Bank (Sort of) 
+    UpdateReserves { bank: AgentId, amount_change: f64 },
     InjectLiquidity,
-    PostBid {
-        agent_id: AgentId,
-        market_id: FinancialMarketId, // Use AssetId to identify the market
-        quantity: f64,
-        price: f64, // Price here is the interest rate
-    },
-    PostAsk {
-        agent_id: AgentId,
-        market_id: FinancialMarketId,
-        quantity: f64,
-        price: f64,
-    },
-    
+    // Trading
+    PostBid { agent_id: AgentId, market_id: MarketId, quantity: f64, price: f64 },
+    PostAsk { agent_id: AgentId, market_id: MarketId, quantity: f64, price: f64 },
 }
 
 impl SimAction {

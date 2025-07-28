@@ -1,12 +1,12 @@
-use serde::{Serialize, Deserialize};
-use uuid::Uuid;
+use crate::GoodId;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use uuid::Uuid;
 
-#[derive(Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq, Copy)]
 pub struct AgentId(pub Uuid);
 
-
-#[derive(Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq, Copy)]
 pub struct InstrumentId(pub Uuid);
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -36,8 +36,9 @@ pub enum InstrumentType {
         loan_type: LoanType,
         collateral: Option<CollateralInfo>,
     },
-    SavingsDeposit { notice_period: u32 },
-    
+    SavingsDeposit {
+        notice_period: u32,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -50,9 +51,7 @@ pub enum LoanType {
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum BondType {
-    Corporate {
-        spread: f64,
-    },
+    Corporate { spread: f64 },
     Government,
 }
 
@@ -72,7 +71,7 @@ pub enum CreditRating {
     CCC,
     CC,
     C,
-    D, 
+    D,
 }
 impl CreditRating {
     pub fn convert_fico(&self) -> u32 {
@@ -99,13 +98,13 @@ pub struct RealAsset {
     pub acquired_date: u32,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Copy)]
 pub struct AssetId(pub Uuid);
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum RealAssetType {
     RealEstate { address: String, property_type: String },
-    Inventory { goods: HashMap<String, InventoryItem> },
+    Inventory { goods: HashMap<GoodId, InventoryItem> },
     Equipment { description: String, depreciation_rate: f64 },
     IntellectualProperty { description: String },
 }
@@ -126,7 +125,13 @@ pub struct Transaction {
     pub instrument_id: Option<InstrumentId>,
 }
 impl Transaction {
-    pub fn new(tx_type: TransactionType, inst: InstrumentId, from: AgentId, to: AgentId, amount: f64) -> Self {
+    pub fn new(
+        tx_type: TransactionType,
+        inst: InstrumentId,
+        from: AgentId,
+        to: AgentId,
+        amount: f64,
+    ) -> Self {
         Self {
             id: Uuid::new_v4(),
             date: chrono::Utc::now().timestamp() as u32,
@@ -140,22 +145,10 @@ impl Transaction {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum TransactionType {
-    Deposit {
-        holder: AgentId,
-        bank: AgentId,
-        amount: f64,
-    },
-    Withdrawal{
-        holder: AgentId,
-        bank: AgentId,
-        amount: f64,
-    },
-    Transfer {
-        from: AgentId,
-        to: AgentId,
-        amount: f64,
-    },
-    InterestPayment
+    Deposit { holder: AgentId, bank: AgentId, amount: f64 },
+    Withdrawal { holder: AgentId, bank: AgentId, amount: f64 },
+    Transfer { from: AgentId, to: AgentId, amount: f64 },
+    InterestPayment,
 }
 
 #[macro_export]
@@ -272,29 +265,29 @@ impl Consolidatable for FinancialInstrument {
         if self.creditor != other.creditor || self.debtor != other.debtor {
             return false;
         }
-        
+
         match (&self.instrument_type, &other.instrument_type) {
             (InstrumentType::Cash, InstrumentType::Cash) => true,
-            
+
             (InstrumentType::CentralBankReserves, InstrumentType::CentralBankReserves) => true,
-            
+
             (InstrumentType::DemandDeposit, InstrumentType::DemandDeposit) => {
                 (self.interest_rate - other.interest_rate).abs() < 0.001
             }
-            
-            (InstrumentType::SavingsDeposit { notice_period: p1 }, 
-             InstrumentType::SavingsDeposit { notice_period: p2 }) => {
-                p1 == p2 && (self.interest_rate - other.interest_rate).abs() < 0.001
-            }
-            
+
+            (
+                InstrumentType::SavingsDeposit { notice_period: p1 },
+                InstrumentType::SavingsDeposit { notice_period: p2 },
+            ) => p1 == p2 && (self.interest_rate - other.interest_rate).abs() < 0.001,
+
             (InstrumentType::Loan { .. }, InstrumentType::Loan { .. }) => false,
-            
+
             (InstrumentType::Bond { .. }, InstrumentType::Bond { .. }) => false,
-            
+
             _ => false,
         }
     }
-    
+
     fn consolidation_key(&self) -> Option<ConsolidationKey> {
         let key = match &self.instrument_type {
             InstrumentType::Cash => Some(ConsolidationKey {
@@ -303,31 +296,35 @@ impl Consolidatable for FinancialInstrument {
                 instrument_type: "Cash".to_string(),
                 subtype: None,
             }),
-            
+
             InstrumentType::CentralBankReserves => Some(ConsolidationKey {
                 creditor: self.creditor.clone(),
                 debtor: self.debtor.clone(),
                 instrument_type: "Reserves".to_string(),
                 subtype: None,
             }),
-            
+
             InstrumentType::DemandDeposit => Some(ConsolidationKey {
                 creditor: self.creditor.clone(),
                 debtor: self.debtor.clone(),
                 instrument_type: "DemandDeposit".to_string(),
                 subtype: Some(format!("rate_{}", (self.interest_rate * 1000.0) as i32)),
             }),
-            
+
             InstrumentType::SavingsDeposit { notice_period } => Some(ConsolidationKey {
                 creditor: self.creditor.clone(),
                 debtor: self.debtor.clone(),
                 instrument_type: "SavingsDeposit".to_string(),
-                subtype: Some(format!("notice_{}_rate_{}", notice_period, (self.interest_rate * 1000.0) as i32)),
+                subtype: Some(format!(
+                    "notice_{}_rate_{}",
+                    notice_period,
+                    (self.interest_rate * 1000.0) as i32
+                )),
             }),
-            
+
             _ => None,
         };
-        
+
         key
     }
 }

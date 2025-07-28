@@ -1,8 +1,7 @@
-use serde::{Serialize, Deserialize};
+use crate::{types::*, *};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::{*, types::*};
 use uuid::Uuid;
-use chrono::Utc;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FinancialSystem {
@@ -11,6 +10,7 @@ pub struct FinancialSystem {
     pub central_bank: CentralBank,
     pub commercial_banks: HashMap<AgentId, Bank>,
     pub exchange: Exchange,
+    pub goods: GoodsRegistry,
 }
 
 pub trait InstrumentManager {
@@ -20,7 +20,9 @@ pub trait InstrumentManager {
     fn find_consolidatable_instrument(&self, new_inst: &FinancialInstrument) -> Option<InstrumentId>;
     fn remove_instrument(&mut self, id: &InstrumentId) -> Result<(), String>;
     fn transfer_instrument(&mut self, id: &InstrumentId, new_creditor: AgentId) -> Result<(), String>;
-    fn swap_instrument(&mut self, id: &InstrumentId, new_debtor: &AgentId, new_creditor: &AgentId) -> Result<(), String>;
+    fn swap_instrument(
+        &mut self, id: &InstrumentId, new_debtor: &AgentId, new_creditor: &AgentId,
+    ) -> Result<(), String>;
 }
 
 pub trait FinancialStatistics {
@@ -50,25 +52,20 @@ impl InstrumentManager for FinancialSystem {
         Ok(())
     }
 
-    fn transfer_instrument(
-        &mut self, 
-        instrument_id: &InstrumentId, 
-        new_creditor: AgentId
-    ) -> Result<(), String> {
-        let instrument = self.instruments.get_mut(instrument_id)
-            .ok_or("Instrument not found")?;
-        
+    fn transfer_instrument(&mut self, instrument_id: &InstrumentId, new_creditor: AgentId) -> Result<(), String> {
+        let instrument = self.instruments.get_mut(instrument_id).ok_or("Instrument not found")?;
+
         let old_creditor = instrument.creditor.clone();
-        
+
         if let Some(old_bs) = self.balance_sheets.get_mut(&old_creditor) {
             old_bs.assets.remove(instrument_id);
         }
-        
+
         instrument.creditor = new_creditor.clone();
         if let Some(new_bs) = self.balance_sheets.get_mut(&new_creditor) {
             new_bs.assets.insert(instrument_id.clone(), instrument.clone());
         }
-        
+
         Ok(())
     }
     fn find_consolidatable_instrument(&self, new_inst: &FinancialInstrument) -> Option<InstrumentId> {
@@ -93,13 +90,13 @@ impl InstrumentManager for FinancialSystem {
                         asset.principal += instrument.principal;
                     }
                 }
-                
+
                 if let Some(debtor_bs) = self.balance_sheets.get_mut(&instrument.debtor) {
                     if let Some(liability) = debtor_bs.liabilities.get_mut(&existing_id) {
                         liability.principal += instrument.principal;
                     }
                 }
-                
+
                 Ok(existing_id)
             } else {
                 Err("Found consolidatable instrument but couldn't access it".to_string())
@@ -141,50 +138,52 @@ impl InstrumentManager for FinancialSystem {
             Err("Instrument not found".to_string())
         }
     }
-    fn swap_instrument(&mut self, id: &InstrumentId, new_debtor: &AgentId, new_creditor: &AgentId) -> Result<(), String> {
+    fn swap_instrument(
+        &mut self, id: &InstrumentId, new_debtor: &AgentId, new_creditor: &AgentId,
+    ) -> Result<(), String> {
         if let Some(instrument) = self.instruments.get_mut(id) {
             let old_debtor = instrument.debtor.clone();
             let old_creditor = instrument.creditor.clone();
-            
+
             instrument.debtor = new_debtor.clone();
             instrument.creditor = new_creditor.clone();
-            
+
             if let Some(old_bs) = self.balance_sheets.get_mut(&old_debtor) {
                 old_bs.liabilities.remove(id);
             }
             if let Some(new_bs) = self.balance_sheets.get_mut(&new_debtor) {
                 new_bs.liabilities.insert(id.clone(), instrument.clone());
             }
-            
+
             if let Some(old_bs) = self.balance_sheets.get_mut(&old_creditor) {
                 old_bs.assets.remove(id);
             }
             if let Some(new_bs) = self.balance_sheets.get_mut(&new_creditor) {
                 new_bs.assets.insert(id.clone(), instrument.clone());
             }
-            
+
             Ok(())
         } else {
             Err("Instrument not found".to_string())
         }
     }
-
 }
 
 impl Default for FinancialSystem {
     fn default() -> Self {
         let central_bank = CentralBank::new(430.0, 0.1);
         let cb_id = central_bank.id.clone();
-        
+
         let mut balance_sheets = HashMap::new();
         balance_sheets.insert(cb_id.clone(), BalanceSheet::new(cb_id.clone()));
-        
+
         Self {
             exchange: Exchange::new(),
             instruments: HashMap::new(),
             balance_sheets,
             central_bank,
             commercial_banks: HashMap::new(),
+            goods: GoodsRegistry::new(),
         }
     }
 }
