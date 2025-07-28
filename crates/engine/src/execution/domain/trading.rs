@@ -17,7 +17,7 @@ impl ExecutionDomain for TradingDomain {
     }
 
     fn can_handle(&self, action: &SimAction) -> bool {
-        true
+        matches!(action, SimAction::PostBid { .. } | SimAction::PostAsk { .. })
     }
     fn validate(&self, action: &SimAction, state: &SimState) -> bool {
         // Logic to validate the action in the context of trading

@@ -55,7 +55,7 @@ impl<'a> AgentFactory<'a> {
             .balance_sheets
             .insert(bank.id.clone(), BalanceSheet::new(bank.id.clone()));
 
-        let initial_reserves = 10_000.0;
+        let initial_reserves = 1_000.0;
         let reserves = reserves!(
             bank.id.clone(),
             self.ss.financial_system.central_bank.id.clone(),
@@ -89,9 +89,9 @@ impl<'a> AgentFactory<'a> {
         self.ss
             .financial_system
             .exchange
-            .goods_market_mut(&GoodId::generic())
+            .financial_market_mut(&FinancialMarketId::SecuredOvernightFinancing)
             .unwrap()
-            .post_ask(firm_id.clone(), GoodId::generic(), 100.0, 25.0);
+            .post_ask(firm_id.clone(), 2000.0, 300.0);
 
         let mut f = Firm::new(firm_id, bank_id, firm_name);
         f.employees = 5;
@@ -100,5 +100,42 @@ impl<'a> AgentFactory<'a> {
 
         self.ss.firms.push(f.clone());
         f
+    }
+}
+
+#[cfg(test)]
+mod test_init {
+    use crate::initialize_economy;
+    use super::*;
+    use crate::{TransactionExecutor, SimConfig};
+
+    #[test]
+    fn test_bank(){
+        let ss = initialize_economy(&SimConfig::default(), &mut StdRng::from_os_rng());
+        ss.financial_system.commercial_banks
+            .values()
+            .for_each(|b| {
+                assert!(b.get_reserves(&ss.financial_system) == 1000.0, "Initial reserves should be 1000.0");
+            });
+    }
+
+    #[test]
+    fn test_deposit_over_reserves(){
+        let mut ss = initialize_economy(&SimConfig::default(), &mut StdRng::from_os_rng());
+        let bank_id = ss.financial_system.commercial_banks.values().next().unwrap().id.clone();
+        let consumer_id = ss.consumers.first().unwrap().id.clone();
+
+        let cash = cash!(consumer_id.clone(), 30000.0, ss.financial_system.central_bank.id.clone(), 0);
+        ss.financial_system.create_instrument(cash).unwrap();
+        assert!(ss.financial_system.get_cash_assets(&consumer_id) == 30000.0, "Consumer should have 2000 cash");
+
+        let action = SimAction::Deposit {
+            agent_id: consumer_id.clone(),
+            bank: bank_id.clone(),
+            amount: 30000.0,
+        };
+        let er = TransactionExecutor::execute_action(&action, &mut ss);
+        assert!(er.success, "Deposit should succeed even if it exceeds initial reserves");
+        println!("Deposit executed successfully, Effects: {:?}", er.effects.iter().map(|e| e.name().to_string()).collect::<Vec<_>>());
     }
 }

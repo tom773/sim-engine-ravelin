@@ -50,6 +50,19 @@ pub enum SimAction {
         amount_change: f64,
     },
     InjectLiquidity,
+    PostBid {
+        agent_id: AgentId,
+        market_id: FinancialMarketId, // Use AssetId to identify the market
+        quantity: f64,
+        price: f64, // Price here is the interest rate
+    },
+    PostAsk {
+        agent_id: AgentId,
+        market_id: FinancialMarketId,
+        quantity: f64,
+        price: f64,
+    },
+    
 }
 
 impl SimAction {
@@ -65,6 +78,8 @@ impl SimAction {
             SimAction::Produce { .. } => "Produce Goods".to_string(),
             SimAction::Consume { .. } => "Consume Goods".to_string(),
             SimAction::InjectLiquidity => "Inject Liquidity".to_string(),
+            SimAction::PostBid { .. } => "Post Bid".to_string(),
+            SimAction::PostAsk { .. } => "Post Ask".to_string(),
         }
     }
 }

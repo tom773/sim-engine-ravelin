@@ -16,31 +16,64 @@ impl GoodId {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Trade {
-    pub buyer: AgentId,
-    pub seller: AgentId,
-    pub asset: AssetId,
-    pub quantity: f64,
-    pub price: f64,
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum FinancialMarketId {
+    SecuredOvernightFinancing, // Represents the market for interbank lending of reserves.
+}
+
+
+pub trait RatesMarket {
+    fn price_to_daily_rate(&self, price: f64) -> f64;
+    
+    fn daily_rate_to_annual_bps(&self, daily_rate: f64) -> f64;
+
+    fn annual_bps_to_daily_rate(&self, annual_bps: f64) -> f64;
+}
+
+impl RatesMarket for FinancialMarketId {
+    fn price_to_daily_rate(&self, price: f64) -> f64 {
+        if price <= 0.0 { return f64::INFINITY; }
+        (1.0 / price) - 1.0
+    }
+    
+    fn daily_rate_to_annual_bps(&self, daily_rate: f64) -> f64 {
+        daily_rate * 360.0 * 10000.0
+    }
+
+    fn annual_bps_to_daily_rate(&self, annual_bps: f64) -> f64 {
+        annual_bps / 10000.0 / 360.0
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum AssetId {
-    Good(GoodId),
-    Instrument(InstrumentId),
+pub enum MarketId {
+    Goods(GoodId),
+    Financial(FinancialMarketId),
 }
 
-pub trait Market: Send + Sync {
-    type AssetId;
-    fn quote(&self, asset: &Self::AssetId) -> Option<f64>;
-    fn post_ask(&mut self, seller: AgentId, asset: Self::AssetId, qty: f64, price: f64);
-    fn post_bid(&mut self, buyer: AgentId, asset: Self::AssetId, qty: f64, price: f64);
-    fn match_orders(&mut self) -> Vec<Trade>;
-    fn best_bid(&self, asset: &Self::AssetId) -> Option<&Bid>;
-    fn best_ask(&self, asset: &Self::AssetId) -> Option<&Ask>;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Trade {
+    pub market_id: MarketId,
+    pub buyer: AgentId,
+    pub seller: AgentId,
+    pub quantity: f64,
+    pub price: f64, // For goods: price per unit. For loans: interest rate.
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Bid {
+    pub agent_id: AgentId,
+    pub price: f64,
+    pub quantity: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Ask {
+    pub agent_id: AgentId,
+    pub price: f64,
+    pub quantity: f64,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OrderBook {
@@ -62,24 +95,19 @@ impl OrderBook {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Bid {
-    pub agent_id: AgentId,
-    pub price: f64,
-    pub quantity: f64,
-}
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Ask {
-    pub agent_id: AgentId,
-    pub price: f64,
-    pub quantity: f64,
+pub trait Market: Send + Sync {
+    fn quote(&self) -> Option<f64>;
+    fn post_ask(&mut self, seller: AgentId, qty: f64, price: f64);
+    fn post_bid(&mut self, buyer: AgentId, qty: f64, price: f64);
+    fn match_orders(&mut self) -> Vec<Trade>;
+    fn best_bid(&self) -> Option<&Bid>;
+    fn best_ask(&self) -> Option<&Ask>;
 }
-
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GoodsMarket {
-    good_id: GoodId,
+    pub good_id: GoodId,
     order_book: OrderBook,
 }
 
@@ -93,98 +121,78 @@ impl GoodsMarket {
 }
 
 impl Market for GoodsMarket {
-    type AssetId = GoodId;
-    
-    fn quote(&self, asset: &Self::AssetId) -> Option<f64> {
-        if asset == &self.good_id {
-            self.order_book.asks.first().map(|ask| ask.price)
-        } else {
-            None
-        }
-    }
-    fn best_bid(&self, asset: &Self::AssetId) -> Option<&Bid> { if asset == &self.good_id { self.order_book.bids.first() } else { None } }
-    fn best_ask(&self, asset: &Self::AssetId) -> Option<&Ask> { if asset == &self.good_id { self.order_book.asks.first() } else { None } }
-    
-    fn post_ask(&mut self, seller: AgentId, asset: Self::AssetId, qty: f64, price: f64) {
-        if asset == self.good_id {
-            self.order_book.asks.push(Ask {
-                agent_id: seller,
-                price,
-                quantity: qty,
-            });
-        }
+    fn quote(&self) -> Option<f64> {
+        self.order_book.asks.first().map(|ask| ask.price)
     }
     
-    fn post_bid(&mut self, buyer: AgentId, asset: Self::AssetId, qty: f64, price: f64) {
-        if asset == self.good_id {
-            self.order_book.bids.push(Bid {
-                agent_id: buyer,
-                price,
-                quantity: qty,
-            });
-        }
+    fn best_bid(&self) -> Option<&Bid> {
+        self.order_book.bids.first()
     }
+
+    fn best_ask(&self) -> Option<&Ask> {
+        self.order_book.asks.first()
+    }
+    
+    fn post_ask(&mut self, seller: AgentId, qty: f64, price: f64) {
+        self.order_book.asks.push(Ask { agent_id: seller, price, quantity: qty });
+    }
+    
+    fn post_bid(&mut self, buyer: AgentId, qty: f64, price: f64) {
+        self.order_book.bids.push(Bid { agent_id: buyer, price, quantity: qty });
+    }
+
     fn match_orders(&mut self) -> Vec<Trade> {
-        let mut trades = Vec::new();
+        let trades = Vec::new();
         trades
     }
 }
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FinancialMarket {
-    instrument_id: InstrumentId,
+    pub market_id: FinancialMarketId,
     order_book: OrderBook,
 }
 
 impl FinancialMarket {
-    pub fn new(instrument_id: InstrumentId) -> Self {
+    pub fn new(market_id: FinancialMarketId) -> Self {
         Self {
-            instrument_id,
+            market_id,
             order_book: OrderBook::new(),
         }
     }
 }
 
 impl Market for FinancialMarket {
-    type AssetId = InstrumentId;
-    
-    fn quote(&self, asset: &Self::AssetId) -> Option<f64> {
-        if asset == &self.instrument_id {
-            self.order_book.asks.first().map(|ask| ask.price)
-        } else {
-            None
-        }
+    fn quote(&self) -> Option<f64> {
+        self.order_book.asks.first().map(|ask| ask.price)
     }
-    fn best_bid(&self, asset: &Self::AssetId) -> Option<&Bid> { if asset == &self.instrument_id { self.order_book.bids.first() } else { None } }
-    fn best_ask(&self, asset: &Self::AssetId) -> Option<&Ask> { if asset == &self.instrument_id { self.order_book.asks.first() } else { None } }
 
-    fn post_ask(&mut self, seller: AgentId, asset: Self::AssetId, qty: f64, price: f64) {
-        if asset == self.instrument_id {
-            self.order_book.asks.push(Ask {
-                agent_id: seller,
-                price,
-                quantity: qty,
-            });
-        }
+    fn best_bid(&self) -> Option<&Bid> {
+        self.order_book.bids.first()
     }
-    fn post_bid(&mut self, buyer: AgentId, asset: Self::AssetId, qty: f64, price: f64) {
-        if asset == self.instrument_id {
-            self.order_book.bids.push(Bid {
-                agent_id: buyer,
-                price,
-                quantity: qty,
-            });
-        }
+    
+    fn best_ask(&self) -> Option<&Ask> {
+        self.order_book.asks.first()
     }
-    // TODO
+
+    fn post_ask(&mut self, seller: AgentId, qty: f64, price: f64) {
+        self.order_book.asks.push(Ask { agent_id: seller, price, quantity: qty });
+    }
+
+    fn post_bid(&mut self, buyer: AgentId, qty: f64, price: f64) {
+        self.order_book.bids.push(Bid { agent_id: buyer, price, quantity: qty });
+    }
     fn match_orders(&mut self) -> Vec<Trade> {
         let mut trades = Vec::new();
         trades
     }
 }
+
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Exchange {
     pub goods_markets: HashMap<GoodId, GoodsMarket>,
-    pub financial_markets: HashMap<InstrumentId, FinancialMarket>,
+    pub financial_markets: HashMap<FinancialMarketId, FinancialMarket>,
 }
 
 impl Exchange {
@@ -195,6 +203,9 @@ impl Exchange {
         };
         
         exchange.register_goods_market(GoodId::generic());
+        
+        exchange.register_financial_market(FinancialMarketId::SecuredOvernightFinancing);
+        
         exchange
     }
     
@@ -203,9 +214,9 @@ impl Exchange {
             .or_insert_with(|| GoodsMarket::new(good_id));
     }
     
-    pub fn register_financial_market(&mut self, instrument_id: InstrumentId) {
-        self.financial_markets.entry(instrument_id.clone())
-            .or_insert_with(|| FinancialMarket::new(instrument_id));
+    pub fn register_financial_market(&mut self, market_id: FinancialMarketId) {
+        self.financial_markets.entry(market_id.clone())
+            .or_insert_with(|| FinancialMarket::new(market_id));
     }
     
     pub fn goods_market(&self, good_id: &GoodId) -> Option<&GoodsMarket> {
@@ -216,22 +227,11 @@ impl Exchange {
         self.goods_markets.get_mut(good_id)
     }
     
-    pub fn financial_market(&self, instrument_id: &InstrumentId) -> Option<&FinancialMarket> {
-        self.financial_markets.get(instrument_id)
+    pub fn financial_market(&self, market_id: &FinancialMarketId) -> Option<&FinancialMarket> {
+        self.financial_markets.get(market_id)
     }
     
-    pub fn financial_market_mut(&mut self, instrument_id: &InstrumentId) -> Option<&mut FinancialMarket> {
-        self.financial_markets.get_mut(instrument_id)
-    }
-
-    pub fn quote(&self, asset: &AssetId) -> Option<f64> {
-        match asset {
-            AssetId::Good(good_id) => {
-                self.goods_market(good_id).and_then(|market| market.quote(good_id))
-            },
-            AssetId::Instrument(instrument_id) => {
-                self.financial_market(instrument_id).and_then(|market| market.quote(instrument_id))
-            },
-        }
+    pub fn financial_market_mut(&mut self, market_id: &FinancialMarketId) -> Option<&mut FinancialMarket> {
+        self.financial_markets.get_mut(market_id)
     }
 }

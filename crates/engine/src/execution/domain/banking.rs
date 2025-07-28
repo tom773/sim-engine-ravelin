@@ -59,7 +59,7 @@ impl BankingDomain {
                 let reserve_effects = self
                     .reserve_calculator
                     .calculate_reserve_effects(bank, amount, state);
-                effects.extend(reserve_effects);
+                println!("Reserve effects: {:?}", reserve_effects.clone());
             }
         }
 
@@ -262,6 +262,8 @@ impl ReserveCalculator {
         state: &SimState,
     ) -> Vec<StateEffect> {
         let mut effects = vec![];
+        println!("\n\n\nCalculating reserve effects, deposit amount: {}", deposit_amount);
+
 
         let reserve_requirement = state.financial_system.central_bank.reserve_requirement;
         let current_reserves = state
@@ -271,18 +273,19 @@ impl ReserveCalculator {
         let total_deposits_after =
             state.financial_system.get_total_liabilities(bank) + deposit_amount;
         let total_required_reserves = total_deposits_after * reserve_requirement;
-
+        println!(
+            "Current reserves: {}, Total deposits after: {}, Total required reserves: {}\n\n\n",
+            current_reserves, total_deposits_after, total_required_reserves
+        );
         if current_reserves < total_required_reserves {
             let reserve_shortfall = total_required_reserves - current_reserves;
 
-            let reserves = reserves!(
-                bank.clone(),
-                state.financial_system.central_bank.id.clone(),
-                reserve_shortfall,
-                state.financial_system.central_bank.policy_rate - 50.0,
-                state.ticknum
-            );
-            effects.push(StateEffect::CreateInstrument(reserves));
+            effects.push(StateEffect::PostBid {
+                agent: bank.clone(),
+                instrument: InstrumentType::CentralBankReserves,
+                price: state.financial_system.central_bank.policy_rate,
+                quantity: reserve_shortfall as u32,
+            });
         }
 
         effects

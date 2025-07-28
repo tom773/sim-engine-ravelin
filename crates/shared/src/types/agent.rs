@@ -41,6 +41,12 @@ pub enum FirmDecision {
     },
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum BankDecision {
+    BorrowOvernight { amount_dollars: f64, max_annual_rate_bps: f64 },
+    LendOvernight { amount_dollars: f64, min_annual_rate_bps: f64 },
+}
+
 #[typetag::serde(tag = "type")]
 pub trait DecisionModel: DynClone + Send + Sync {
     fn decide(&self, consumer: &Consumer, fs: &FinancialSystem, rng: &mut dyn RngCore) -> Vec<ConsumerDecision>;
@@ -75,7 +81,7 @@ impl DecisionModel for BasicDecisionModel {
         let total_available = consumer.income + cash_holdings;
 
         let seller_id = fs.exchange.goods_market(&GoodId::generic())
-            .and_then(|market| market.best_ask(&GoodId::generic()))
+            .and_then(|market| market.best_ask())
             .map(|ask| ask.agent_id.clone());
 
         let spend_amount = total_available * self.propensity_to_consume;
@@ -131,7 +137,7 @@ impl DecisionModel for MLDecisionModel {
             let mut decisions = Vec::new();
             
             let seller_id = fs.exchange.goods_market(&GoodId::generic())
-                .and_then(|market| market.best_ask(&GoodId::generic()))
+                .and_then(|market| market.best_ask())
                 .map(|ask| ask.agent_id.clone());
             
             if spend_amount > 0.0 && seller_id.is_some() {
@@ -228,7 +234,7 @@ impl DecisionModel for ParametricMPC {
         let mut decisions = Vec::new();
         
         let seller_id = fs.exchange.goods_market(&GoodId::generic())
-            .and_then(|market| market.best_ask(&GoodId::generic()))
+            .and_then(|market| market.best_ask())
             .map(|ask| ask.agent_id.clone());
         
         if spend_amount > 0.0 && seller_id.is_some() {

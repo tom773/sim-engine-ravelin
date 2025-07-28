@@ -41,7 +41,7 @@ impl Agent for Firm {
         
         let market = fs.exchange.goods_market(&GoodId::generic());
         let _current_price = market
-            .and_then(|m| m.quote(&GoodId::generic()))
+            .and_then(|m| m.quote())
             .unwrap_or(25.0);
         
         if self.employees < 10 {

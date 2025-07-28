@@ -26,6 +26,7 @@ pub enum StateEffect {
     UpdateFirmRevenue { id: AgentId, revenue: f64 },
     Hire { firm: AgentId, count: u32 },
     Produce { firm: AgentId, good_id: GoodId, amount: f64 },
+    PostBid { agent: AgentId, instrument: InstrumentType, price: f64, quantity: u32 },
 }
 
 impl StateEffect {
@@ -43,6 +44,7 @@ impl StateEffect {
             StateEffect::UpdateFirmRevenue { .. } => "UpdateFirmRevenue".to_string(),
             StateEffect::Hire { .. } => "Hire".to_string(),
             StateEffect::Produce { .. } => "Produce".to_string(),
+            StateEffect::PostBid { .. } => "PostBid".to_string(),
         }
     }
 }
