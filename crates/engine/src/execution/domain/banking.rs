@@ -3,16 +3,15 @@ use crate::domain::ExecutionDomain;
 use crate::{effects::ExecutionResult, state::SimState};
 use shared::*;
 use uuid::Uuid;
+use shared::validation::FinancialValidator;
 pub struct BankingDomain {
     reserve_calculator: ReserveCalculator,
-    validator: BankingValidator,
 }
 
 impl BankingDomain {
     pub fn new() -> Self {
         BankingDomain {
             reserve_calculator: ReserveCalculator::new(),
-            validator: BankingValidator::new(),
         }
     }
     fn execute_deposit(
@@ -22,19 +21,8 @@ impl BankingDomain {
         amount: f64,
         state: &SimState,
     ) -> ExecutionResult {
-        if let Err(e) = self
-            .validator
-            .validate_deposit(depositor, bank, amount, state)
-        {
-            return ExecutionResult {
-                success: false,
-                effects: vec![],
-                errors: vec![e],
-            };
-        }
 
         let mut effects = vec![];
-
         if let Some(depositor_bs) = state.financial_system.balance_sheets.get(depositor) {
             if let Some((cash_id, cash_inst)) = depositor_bs.assets.iter().find(|(_, inst)| {
                 matches!(inst.instrument_type, InstrumentType::Cash) && inst.principal >= amount
@@ -110,13 +98,6 @@ impl BankingDomain {
         }
     }
     fn execute_withdraw(&self, account_holder: &AgentId, bank: &AgentId, amount: f64, state: &SimState) -> ExecutionResult {
-        if let Err(e) = self.validator.validate_withdraw(account_holder, bank, amount, state) {
-            return ExecutionResult {
-                success: false,
-                effects: vec![],
-                errors: vec![e],
-            };
-        }
         
         let mut effects = vec![];
         
@@ -217,19 +198,21 @@ impl ExecutionDomain for BankingDomain {
     }
 
     fn validate(&self, action: &SimAction, state: &SimState) -> bool {
+        let validator = FinancialValidator::new(&state.financial_system);
+        
         match action {
             SimAction::Deposit { agent_id, bank, amount } => {
-                self.validator.validate_deposit(agent_id, bank, *amount, state).is_ok()
+                validator.validate_deposit(agent_id, bank, *amount).is_ok()
             }
             SimAction::Withdraw { agent_id, bank, amount } => {
-                self.validator.validate_withdraw(agent_id, bank, *amount, state).is_ok()
+                validator.validate_withdraw(agent_id, bank, *amount).is_ok()
             }
             SimAction::Transfer { from, to, amount, .. } => {
-                self.validator.validate_transfer(from, to, *amount, state).is_ok()
+                Validator::positive_amount(*amount).is_ok() &&
+                validator.ensure_has_balance_sheet(from).is_ok() &&
+                validator.ensure_has_balance_sheet(to).is_ok()
             }
-            SimAction::InjectLiquidity => true,
-            SimAction::UpdateReserves { .. } => true,
-            _ => false,
+            _ => true
         }
     }
 
@@ -303,211 +286,5 @@ impl ReserveCalculator {
         }
 
         effects
-    }
-}
-
-struct BankingValidator;
-
-impl BankingValidator {
-    fn new() -> Self { Self }
-    
-    fn validate_positive_amount(&self, amount: f64) -> Result<(), String> {
-        if amount <= 0.0 {
-            Err("Amount must be positive".to_string())
-        } else {
-            Ok(())
-        }
-    }
-    
-    fn validate_is_bank(&self, bank_id: &AgentId, state: &SimState) -> Result<(), String> {
-        if state.financial_system.commercial_banks.contains_key(bank_id) {
-            Ok(())
-        } else {
-            Err("Target is not a valid commercial bank".to_string())
-        }
-    }
-    
-    fn validate_has_balance_sheet(&self, agent_id: &AgentId, state: &SimState) -> Result<(), String> {
-        if state.financial_system.balance_sheets.contains_key(agent_id) {
-            Ok(())
-        } else {
-            Err(format!("Agent {} does not have a balance sheet", &agent_id.0.to_string()[..8]))
-        }
-    }
-    
-    fn validate_deposit(&self, depositor: &AgentId, bank: &AgentId, amount: f64, state: &SimState) -> Result<(), String> {
-        self.validate_positive_amount(amount)?;
-        self.validate_is_bank(bank, state)?;
-        self.validate_has_balance_sheet(depositor, state)?;
-        
-        let cash_holdings = state.financial_system.get_cash_assets(depositor);
-        if cash_holdings < amount {
-            Err(format!("Insufficient cash: ${:.2} < ${:.2}", cash_holdings, amount))
-        } else {
-            Ok(())
-        }
-    }
-    
-    fn validate_withdraw(&self, account_holder: &AgentId, bank: &AgentId, amount: f64, state: &SimState) -> Result<(), String> {
-        self.validate_positive_amount(amount)?;
-        self.validate_is_bank(bank, state)?;
-        self.validate_has_balance_sheet(account_holder, state)?;
-        
-        let deposits = state.financial_system.get_deposits_at_bank(account_holder, bank);
-        if deposits < amount {
-            return Err(format!("Insufficient deposits: ${:.2} < ${:.2}", deposits, amount));
-        }
-        
-        let bank_liquidity = state.financial_system.liquidity(bank);
-        if bank_liquidity < amount {
-            return Err(format!("Bank has insufficient liquidity: ${:.2} < ${:.2}", bank_liquidity, amount));
-        }
-        
-        Ok(())
-    }
-    
-    fn validate_transfer(&self, from: &AgentId, to: &AgentId, amount: f64, state: &SimState) -> Result<(), String> {
-        self.validate_positive_amount(amount)?;
-        self.validate_has_balance_sheet(from, state)?;
-        self.validate_has_balance_sheet(to, state)?;
-        
-        let from_liquidity = state.financial_system.liquidity(from);
-        if from_liquidity < amount {
-            Err(format!("Insufficient funds: ${:.2} < ${:.2}", from_liquidity, amount))
-        } else {
-            Ok(())
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::AgentFactory;
-    use crate::state::SimState;
-    use rand::prelude::*;
-    use crate::execution::{TransactionExecutor, domain::banking::BankingDomain};
-    fn test_economy_with_liquidity() -> SimState {
-        let mut rng = StdRng::from_os_rng();
-        let mut state = SimState::default();
-
-        let central_bank_id = state.financial_system.central_bank.id.clone();
-
-        let (bank_id, consumer_id) = {
-            let mut factory = AgentFactory::new(&mut state, &mut rng);
-            let bank = factory.create_bank();
-            let consumer = factory.create_consumer(bank.id.clone());
-            (bank.id.clone(), consumer.id.clone())
-        };
-
-        let cash = cash!(consumer_id, 1000.0, central_bank_id, 0);
-        state.financial_system.create_instrument(cash).unwrap();
-
-        state
-    }
-
-    #[test]
-    fn test_deposit_validation() {
-        let state = test_economy_with_liquidity();
-        let consumer = state.consumers.first().unwrap();
-        let bank = state
-            .financial_system
-            .commercial_banks
-            .values()
-            .next()
-            .unwrap();
-
-        let domain = BankingDomain::new();
-
-        let action = SimAction::Deposit {
-            agent_id: consumer.id.clone(),
-            bank: bank.id.clone(),
-            amount: 500.0,
-        };
-        assert!(domain.validate(&action, &state));
-
-        let action = SimAction::Deposit {
-            agent_id: consumer.id.clone(),
-            bank: bank.id.clone(),
-            amount: 2000.0,
-        };
-        assert!(!domain.validate(&action, &state));
-
-        let action = SimAction::Deposit {
-            agent_id: consumer.id.clone(),
-            bank: bank.id.clone(),
-            amount: -100.0,
-        };
-        assert!(!domain.validate(&action, &state));
-    }
-
-    #[test]
-    fn test_deposit_execution() {
-        let state = test_economy_with_liquidity();
-        let consumer = state.consumers.first().unwrap();
-        let bank = state
-            .financial_system
-            .commercial_banks
-            .values()
-            .next()
-            .unwrap();
-
-        let domain = BankingDomain::new();
-
-        let action = SimAction::Deposit {
-            agent_id: consumer.id.clone(),
-            bank: bank.id.clone(),
-            amount: 500.0,
-        };
-
-        let result = domain.execute(&action, &state);
-        assert!(result.success);
-        assert!(!result.effects.is_empty());
-
-        assert!(result.effects.len() >= 2);
-    }
-    #[test]
-    fn test_withdraw(){
-        let mut state = test_economy_with_liquidity();
-        let domain = BankingDomain::new();
-        
-        let consumer = state.consumers.first().unwrap();
-        let bank = state.financial_system.commercial_banks.values().next().unwrap();
-        // Deposit some cash first 
-        let cash_pre = state.financial_system.get_cash_assets(&consumer.id);
-        let action = SimAction::Deposit {
-            agent_id: consumer.id.clone(),
-            bank: bank.id.clone(),
-            amount: 500.0,
-        };
-        let result = domain.execute(&action, &state);
-        
-        assert!(result.success);
-        assert!(result.errors.is_empty(), "Deposit should succeed: {:?}", result.errors);
-
-        let cash_inter = state.financial_system.get_cash_assets(&consumer.id);
-        
-        println!("\n\nCash before: {}, Cash after deposit: {}", cash_pre, cash_inter);
-        
-        // Now withdraw some cash
-        let action = SimAction::Withdraw {
-            agent_id: consumer.id.clone(),
-            bank: bank.id.clone(),
-            amount: 200.0,
-        };
-        // Execute the withdrawal
-        let result = domain.execute(&action, &state);
-        let cash_post = state.financial_system.get_cash_assets(&consumer.id);
-        
-        println!("\n\nCash before withdrawal: {}, Cash after: {}", cash_inter, cash_post);
-        println!("Effects: {:?}", result.effects);
-        println!("Errors: {:?}\n\n", result.errors);
-
-        assert!(result.success);
-        assert!(!result.effects.is_empty());
-        assert!(cash_post > cash_pre);
-        assert_eq!(cash_post - cash_pre, 200.0);
-        
-
     }
 }

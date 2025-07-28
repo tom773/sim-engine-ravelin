@@ -1,8 +1,7 @@
 use shared::*;
 use serde::{Serialize, Deserialize};
 use rand::prelude::*;
-use crate::AgentFactory;
-
+use crate::{AgentFactory, StateEffect};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SimState {
     pub ticknum: u32,
@@ -10,6 +9,7 @@ pub struct SimState {
     pub firms: Vec<Firm>,
     pub financial_system: FinancialSystem,
     pub config: SimConfig,
+    pub sim_history: SimHistory,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SimConfig {
@@ -21,10 +21,8 @@ pub struct SimConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SimHistory {
-    pub actions: Vec<SimAction>,
-    pub financial_system_snapshots: Vec<FinancialSystem>,
-    pub consumer_snapshots: Vec<Consumer>,
-    pub firm_snapshots: Vec<Firm>,
+    pub transactions: Vec<Transaction>,
+    pub state_effects: Vec<StateEffect>,
 }
 
 impl Default for SimConfig {
@@ -45,6 +43,7 @@ impl Default for SimState {
             firms: Vec::new(),
             financial_system: FinancialSystem::default(),
             config: SimConfig::default(),
+            sim_history: SimHistory::new(),
         }
     }
 }
@@ -95,58 +94,16 @@ pub fn initialize_economy(config: &SimConfig, rng: &mut StdRng) -> SimState {
 impl SimHistory {
     pub fn new() -> Self {
         Self {
-            actions: Vec::new(),
-            financial_system_snapshots: Vec::new(),
-            consumer_snapshots: Vec::new(),
-            firm_snapshots: Vec::new(),
+            transactions: Vec::new(),
+            state_effects: Vec::new(),
         }
     }
-    pub fn record_action(&mut self, action: SimAction) {
-        self.actions.push(action);
+    
+    pub fn record_transaction(&mut self, tx: Transaction) {
+        self.transactions.push(tx);
     }
-    pub fn record_snapshot(&mut self, fs: &FinancialSystem, consumers: &[Consumer], firms: &[Firm]) {
-        self.financial_system_snapshots.push(fs.clone());
-        self.consumer_snapshots.extend(consumers.to_vec());
-        self.firm_snapshots.extend(firms.to_vec());
-    }
-    pub fn get_last_n_snapshots(
-        &self,
-        n: usize,
-    ) -> (Vec<FinancialSystem>, Vec<Consumer>, Vec<Firm>) {
-        let fs_snapshots = self.financial_system_snapshots
-            .iter()
-            .rev()
-            .take(n)
-            .cloned()
-            .collect();
-        let consumer_snapshots = self.consumer_snapshots
-            .iter()
-            .rev()
-            .take(n)
-            .cloned()
-            .collect();
-        let firm_snapshots = self.firm_snapshots
-            .iter()
-            .rev()
-            .take(n)
-            .cloned()
-            .collect();
-        
-        (fs_snapshots, consumer_snapshots, firm_snapshots)
-    }
-    pub fn get_last_snapshot(&self) -> Option<(FinancialSystem, Vec<Consumer>, Vec<Firm>)> {
-        if self.financial_system_snapshots.is_empty() {
-            return None;
-        }
-        let fs = self.financial_system_snapshots.last().cloned()?;
-        let consumers = self.consumer_snapshots.clone();
-        let firms = self.firm_snapshots.clone();
-        Some((fs, consumers, firms))
-    }
-    pub fn clear(&mut self) {
-        self.actions.clear();
-        self.financial_system_snapshots.clear();
-        self.consumer_snapshots.clear();
-        self.firm_snapshots.clear();
-    }
+    
+    pub fn record_state_effect(&mut self, effect: StateEffect) {
+        self.state_effects.push(effect);
+    } 
 }

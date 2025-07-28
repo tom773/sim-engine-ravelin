@@ -23,6 +23,14 @@ impl Firm {
             productivity: 1.0, // Units per employee per period
         }
     }
+    pub fn hire (&mut self, count: u32) {
+        self.employees += count;
+        println!("[HIRE] Firm {} hired {} employees", &self.id.0.to_string()[..4], count);
+    }
+    pub fn produce(&self, good_id: &GoodId, amount: u32) {
+        println!("[PRODUCE] Firm {} producing {} of {}", 
+            &self.id.0.to_string()[..4], amount, &good_id.0);
+    }
 }
 
 impl Agent for Firm {
@@ -31,13 +39,11 @@ impl Agent for Firm {
     fn decide(&self, fs: &FinancialSystem, _rng: &mut StdRng) -> Vec<FirmDecision> {
         let mut decisions = Vec::new();
         
-        // Check current market conditions
         let market = fs.exchange.goods_market(&GoodId::generic());
         let _current_price = market
             .and_then(|m| m.quote(&GoodId::generic()))
             .unwrap_or(25.0);
         
-        // Simple decision logic: always try to produce and maintain some employees
         if self.employees < 10 {
             decisions.push(FirmDecision::Hire { quantity: 5 });
         }
@@ -50,7 +56,6 @@ impl Agent for Firm {
             });
         }
         
-        // Set price based on costs plus markup
         let unit_cost = if self.employees > 0 {
             (self.wage_rate * 40.0) / self.productivity // Weekly wage / productivity
         } else {

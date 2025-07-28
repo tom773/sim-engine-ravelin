@@ -41,7 +41,6 @@ impl DomainRegistry {
                         errors: vec![format!("Validation failed for action: {}", action.name())],
                     };
                 }
-                return domain.execute(action, state);
             }
         }
 

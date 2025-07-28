@@ -13,8 +13,24 @@ pub struct FinancialSystem {
     pub exchange: Exchange,
 }
 
-impl FinancialSystem {
-    pub fn create_instrument(&mut self, instrument: FinancialInstrument) -> Result<(), String> {
+pub trait InstrumentManager {
+    fn update_instrument(&mut self, id: &InstrumentId, new_principal: f64) -> Result<(), String>;
+    fn create_instrument(&mut self, instrument: FinancialInstrument) -> Result<(), String>;
+    fn create_or_consolidate_instrument(&mut self, instrument: FinancialInstrument) -> Result<InstrumentId, String>;
+    fn find_consolidatable_instrument(&self, new_inst: &FinancialInstrument) -> Option<InstrumentId>;
+    fn remove_instrument(&mut self, id: &InstrumentId) -> Result<(), String>;
+    fn transfer_instrument(&mut self, id: &InstrumentId, new_creditor: AgentId) -> Result<(), String>;
+    fn swap_instrument(&mut self, id: &InstrumentId, new_debtor: &AgentId, new_creditor: &AgentId) -> Result<(), String>;
+}
+
+pub trait FinancialStatistics {
+    fn m0(&self) -> f64;
+    fn m1(&self) -> f64;
+    fn m2(&self) -> f64;
+}
+
+impl InstrumentManager for FinancialSystem {
+    fn create_instrument(&mut self, instrument: FinancialInstrument) -> Result<(), String> {
         let id = instrument.id.clone();
 
         if let Some(creditor_bs) = self.balance_sheets.get_mut(&instrument.creditor) {
@@ -34,7 +50,7 @@ impl FinancialSystem {
         Ok(())
     }
 
-    pub fn transfer_instrument(
+    fn transfer_instrument(
         &mut self, 
         instrument_id: &InstrumentId, 
         new_creditor: AgentId
@@ -55,7 +71,7 @@ impl FinancialSystem {
         
         Ok(())
     }
-    pub fn find_consolidatable_instrument(&self, new_inst: &FinancialInstrument) -> Option<InstrumentId> {
+    fn find_consolidatable_instrument(&self, new_inst: &FinancialInstrument) -> Option<InstrumentId> {
         if let Some(key) = new_inst.consolidation_key() {
             if let Some(creditor_bs) = self.balance_sheets.get(&new_inst.creditor) {
                 for (id, existing) in &creditor_bs.assets {
@@ -67,7 +83,7 @@ impl FinancialSystem {
         }
         None
     }
-    pub fn create_or_consolidate_instrument(&mut self, instrument: FinancialInstrument) -> Result<InstrumentId, String> {
+    fn create_or_consolidate_instrument(&mut self, instrument: FinancialInstrument) -> Result<InstrumentId, String> {
         if let Some(existing_id) = self.find_consolidatable_instrument(&instrument) {
             if let Some(existing) = self.instruments.get_mut(&existing_id) {
                 existing.principal += instrument.principal;
@@ -94,123 +110,66 @@ impl FinancialSystem {
             Ok(id)
         }
     }
-
-    pub fn m0(&self) -> f64 {
-        self.balance_sheets
-            .get(&self.central_bank.id)
-            .map(|cb_bs| cb_bs.liabilities.values()
-                .map(|inst| inst.principal)
-                .sum()
-            )
-            .unwrap_or(0.0)
-    }
-    
-    pub fn m1(&self) -> f64 {
-        let mut m1 = 0.0;
-        
-        for (agent_id, bs) in &self.balance_sheets {
-            if *agent_id == self.central_bank.id || self.commercial_banks.contains_key(agent_id) {
-                continue;
-            }
-            
-            m1 += bs.assets.values()
-                .filter(|inst| matches!(inst.instrument_type, InstrumentType::Cash))
-                .map(|inst| inst.principal)
-                .sum::<f64>();
-                
-            m1 += bs.assets.values()
-                .filter(|inst| matches!(inst.instrument_type, InstrumentType::DemandDeposit))
-                .map(|inst| inst.principal)
-                .sum::<f64>();
-        }
-        
-        m1
-    }
-    
-    pub fn m2(&self) -> f64 {
-        let mut m2 = self.m1();
-        
-        for (agent_id, bs) in &self.balance_sheets {
-            if *agent_id == self.central_bank.id || self.commercial_banks.contains_key(agent_id) {
-                continue;
-            }
-            
-            m2 += bs.assets.values()
-                .filter(|inst| matches!(inst.instrument_type, InstrumentType::SavingsDeposit { .. }))
-                .map(|inst| inst.principal)
-                .sum::<f64>();
-        }
-        
-        m2
-    }
-    pub fn monetary_aggregates_breakdown(&self) -> MonetaryAggregates {
-        let mut public_cash = 0.0;
-        let mut bank_cash = 0.0;
-        let mut bank_reserves = 0.0;
-        let mut demand_deposits = 0.0;
-        let mut savings_deposits = 0.0;
-        
-        for (agent_id, bs) in &self.balance_sheets {
-            let is_bank = self.commercial_banks.contains_key(agent_id);
-            let is_central_bank = *agent_id == self.central_bank.id;
-            
-            if is_central_bank {
-                continue;
-            }
-            
-            for inst in bs.assets.values() {
-                match &inst.instrument_type {
-                    InstrumentType::Cash => {
-                        if is_bank {
-                            bank_cash += inst.principal;
-                        } else {
-                            public_cash += inst.principal;
-                        }
-                    }
-                    InstrumentType::CentralBankReserves => {
-                        if is_bank {
-                            bank_reserves += inst.principal;
-                        }
-                    }
-                    InstrumentType::DemandDeposit => {
-                        if !is_bank {
-                            demand_deposits += inst.principal;
-                        }
-                    }
-                    InstrumentType::SavingsDeposit { .. } => {
-                        if !is_bank {
-                            savings_deposits += inst.principal;
-                        }
-                    }
-                    _ => {}
+    fn update_instrument(&mut self, id: &InstrumentId, new_principal: f64) -> Result<(), String> {
+        if let Some(instrument) = self.instruments.get_mut(id) {
+            instrument.principal = new_principal;
+            if let Some(creditor_bs) = self.balance_sheets.get_mut(&instrument.creditor) {
+                if let Some(asset) = creditor_bs.assets.get_mut(id) {
+                    asset.principal = new_principal;
                 }
             }
-        }
-        
-        MonetaryAggregates {
-            public_cash,
-            bank_cash,
-            bank_reserves,
-            demand_deposits,
-            savings_deposits,
-            m0: bank_cash + bank_reserves + public_cash,
-            m1: public_cash + demand_deposits,
-            m2: public_cash + demand_deposits + savings_deposits,
+            if let Some(debtor_bs) = self.balance_sheets.get_mut(&instrument.debtor) {
+                if let Some(liability) = debtor_bs.liabilities.get_mut(id) {
+                    liability.principal = new_principal;
+                }
+            }
+            Ok(())
+        } else {
+            Err("Instrument not found".to_string())
         }
     }
-}
+    fn remove_instrument(&mut self, id: &InstrumentId) -> Result<(), String> {
+        if let Some(instrument) = self.instruments.remove(id) {
+            if let Some(creditor_bs) = self.balance_sheets.get_mut(&instrument.creditor) {
+                creditor_bs.assets.remove(id);
+            }
+            if let Some(debtor_bs) = self.balance_sheets.get_mut(&instrument.debtor) {
+                debtor_bs.liabilities.remove(id);
+            }
+            Ok(())
+        } else {
+            Err("Instrument not found".to_string())
+        }
+    }
+    fn swap_instrument(&mut self, id: &InstrumentId, new_debtor: &AgentId, new_creditor: &AgentId) -> Result<(), String> {
+        if let Some(instrument) = self.instruments.get_mut(id) {
+            let old_debtor = instrument.debtor.clone();
+            let old_creditor = instrument.creditor.clone();
+            
+            instrument.debtor = new_debtor.clone();
+            instrument.creditor = new_creditor.clone();
+            
+            if let Some(old_bs) = self.balance_sheets.get_mut(&old_debtor) {
+                old_bs.liabilities.remove(id);
+            }
+            if let Some(new_bs) = self.balance_sheets.get_mut(&new_debtor) {
+                new_bs.liabilities.insert(id.clone(), instrument.clone());
+            }
+            
+            if let Some(old_bs) = self.balance_sheets.get_mut(&old_creditor) {
+                old_bs.assets.remove(id);
+            }
+            if let Some(new_bs) = self.balance_sheets.get_mut(&new_creditor) {
+                new_bs.assets.insert(id.clone(), instrument.clone());
+            }
+            
+            Ok(())
+        } else {
+            Err("Instrument not found".to_string())
+        }
+    }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MonetaryAggregates {
-    pub public_cash: f64,
-    pub bank_cash: f64,
-    pub bank_reserves: f64,
-    pub demand_deposits: f64,
-    pub savings_deposits: f64,
-    pub m0: f64,
-    pub m1: f64,
-    pub m2: f64,
-} 
+}
 
 impl Default for FinancialSystem {
     fn default() -> Self {
