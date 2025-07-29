@@ -15,86 +15,6 @@ impl BalanceSheet {
     pub fn new(owner: AgentId) -> Self {
         Self { agent_id: owner, assets: HashMap::new(), liabilities: HashMap::new(), real_assets: HashMap::new() }
     }
-    
-    fn update_inventory_market_value(&mut self) {
-        let mut inventory_value = 0.0;
-        let mut inventory_asset_id: Option<AssetId> = None;
-
-        for asset in self.real_assets.values() {
-            if let RealAssetType::Inventory { goods } = &asset.asset_type {
-                inventory_asset_id = Some(asset.id);
-                inventory_value = goods.values().map(|item| item.quantity * item.unit_cost).sum();
-                break;
-            }
-        }
-
-        if let Some(id) = inventory_asset_id {
-            if let Some(asset) = self.real_assets.get_mut(&id) {
-                asset.market_value = inventory_value;
-            }
-        }
-    }
-
-    fn get_or_create_inventory_mut(&mut self) -> &mut HashMap<GoodId, InventoryItem> {
-        let inventory_asset_id = self
-            .real_assets
-            .values()
-            .find(|asset| matches!(asset.asset_type, RealAssetType::Inventory { .. }))
-            .map(|asset| asset.id);
-
-        let id_to_use = inventory_asset_id.unwrap_or_else(|| {
-            let new_inventory_asset = RealAsset {
-                id: AssetId(Uuid::new_v4()),
-                asset_type: RealAssetType::Inventory { goods: HashMap::new() },
-                owner: self.agent_id,
-                market_value: 0.0,
-                acquired_date: 0,
-            };
-            let new_id = new_inventory_asset.id;
-            self.real_assets.insert(new_id, new_inventory_asset);
-            new_id
-        });
-
-        if let RealAssetType::Inventory { goods } = &mut self.real_assets.get_mut(&id_to_use).unwrap().asset_type
-        {
-            goods
-        } else {
-            unreachable!();
-        }
-    }
-
-    pub fn add_to_inventory(&mut self, good_id: &GoodId, quantity: f64, unit_cost: f64) {
-        let inventory = self.get_or_create_inventory_mut();
-        let item = inventory.entry(*good_id).or_insert(InventoryItem { quantity: 0.0, unit_cost: 0.0 });
-
-        let new_total_quantity = item.quantity + quantity;
-        if new_total_quantity > 0.0 {
-            item.unit_cost = (item.quantity * item.unit_cost + quantity * unit_cost) / new_total_quantity;
-        } else {
-            item.unit_cost = 0.0;
-        }
-        item.quantity = new_total_quantity;
-        
-        self.update_inventory_market_value();
-    }
-
-    pub fn remove_from_inventory(&mut self, good_id: &GoodId, quantity: f64) -> Result<(), String> {
-        let inventory = self.get_or_create_inventory_mut();
-        if let Some(item) = inventory.get_mut(good_id) {
-            if item.quantity >= quantity {
-                item.quantity -= quantity;
-                self.update_inventory_market_value();
-                Ok(())
-            } else {
-                Err(format!(
-                    "Insufficient inventory for good {:?}: have {}, need {}",
-                    good_id.0, item.quantity, quantity
-                ))
-            }
-        } else {
-            Err(format!("No inventory for good {:?}", good_id.0))
-        }
-    }
 
     pub fn liquid_assets(&self) -> f64 {
         self.assets
@@ -185,5 +105,111 @@ impl BalanceSheetQuery for FinancialSystem {
                 .map(|inst| inst.principal)
                 .sum::<f64>()
         })
+    }
+}
+
+pub trait InventoryQuery {
+    fn update_inventory_market_value(&mut self);
+    fn get_or_create_inventory_mut(&mut self) -> &mut HashMap<GoodId, InventoryItem>;
+    fn get_inventory(&self) -> Option<&HashMap<GoodId, InventoryItem>>;
+    fn add_to_inventory(&mut self, good_id: &GoodId, quantity: f64, unit_cost: f64);
+    fn remove_from_inventory(&mut self, good_id: &GoodId, quantity: f64) -> Result<(), String>;
+}
+
+impl InventoryQuery for BalanceSheet {
+    fn update_inventory_market_value(&mut self) {
+        let mut inventory_value = 0.0;
+        let mut inventory_asset_id: Option<AssetId> = None;
+
+        for asset in self.real_assets.values() {
+            if let RealAssetType::Inventory { goods } = &asset.asset_type {
+                inventory_asset_id = Some(asset.id);
+                inventory_value = goods.values().map(|item| item.quantity * item.unit_cost).sum();
+                break;
+            }
+        }
+
+        if let Some(id) = inventory_asset_id {
+            if let Some(asset) = self.real_assets.get_mut(&id) {
+                asset.market_value = inventory_value;
+            }
+        }
+    }
+    fn get_inventory(&self) -> Option<&HashMap<GoodId, InventoryItem>> {
+        let inventory_asset_id = self
+            .real_assets
+            .values()
+            .find(|asset| matches!(asset.asset_type, RealAssetType::Inventory { .. }))
+            .map(|asset| asset.id);
+
+        if let Some(id) = inventory_asset_id {
+            if let RealAssetType::Inventory { goods } = &self.real_assets[&id].asset_type {
+                return Some(goods);
+            } else {
+                return None;
+            }
+        } else {
+            return None;
+        }
+    }
+    fn get_or_create_inventory_mut(&mut self) -> &mut HashMap<GoodId, InventoryItem> {
+        let inventory_asset_id = self
+            .real_assets
+            .values()
+            .find(|asset| matches!(asset.asset_type, RealAssetType::Inventory { .. }))
+            .map(|asset| asset.id);
+
+        let id_to_use = inventory_asset_id.unwrap_or_else(|| {
+            let new_inventory_asset = RealAsset {
+                id: AssetId(Uuid::new_v4()),
+                asset_type: RealAssetType::Inventory { goods: HashMap::new() },
+                owner: self.agent_id,
+                market_value: 0.0,
+                acquired_date: 0,
+            };
+            let new_id = new_inventory_asset.id;
+            self.real_assets.insert(new_id, new_inventory_asset);
+            new_id
+        });
+
+        if let RealAssetType::Inventory { goods } = &mut self.real_assets.get_mut(&id_to_use).unwrap().asset_type
+        {
+            goods
+        } else {
+            unreachable!();
+        }
+    }
+
+    fn add_to_inventory(&mut self, good_id: &GoodId, quantity: f64, unit_cost: f64) {
+        let inventory = self.get_or_create_inventory_mut();
+        let item = inventory.entry(*good_id).or_insert(InventoryItem { quantity: 0.0, unit_cost: 0.0 });
+
+        let new_total_quantity = item.quantity + quantity;
+        if new_total_quantity > 0.0 {
+            item.unit_cost = (item.quantity * item.unit_cost + quantity * unit_cost) / new_total_quantity;
+        } else {
+            item.unit_cost = 0.0;
+        }
+        item.quantity = new_total_quantity;
+        
+        self.update_inventory_market_value();
+    }
+
+    fn remove_from_inventory(&mut self, good_id: &GoodId, quantity: f64) -> Result<(), String> {
+        let inventory = self.get_or_create_inventory_mut();
+        if let Some(item) = inventory.get_mut(good_id) {
+            if item.quantity >= quantity {
+                item.quantity -= quantity;
+                self.update_inventory_market_value();
+                Ok(())
+            } else {
+                Err(format!(
+                    "Insufficient inventory for good {:?}: have {}, need {}",
+                    good_id.0, item.quantity, quantity
+                ))
+            }
+        } else {
+            Err(format!("No inventory for good {:?}", good_id.0))
+        }
     }
 }

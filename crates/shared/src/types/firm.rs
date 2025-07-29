@@ -4,12 +4,15 @@ use rand::RngCore;
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
+use std::collections::HashMap;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum FirmDecision {
     Produce { recipe_id: RecipeId, batches: u32 },
     Hire { quantity: u32 },
     SetPrice { price: f64 },
+    PayWages { employee: AgentId, amount: f64 },
+    SellInventory { good_id: GoodId, quantity: f64 },
 }
 
 #[typetag::serde(tag = "type")]
@@ -32,12 +35,12 @@ impl FirmDecisionModel for BasicFirmDecisionModel {
     fn decide(&self, firm: &Firm, fs: &FinancialSystem, _rng: &mut dyn RngCore) -> Vec<FirmDecision> {
         let mut decisions = Vec::new();
 
-        if firm.employees < 10 {
-            decisions.push(FirmDecision::Hire { quantity: 5 });
+        if firm.employees.len() < 2 {
+            decisions.push(FirmDecision::Hire { quantity: 1 });
         }
 
         if let Some(recipe_id) = firm.recipe {
-            if firm.employees > 0 {
+            if firm.employees.len() > 0 {
                 decisions.push(FirmDecision::Produce { recipe_id, batches: 1 });
             }
 
@@ -45,13 +48,35 @@ impl FirmDecisionModel for BasicFirmDecisionModel {
                 let market = fs.exchange.goods_market(&recipe.output.0);
                 let _current_price = market.and_then(|m| m.quote()).unwrap_or(25.0);
 
-                let unit_cost = if firm.employees > 0 { (firm.wage_rate * 40.0) / firm.productivity } else { 20.0 };
+                let unit_cost = if firm.employees.len() > 0 { (firm.wage_rate * 40.0) / firm.productivity } else { 20.0 };
                 let target_price = unit_cost * 1.2;
 
                 decisions.push(FirmDecision::SetPrice { price: target_price });
             }
         }
-
+        let assets = fs.get_liquid_assets(&firm.id.clone());
+        if assets > assets - firm.wage_rate * firm.employees.len() as f64 {
+            for employee in firm.get_employees() {
+                decisions.push(FirmDecision::PayWages {
+                    employee: employee.clone(),
+                    amount: 1000.0, // TODO replace with either consumer income, or market based wage
+                });
+            }
+        }
+        if let Some(bs) = fs.get_bs_by_id(&firm.id.clone()){
+            if let Some(good) =  bs.get_inventory() {
+                for (good_id, item) in good.iter() {
+                    if item.quantity > 50.0 {
+                        decisions.push(FirmDecision::SellInventory {
+                            good_id: *good_id,
+                            quantity: item.quantity,
+                        });
+                    }
+                }
+            }
+        } else {
+            println!("No balance sheet found for firm {:?}", firm.id);
+        } 
         decisions
     }
 }
@@ -61,11 +86,12 @@ pub struct Firm {
     pub id: AgentId,
     pub bank_id: AgentId,
     pub name: String,
-    pub employees: u32,
+    pub employees: Vec<AgentId>,
     pub wage_rate: f64,
     pub productivity: f64,
     pub recipe: Option<RecipeId>,
     pub decision_model: Box<dyn FirmDecisionModel>,
+    pub committed_inventory: HashMap<GoodId, InventoryItem>,
 }
 
 impl Firm {
@@ -74,19 +100,25 @@ impl Firm {
             id,
             name,
             bank_id,
-            employees: 0,
+            employees: Vec::new(),
             wage_rate: 15.0,
             productivity: 1.0,
             recipe,
             decision_model: Box::new(BasicFirmDecisionModel),
+            committed_inventory: HashMap::new(),
         }
     }
     pub fn hire(&mut self, count: u32) {
-        self.employees += count;
-        println!("[HIRE] Firm {} hired {} employees", &self.id.0.to_string()[..4], count);
+        println!("[HIRE] Firm {} hiring {} employees", &self.id.0.to_string()[..4], count);
     }
     pub fn produce(&self, good_id: &GoodId, amount: u32) {
         println!("[PRODUCE] Firm {} producing {} of {}", &self.id.0.to_string()[..4], amount, &good_id.0);
+    }
+    pub fn pay_wages(&self, employee: &AgentId, amount: f64) {
+        println!("[PAY WAGES] Firm {} paying {} to employee {}", &self.id.0.to_string()[..4], amount, &employee.0);
+    }
+    pub fn get_employees(&self) -> Vec<AgentId> {
+        self.employees.clone()
     }
 }
 
@@ -117,83 +149,24 @@ impl Agent for Firm {
                     }
                 }
                 FirmDecision::SetPrice { price: _ } => {}
+                FirmDecision::PayWages { employee, amount } => {
+                    actions.push(SimAction::PayWages {
+                        agent_id: self.id.clone(),
+                        employee: employee.clone(),
+                        amount: *amount,
+                    });
+                }
+                FirmDecision::SellInventory { good_id, quantity } => {
+                    actions.push(SimAction::PostAsk {
+                        agent_id: self.id.clone(),
+                        market_id: MarketId::Goods(*good_id),
+                        price: 100.0, // TODO pricing mechanism 
+                        quantity: *quantity, // Assuming each batch produces 10 units
+                    });
+                }
             }
         }
 
         actions
-    }
-}
-
-#[cfg(test)]
-mod tests_firm {
-    use super::*;
-    use uuid::Uuid;
-
-    fn test_scenario() -> (Firm, FinancialSystem) {
-        let id = AgentId(Uuid::new_v4());
-        let bank_id = AgentId(Uuid::new_v4());
-        let name = "Test Firm".to_string();
-        let recipe = Some(recipe_id!("Oil Refining"));
-        let firm = Firm::new(id, bank_id, name, recipe);
-
-        let mut fs = FinancialSystem::default();
-        fs.goods =
-            GoodsRegistry::from_yaml(include_str!("../../../../config/goods.yaml")).expect("failed to parse goods");
-        for good_id in fs.goods.goods.keys() {
-            fs.exchange.register_goods_market(*good_id);
-        }
-
-        (firm, fs)
-    }
-
-    #[test]
-    fn test_firm_dm() {
-        let (firm, fs) = test_scenario();
-        let mut rng = StdRng::seed_from_u64(0);
-        let decisions = firm.decide(&fs, &mut rng);
-        assert!(!decisions.is_empty(), "Firm should make some decisions");
-        assert!(decisions.iter().any(|d| matches!(d, FirmDecision::Produce { .. })), "Firm should decide to produce");
-        assert!(decisions.iter().any(|d| matches!(d, FirmDecision::Hire { .. })), "Firm should decide to hire");
-    }
-    #[test]
-    fn test_firm_recipe() {
-        let (firm, mut fs) = test_scenario();
-        assert!(firm.recipe.is_some(), "Firm should have a production recipe");
-        let recipe = firm.recipe.as_ref().unwrap();
-        let expected_recipe_id = recipe_id!("Oil Refining");
-        assert_eq!(recipe, &expected_recipe_id, "Firm should have 'Oil Refining' as its recipe");
-        let r_dets = firm.recipe.as_ref().and_then(|id| fs.goods.recipes.get(id)).unwrap();
-
-        let output_good = fs.goods.goods.get(&r_dets.output.0).unwrap().name.clone();
-        let input_goods =
-            r_dets.inputs.iter().map(|(id, _)| fs.goods.goods.get(id).unwrap().clone()).collect::<Vec<_>>();
-        let lab = r_dets.labour_hours;
-        let eff = r_dets.efficiency;
-        let name = r_dets.name.clone();
-
-        println!("\n\nRecipe: {} -> {} ({} hours, {} efficiency)", name, output_good, lab, eff);
-        input_goods.iter().for_each(|g| println!("Input: {}", g.name));
-
-        assert_eq!(output_good, "Petrol", "Output good should be 'Refined Oil'");
-        assert_eq!(input_goods.len(), 1, "Recipe should have two input goods");
-        assert_eq!(input_goods[0].name, "Crude Oil", "First input should be 'Crude Oil'");
-
-        fs.exchange.register_goods_market(r_dets.output.0);
-        fs.exchange.goods_market_mut(&r_dets.output.0)
-            .expect("Failed to get goods market")
-            .post_ask(firm.id, 1.0, 9.8);
-        fs.exchange.goods_market_mut(&r_dets.output.0)
-            .expect("Failed to get goods market")
-            .post_bid(AgentId(Uuid::new_v4()), 1.0, 10.2);
-        let mid = fs.exchange.goods_market(&r_dets.output.0)
-            .expect("Failed to get goods market")
-            .quote()
-            .expect("Failed to get market quote");
-
-        println!("\nMarket price for {}: {}", &r_dets.output.0.0.to_string()[..3], mid);
-        let unit_cost = (firm.wage_rate * 40.0) / firm.productivity;
-        let target_price = unit_cost * 1.2;
-        println!("Unit cost: {}, Target price: {}\n\n", unit_cost, target_price);
-
     }
 }

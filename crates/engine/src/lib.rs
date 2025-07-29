@@ -12,7 +12,7 @@ pub fn tick(sim_state: &mut SimState) -> (&mut SimState, Vec<SimAction>, Vec<Sta
     let mut rng = StdRng::from_os_rng();
 
     let mut all_sim_actions = Vec::new();
-
+     
     let banks: Vec<Bank> = sim_state.financial_system.commercial_banks.values().cloned().collect();
     for bank in &banks {
         let decisions = bank.decide(&sim_state.financial_system, &mut rng);
@@ -33,7 +33,7 @@ pub fn tick(sim_state: &mut SimState) -> (&mut SimState, Vec<SimAction>, Vec<Sta
 
     let mut all_effects = Vec::new();
     for action in &all_sim_actions {
-        let result = TransactionExecutor::execute_action(action, sim_state);
+        let result = TransactionExecutor::execute(action, sim_state);
         if result.success {
             all_effects.extend(result.effects);
         } else {
@@ -43,7 +43,7 @@ pub fn tick(sim_state: &mut SimState) -> (&mut SimState, Vec<SimAction>, Vec<Sta
         }
     }
 
-    if let Err(e) = TransactionExecutor::apply_effects(&all_effects, sim_state) {
+    if let Err(e) = TransactionExecutor::apply(&all_effects, sim_state) {
         println!("Error applying effects: {}", e);
     }
 
@@ -52,9 +52,8 @@ pub fn tick(sim_state: &mut SimState) -> (&mut SimState, Vec<SimAction>, Vec<Sta
 
 pub fn inject_liquidity(ss: &mut SimState) -> &mut SimState {
     let action = SimAction::InjectLiquidity;
-    let ns = TransactionExecutor::execute_action(&action, ss);
-    println!("Injecting liquidity: {:?}", ns.effects);
-    if let Err(e) = TransactionExecutor::apply_effects(&ns.effects, ss) {
+    let ns = TransactionExecutor::execute(&action, ss);
+    if let Err(e) = TransactionExecutor::apply(&ns.effects, ss) {
         println!("Error applying effects: {}", e);
     }
     ss

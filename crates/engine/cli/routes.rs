@@ -25,7 +25,6 @@ pub async fn tick(State(state): State<Arc<RwLock<SimState>>>) -> Json<TickInfo> 
     };
     Json(ti)
 }
-
 pub async fn inject(State(state): State<Arc<RwLock<SimState>>>) -> Json<Res> {
     let mut state_guard = state.write().await;
     let _ss = engine::inject_liquidity(&mut state_guard);

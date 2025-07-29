@@ -1,36 +1,65 @@
+use crate::{EffectError, ExecutionResult, SimState};
+use serde::{Deserialize, Serialize};
+use shared::*;
+use std::any::type_name;
+use std::collections::HashMap;
+use std::fmt;
+
 pub mod banking;
 pub mod production;
 pub mod trading;
 
-use crate::execution::effects::ExecutionResult;
-use crate::state::SimState;
-use shared::*;
-use std::collections::HashMap;
+pub use banking::BankingDomain;
+pub use production::ProductionDomain;
+pub use trading::TradingDomain;
 
 pub trait ExecutionDomain: Send + Sync {
     fn name(&self) -> &'static str;
     fn can_handle(&self, action: &SimAction) -> bool;
     fn validate(&self, action: &SimAction, state: &SimState) -> bool;
     fn execute(&self, action: &SimAction, state: &SimState) -> ExecutionResult;
+    fn clone_box(&self) -> Box<dyn ExecutionDomain>;
 }
 
+impl Clone for Box<dyn ExecutionDomain> {
+    fn clone(&self) -> Self {
+        self.clone_box()
+    }
+}
+
+#[typetag::serde(tag = "domain_type")]
+pub trait SerializableExecutionDomain: ExecutionDomain {
+    fn clone_box_serializable(&self) -> Box<dyn SerializableExecutionDomain>;
+}
+
+impl Clone for Box<dyn SerializableExecutionDomain> {
+    fn clone(&self) -> Self {
+        self.clone_box_serializable()
+    }
+}
+
+impl fmt::Debug for dyn SerializableExecutionDomain {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SerializableExecutionDomain").field("name", &self.name()).finish()
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct DomainRegistry {
-    domains: Vec<Box<dyn ExecutionDomain>>,
+    domains: HashMap<String, Box<dyn SerializableExecutionDomain>>,
 }
 
 impl DomainRegistry {
     pub fn new() -> Self {
-        Self {
-            domains: vec![
-                Box::new(banking::BankingDomain::new()),
-                Box::new(trading::TradingDomain::new()),
-                Box::new(production::ProductionDomain::new()),
-            ],
-        }
+        Self { domains: HashMap::new() }
+    }
+
+    pub fn builder() -> DomainRegistryBuilder {
+        DomainRegistryBuilder::new()
     }
 
     pub fn execute(&self, action: &SimAction, state: &SimState) -> ExecutionResult {
-        for domain in &self.domains {
+        for (domain_type, domain) in &self.domains {
             if domain.can_handle(action) {
                 if domain.validate(action, state) {
                     return domain.execute(action, state);
@@ -38,7 +67,7 @@ impl DomainRegistry {
                     return ExecutionResult {
                         success: false,
                         effects: vec![],
-                        errors: vec![format!("Validation failed for action: {}", action.name())],
+                        errors: vec![EffectError::InvalidState(format!("Validation failed in domain {}", domain_type))],
                     };
                 }
             }
@@ -47,7 +76,41 @@ impl DomainRegistry {
         ExecutionResult {
             success: false,
             effects: vec![],
-            errors: vec![format!("No domain can handle action: {}", action.name())],
+            errors: vec![EffectError::InvalidState(format!(
+                "No domain registered to handle action: {}",
+                action.name()
+            ))],
         }
+    }
+}
+
+impl Default for DomainRegistry {
+    fn default() -> Self {
+        DomainRegistryBuilder::new().with_defaults().build()
+    }
+}
+
+#[derive(Default)]
+pub struct DomainRegistryBuilder {
+    domains: HashMap<String, Box<dyn SerializableExecutionDomain>>,
+}
+
+impl DomainRegistryBuilder {
+    pub fn new() -> Self {
+        Self { domains: HashMap::new() }
+    }
+
+    pub fn with_domain<D: SerializableExecutionDomain + 'static>(mut self, domain: D) -> Self {
+        let key = type_name::<D>().to_string();
+        self.domains.insert(key, Box::new(domain));
+        self
+    }
+
+    pub fn with_defaults(self) -> Self {
+        self.with_domain(BankingDomain::new()).with_domain(TradingDomain::new()).with_domain(ProductionDomain::new())
+    }
+
+    pub fn build(self) -> DomainRegistry {
+        DomainRegistry { domains: self.domains }
     }
 }
