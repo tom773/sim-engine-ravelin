@@ -2,7 +2,7 @@ pub mod banking;
 pub mod production;
 pub mod trading;
 
-use crate::execution::effects::ExecutionResult;
+use crate::execution::effects::{EffectError, ExecutionResult};
 use crate::state::SimState;
 use shared::*;
 use std::collections::HashMap;
@@ -38,7 +38,7 @@ impl DomainRegistry {
                     return ExecutionResult {
                         success: false,
                         effects: vec![],
-                        errors: vec![format!("Validation failed for action: {}", action.name())],
+                        errors: vec![EffectError::InvalidState(format!("Validation failed for action: {}", action.name()))],
                     };
                 }
             }
@@ -47,7 +47,7 @@ impl DomainRegistry {
         ExecutionResult {
             success: false,
             effects: vec![],
-            errors: vec![format!("No domain can handle action: {}", action.name())],
+            errors: vec![EffectError::UnimplementedAction(format!("No domain can handle action: {}", action.name()))],
         }
     }
 }

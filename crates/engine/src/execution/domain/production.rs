@@ -1,6 +1,6 @@
 use crate::{
     domain::ExecutionDomain,
-    effects::{ExecutionResult, StateEffect},
+    effects::{ExecutionResult, EffectError, StateEffect},
     state::SimState,
 };
 use shared::*;
@@ -23,7 +23,7 @@ impl ProductionDomain {
                 return ExecutionResult {
                     success: false,
                     effects: vec![],
-                    errors: vec![format!("Firm {} not found", agent_id.0)],
+                    errors: vec![EffectError::FirmNotFound { id: agent_id.clone() }],
                 };
             }
         }
@@ -54,11 +54,11 @@ impl ProductionDomain {
                 return ExecutionResult {
                     success: false,
                     effects: vec![],
-                    errors: vec![format!("Recipe {:?} not found", recipe_id)],
+                    errors: vec![EffectError::RecipieError { id: *recipe_id }],
                 };
             }
         }
-        ExecutionResult { success: false, effects: vec![], errors: vec!["Invalid Produce action".to_string()] }
+        ExecutionResult { success: false, effects: vec![], errors: vec![EffectError::InvalidState("Produce Failed".to_string())] }
     }
 }
 
@@ -89,7 +89,7 @@ impl ExecutionDomain for ProductionDomain {
             _ => ExecutionResult {
                 success: false,
                 effects: vec![],
-                errors: vec!["Action not handled by ProductionDomain".to_string()],
+                errors: vec![EffectError::InvalidState(format!("Production Domain Doesn't Handle Action {}", action.name()))],
             },
         }
     }

@@ -60,11 +60,11 @@ mod simulation_flow_tests {
         let action =
             SimAction::Deposit { agent_id: consumer_id.clone(), bank: bank_id.clone(), amount: deposit_amount };
 
-        let er = TransactionExecutor::execute_action(&action, &scenario.ss);
+        let er = TransactionExecutor::execute(&action, &mut scenario.ss);
         assert!(er.success, "Deposit execution should succeed");
         assert!(!er.effects.is_empty(), "Execution should produce effects");
 
-        TransactionExecutor::apply_effects(&er.effects, &mut scenario.ss).unwrap();
+        TransactionExecutor::apply(&er.effects, &mut scenario.ss).unwrap();
 
         let fs = &scenario.ss.financial_system;
         let consumer_cash = fs.get_cash_assets(&consumer_id);
@@ -88,15 +88,15 @@ mod simulation_flow_tests {
 
         let deposit_action =
             SimAction::Deposit { agent_id: consumer_id.clone(), bank: bank_id.clone(), amount: deposit_amount };
-        let er = TransactionExecutor::execute_action(&deposit_action, &scenario.ss);
-        TransactionExecutor::apply_effects(&er.effects, &mut scenario.ss).unwrap();
+        let er = TransactionExecutor::execute(&deposit_action, &mut scenario.ss);
+        TransactionExecutor::apply(&er.effects, &mut scenario.ss).unwrap();
 
         let withdraw_action =
             SimAction::Withdraw { agent_id: consumer_id.clone(), bank: bank_id.clone(), amount: withdrawal_amount };
 
-        let er = TransactionExecutor::execute_action(&withdraw_action, &scenario.ss);
+        let er = TransactionExecutor::execute(&withdraw_action, &mut scenario.ss);
         assert!(er.success, "Withdrawal should succeed");
-        TransactionExecutor::apply_effects(&er.effects, &mut scenario.ss).unwrap();
+        TransactionExecutor::apply(&er.effects, &mut scenario.ss).unwrap();
 
         let fs = &scenario.ss.financial_system;
         let consumer_cash = fs.get_cash_assets(&consumer_id);
@@ -108,12 +108,12 @@ mod simulation_flow_tests {
 
     #[test]
     fn test_invalid_deposit_fails_validation() {
-        let scenario = setup();
+        let mut scenario = setup();
         let (consumer_id, bank_id) = (scenario.consumer_id.clone(), scenario.bank_id.clone());
 
         let action = SimAction::Deposit { agent_id: consumer_id.clone(), bank: bank_id.clone(), amount: 9999.0 };
 
-        let er = TransactionExecutor::execute_action(&action, &scenario.ss);
+        let er = TransactionExecutor::execute(&action, &mut scenario.ss);
 
         assert!(!er.success, "Execution should fail due to validation");
         assert!(!er.errors.is_empty(), "Execution should return validation errors");
