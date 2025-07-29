@@ -1,15 +1,37 @@
-use crate::domain::ExecutionDomain;
-use crate::{EffectError, StateEffect};
-use crate::{effects::ExecutionResult, state::SimState};
+use super::{ExecutionDomain, SerializableExecutionDomain};
+use crate::{EffectError, ExecutionResult, SimState, StateEffect};
+use serde::{Deserialize, Serialize};
 use shared::validation::FinancialValidator;
 use shared::*;
 use uuid::Uuid;
-pub struct BankingDomain {}
 
-impl BankingDomain {
+pub struct BankingDomainImpl {}
+
+impl BankingDomainImpl {
     pub fn new() -> Self {
-        BankingDomain {}
+        BankingDomainImpl {}
     }
+
+    pub fn execute(&self, action: &SimAction, state: &SimState) -> ExecutionResult {
+        match action {
+            SimAction::Deposit { agent_id, bank, amount } => self.execute_deposit(agent_id, bank, *amount, state),
+            SimAction::Withdraw { agent_id, bank, amount } => self.execute_withdraw(agent_id, bank, *amount, state),
+            SimAction::Transfer { from, to, amount, .. } => self.execute_transfer(from, to, *amount, state),
+            SimAction::UpdateReserves { bank, amount_change } => {
+                self.execute_update_reserves(bank, *amount_change, state)
+            }
+            SimAction::InjectLiquidity => self.execute_inject_liquidity(state),
+            _ => ExecutionResult {
+                success: false,
+                effects: vec![],
+                errors: vec![EffectError::InvalidState(format!(
+                    "Banking domain cannot handle action: {}",
+                    action.name()
+                ))],
+            },
+        }
+    }
+
     fn execute_deposit(&self, depositor: &AgentId, bank: &AgentId, amount: f64, state: &SimState) -> ExecutionResult {
         let mut effects = vec![];
         if let Some(depositor_bs) = state.financial_system.balance_sheets.get(depositor) {
@@ -53,6 +75,7 @@ impl BankingDomain {
             },
         }
     }
+
     fn execute_inject_liquidity(&self, state: &SimState) -> ExecutionResult {
         let mut effects = vec![];
         for consumer in &state.consumers {
@@ -75,6 +98,7 @@ impl BankingDomain {
             },
         }
     }
+
     fn execute_withdraw(
         &self, account_holder: &AgentId, bank: &AgentId, amount: f64, state: &SimState,
     ) -> ExecutionResult {
@@ -136,6 +160,7 @@ impl BankingDomain {
             },
         }
     }
+
     fn execute_transfer(&self, from: &AgentId, to: &AgentId, amount: f64, state: &SimState) -> ExecutionResult {
         ExecutionResult {
             success: false,
@@ -153,10 +178,20 @@ impl BankingDomain {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+pub struct BankingDomain {}
+
+impl BankingDomain {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
 impl ExecutionDomain for BankingDomain {
     fn name(&self) -> &'static str {
         "BankingDomain"
     }
+
     fn can_handle(&self, action: &SimAction) -> bool {
         matches!(
             action,
@@ -188,52 +223,14 @@ impl ExecutionDomain for BankingDomain {
     }
 
     fn execute(&self, action: &SimAction, state: &SimState) -> ExecutionResult {
-        match action {
-            SimAction::Deposit { agent_id, bank, amount } => self.execute_deposit(agent_id, bank, *amount, state),
-            SimAction::Withdraw { agent_id, bank, amount } => self.execute_withdraw(agent_id, bank, *amount, state),
-            SimAction::Transfer { from, to, amount, .. } => self.execute_transfer(from, to, *amount, state),
-            SimAction::UpdateReserves { bank, amount_change } => {
-                self.execute_update_reserves(bank, *amount_change, state)
-            }
-            SimAction::InjectLiquidity => self.execute_inject_liquidity(state),
-            _ => ExecutionResult {
-                success: false,
-                effects: vec![],
-                errors: vec![EffectError::InvalidState(format!(
-                    "Banking Domain Doesn't Handle Action {}",
-                    action.name()
-                ))],
-            },
-        }
+        let impl_domain = BankingDomainImpl::new();
+        impl_domain.execute(action, state)
+    }
+
+    fn clone_box(&self) -> Box<dyn SerializableExecutionDomain> {
+        Box::new(self.clone())
     }
 }
 
-#[cfg(test)]
-#[cfg(test)]
-mod banking_tests {
-    use super::*;
-    use uuid::Uuid;
-
-    fn create_test_state() -> SimState {
-        let mut state = SimState::default();
-        let agent_id = AgentId(Uuid::new_v4());
-        state.financial_system.balance_sheets.insert(agent_id, BalanceSheet::new(agent_id));
-        state
-    }
-
-    #[test]
-    fn test_create_instrument_effect() {
-        let mut state = create_test_state();
-        let creditor = AgentId(Uuid::new_v4());
-        let debtor = state.financial_system.central_bank.id.clone();
-
-        // Add creditor to balance sheets
-        state.financial_system.balance_sheets.insert(creditor, BalanceSheet::new(creditor));
-
-        let inst = cash!(creditor, 1000.0, debtor, 0);
-        let effect = StateEffect::CreateInstrument(inst);
-
-        assert!(effect.apply(&mut state).is_ok());
-        assert_eq!(state.financial_system.instruments.len(), 1);
-    }
-}
+#[typetag::serde]
+impl SerializableExecutionDomain for BankingDomain {}

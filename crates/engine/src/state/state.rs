@@ -1,11 +1,13 @@
-use crate::{AgentFactory, StateEffect};
+use crate::{AgentFactory, StateEffect, execution::domain::DomainRegistry};
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 use shared::*;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SimState {
     pub ticknum: u32,
     pub consumers: Vec<Consumer>,
+    pub domain_registry: DomainRegistry,
     pub firms: Vec<Firm>,
     pub financial_system: FinancialSystem,
     pub config: SimConfig,
@@ -35,6 +37,7 @@ impl Default for SimState {
         Self {
             ticknum: 0,
             consumers: Vec::new(),
+            domain_registry: DomainRegistry::default(),
             firms: Vec::new(),
             financial_system: FinancialSystem::default(),
             config: SimConfig::default(),
@@ -43,11 +46,9 @@ impl Default for SimState {
     }
 }
 impl SimState {
-    pub fn get_first_agents(&self) -> (Option<&Consumer>, Option<&Firm>, Option<&Bank>) {
-        let consumer = self.consumers.first();
-        let firm = self.firms.first();
-        let bank = self.financial_system.commercial_banks.values().next();
-        (consumer, firm, bank)
+    pub fn with_domain_registry(mut self, registry: DomainRegistry) -> Self {
+        self.domain_registry = registry;
+        self
     }
 }
 pub fn initialize_economy(config: &SimConfig, rng: &mut StdRng) -> SimState {

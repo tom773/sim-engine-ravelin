@@ -5,8 +5,7 @@ pub struct TransactionExecutor;
 
 impl TransactionExecutor {
     pub fn execute(action: &SimAction, state: &mut SimState) -> ExecutionResult {
-        let registry = DomainRegistry::new();
-        registry.execute(&action, state)
+        state.domain_registry.execute(&action, state)
     }
     pub fn apply(effects: &[StateEffect], state: &mut SimState) -> Result<(), String> {
         for effect in effects {

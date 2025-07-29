@@ -1,16 +1,31 @@
 use crate::{
-    domain::ExecutionDomain,
+    domain::{SerializableExecutionDomain, ExecutionDomain},
     effects::{ExecutionResult, EffectError, StateEffect},
     state::SimState,
 };
 use shared::*;
+use serde::{Deserialize, Serialize};
 
-pub struct ProductionDomain {}
+pub struct ProductionDomainImpl {}
 
-impl ProductionDomain {
+impl ProductionDomainImpl {
     pub fn new() -> Self {
-        ProductionDomain {}
+        ProductionDomainImpl {}
     }
+    
+    // Main execute method that dispatches
+    pub fn execute(&self, action: &SimAction, state: &SimState) -> ExecutionResult {
+        match action {
+            SimAction::Produce { .. } => self.execute_produce(action, state),
+            SimAction::Hire { .. } => self.execute_hire(action, state),
+            _ => ExecutionResult {
+                success: false,
+                effects: vec![],
+                errors: vec![EffectError::InvalidState("Action not handled by ProductionDomain".to_string())],
+            },
+        }
+    }
+    
     pub fn execute_hire(&self, action: &SimAction, state: &SimState) -> ExecutionResult {
         if let SimAction::Hire { agent_id, count } = action {
             if let Some(f) = state.firms.iter().find(|f| f.id == *agent_id) {
@@ -29,6 +44,7 @@ impl ProductionDomain {
         }
         ExecutionResult { success: true, effects: vec![], errors: vec![] }
     }
+    
     pub fn execute_produce(&self, action: &SimAction, state: &SimState) -> ExecutionResult {
         if let SimAction::Produce { agent_id, recipe_id, batches } = action {
             if let Some(recipe) = state.financial_system.goods.recipes.get(recipe_id) {
@@ -46,7 +62,7 @@ impl ProductionDomain {
                         owner: agent_id.clone(),
                         good_id: *output_good,
                         quantity: *output_qty * recipe.efficiency,
-                        unit_cost: (recipe.labour_hours * 40.0 * 10.0) / recipe.efficiency, // TODO unhardcoded unit cost
+                        unit_cost: (recipe.labour_hours * 40.0 * 10.0) / recipe.efficiency,
                     });
                 }
                 return ExecutionResult { success: true, effects, errors: vec![] };
@@ -62,35 +78,45 @@ impl ProductionDomain {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ProductionDomain {
+}
+
+impl ProductionDomain {
+    pub fn new() -> Self {
+        Self {
+        }
+    }
+}
+
 impl ExecutionDomain for ProductionDomain {
     fn name(&self) -> &'static str {
         "ProductionDomain"
     }
-
+    
     fn can_handle(&self, action: &SimAction) -> bool {
         matches!(action, SimAction::Produce { .. } | SimAction::Hire { .. })
     }
+    
     fn validate(&self, action: &SimAction, state: &SimState) -> bool {
         match action {
-            SimAction::Produce { agent_id: _, recipe_id, batches: _ } => {
-                if !state.financial_system.goods.recipes.contains_key(recipe_id) {
-                    return false;
-                }
-                true
+            SimAction::Produce { recipe_id, .. } => {
+                state.financial_system.goods.recipes.contains_key(recipe_id)
             }
             SimAction::Hire { .. } => true,
-            _ => false,
+            _ => false
         }
     }
+    
     fn execute(&self, action: &SimAction, state: &SimState) -> ExecutionResult {
-        match action {
-            SimAction::Produce { .. } => self.execute_produce(action, state),
-            SimAction::Hire { .. } => self.execute_hire(action, state),
-            _ => ExecutionResult {
-                success: false,
-                effects: vec![],
-                errors: vec![EffectError::InvalidState(format!("Production Domain Doesn't Handle Action {}", action.name()))],
-            },
-        }
+        let impl_domain = ProductionDomainImpl::new();
+        impl_domain.execute(action, state)
+    }
+    
+    fn clone_box(&self) -> Box<dyn SerializableExecutionDomain> {
+        Box::new(self.clone())
     }
 }
+
+#[typetag::serde]
+impl SerializableExecutionDomain for ProductionDomain {}
