@@ -13,13 +13,14 @@ pub struct Consumer {
     pub age: u32,
     pub bank_id: AgentId,
     pub decision_model: Box<dyn DecisionModel>,
+    pub personality: PersonalityArchetype,
     pub income: f64,
 }
 
 impl Consumer {
     pub fn new(age: u32, id: AgentId, bank_id: AgentId, dm: Box<dyn DecisionModel>) -> Self {
         let mut rng = rand::rng();
-        Self { id, bank_id, age, decision_model: dm, income: (rng.random_range(30000.0..80000.0)) / 52.0 }
+        Self { id, bank_id, age, decision_model: dm, income: (rng.random_range(30000.0..80000.0)) / 52.0, personality: PersonalityArchetype::Balanced }
     }
 
     pub fn snip_id(&self) -> String {
@@ -125,7 +126,6 @@ impl Debug for dyn DecisionModel {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BasicDecisionModel {
-    pub propensity_to_consume: f64,
 }
 
 #[typetag::serde]
@@ -150,7 +150,7 @@ impl DecisionModel for BasicDecisionModel {
         let seller_id =
             fs.exchange.goods_market(&good_to_buy).and_then(|market| market.best_ask()).map(|ask| ask.agent_id.clone());
 
-        let spend_amount = total_available * self.propensity_to_consume;
+        let spend_amount = total_available * consumer.personality.get_params().prop_to_consume;
         if spend_amount > 0.0 && seller_id.is_some() {
             decisions.push(ConsumerDecision::Spend {
                 agent_id: consumer.id.clone(),
@@ -160,7 +160,7 @@ impl DecisionModel for BasicDecisionModel {
             });
         }
 
-        let save_amount = total_available * (1.0 - self.propensity_to_consume);
+        let save_amount = total_available * (1.0 - consumer.personality.get_params().prop_to_consume);
         if save_amount > 0.0 {
             decisions.push(ConsumerDecision::Save { agent_id: consumer.id.clone(), amount: save_amount.min(1000.0) });
         }
@@ -224,7 +224,7 @@ impl DecisionModel for MLDecisionModel {
 
             decisions
         } else {
-            let basic = BasicDecisionModel { propensity_to_consume: 0.7 };
+            let basic = BasicDecisionModel{};
             basic.decide(consumer, fs, _rng)
         }
     }

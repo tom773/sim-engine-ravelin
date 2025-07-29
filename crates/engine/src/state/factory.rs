@@ -23,9 +23,8 @@ impl<'a> AgentFactory<'a> {
 
         let age = 35;
         let annual_income = 60_000.0;
-        let propensity_to_consume = 0.7;
 
-        let decision_model = Box::new(BasicDecisionModel { propensity_to_consume });
+        let decision_model = Box::new(BasicDecisionModel{});
 
         let mut c = Consumer::new(age, agent_id.clone(), bank_id.clone(), decision_model);
         c.income = annual_income / 52.0;
@@ -59,7 +58,7 @@ impl<'a> AgentFactory<'a> {
         bank
     }
 
-    pub fn create_firm(&mut self, bank_id: AgentId, recipe_id: Option<RecipeId>) -> Firm {
+    pub fn create_firm(&mut self, bank_id: AgentId, recipe_id: Option<RecipeId>, to_hire: &AgentId) -> Firm {
         let firm_id = AgentId(Uuid::new_v4());
         let firm_name = CompanyName().fake::<String>();
 
@@ -72,7 +71,7 @@ impl<'a> AgentFactory<'a> {
         let bs = self.ss.financial_system.balance_sheets.get_mut(&firm_id).unwrap();
         bs.add_to_inventory(&input, 100.0, 50.0); // Add initial inventory
         let mut f = Firm::new(firm_id, bank_id, firm_name, recipe_id);
-        f.employees = 5;
+        f.employees.push(to_hire.clone());
         f.wage_rate = 20.0;
         f.productivity = 2.0;
 

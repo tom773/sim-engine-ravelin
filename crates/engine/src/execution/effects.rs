@@ -11,6 +11,15 @@ pub struct ExecutionResult {
     pub effects: Vec<StateEffect>,
     pub errors: Vec<EffectError>,
 }
+impl ExecutionResult {
+    pub fn unhandled(domain: &str) -> Self {
+        ExecutionResult {
+            success: false,
+            effects: vec![],
+            errors: vec![EffectError::Unhandled(format!("Action not handled in domain {}", domain))],
+        }
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum StateEffect {
@@ -171,6 +180,10 @@ impl StateEffect {
                     }
                     Ok(())
                 }
+                MarketId::Labour(lab_id) => {
+                    // Handle labour market orders if needed
+                    Err(EffectError::UnimplementedAction("Labour market orders not implemented".to_string()))
+                }
             },
         }
     }
@@ -213,7 +226,8 @@ pub enum EffectError {
     RecipieError{ id: RecipeId },
     #[error("Unimplemented action: {0}")]
     UnimplementedAction(String),
-
+    #[error("Unhandled action: {0}")]
+    Unhandled(String),
     #[error("Bank Tx Failed: Action {0}, reason {1}")]
     TransactionFailure(String, String),
 }

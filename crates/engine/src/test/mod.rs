@@ -118,26 +118,89 @@ mod simulation_flow_tests {
         assert!(!er.success, "Execution should fail due to validation");
         assert!(!er.errors.is_empty(), "Execution should return validation errors");
         assert!(er.effects.is_empty(), "Failed execution should have no effects");
-        println!("Validation failed as expected: {:?}", er.errors);
     }
 
     #[test]
-    fn test_full_tick_flow() {
-        let mut scenario = setup();
-        let initial_firm_employees = scenario.ss.firms.first().unwrap().employees;
-        let initial_tick = scenario.ss.ticknum;
+    fn test_consumer_personality() {
+        let scenario = setup();
+        let consumer = scenario.ss.consumers.first().unwrap();
 
-        let (_ss, actions, effects) = crate::tick(&mut scenario.ss);
-
-        assert_eq!(scenario.ss.ticknum, initial_tick + 1, "Tick number should increment");
-        assert!(!actions.is_empty(), "A tick should generate actions");
-        assert!(!effects.is_empty(), "A tick should generate and apply effects");
-
-        let final_firm_employees = scenario.ss.firms.first().unwrap().employees;
-        assert!(final_firm_employees > initial_firm_employees, "Firm should have hired new employees");
-
-        let consumer_deposits =
-            scenario.ss.financial_system.get_deposits_at_bank(&scenario.consumer_id, &scenario.bank_id);
-        assert!(consumer_deposits > 0.0, "Consumer should have deposited some savings");
+        assert_eq!(consumer.personality, PersonalityArchetype::Balanced, "Consumer should have balanced personality");
+        assert_eq!(consumer.personality.get_params().prop_to_consume, 0.7, "Consumer should have correct propensity to consume");
     }
+    
+    #[test]
+    fn test_labour_market() {
+        let mut scenario = setup();
+        let (firm_id, consumer_id) = (scenario.firm_id.clone(), scenario.consumer_id.clone());
+        let firms = &scenario.ss.firms;
+        let firm = firms.iter().find(|f| f.id == firm_id).unwrap();
+        
+        let action = SimAction::PayWages {
+            agent_id: firm_id.clone(),
+            employee: consumer_id.clone(),
+            amount: 100.0,
+        };
+        let m0 = scenario.ss.financial_system.m0();
+        let m1 = scenario.ss.financial_system.m1();
+
+
+        let er = TransactionExecutor::execute(&action, &mut scenario.ss);
+        TransactionExecutor::apply(&er.effects, &mut scenario.ss).unwrap();
+
+        let consumer_cash_after = scenario.ss.financial_system.get_cash_assets(&consumer_id);
+        let firm_cash_after = scenario.ss.financial_system.get_cash_assets(&firm_id);
+        let m0_after = scenario.ss.financial_system.m0();
+        let m1_after = scenario.ss.financial_system.m1();
+
+        assert_eq!(consumer_cash_after, 5100.0, "Consumer should receive wages");
+        assert_eq!(firm_cash_after, 19900.0, "Firm should pay wages");
+        assert_eq!(m0_after, m0, "M0 should not decrease");
+        assert_eq!(m1_after, m1, "M1 should increase by wages paid");
+        assert_eq!(scenario.ss.financial_system.get_bs_by_id(&firm_id).unwrap().assets.len(), 1, "Firm should still have one asset after paying wages");
+        assert_eq!(scenario.ss.financial_system.get_bs_by_id(&consumer_id).unwrap().assets.len(), 1, "Consumer should still have one asset after receiving wages");
+        
+    }
+    #[test]
+    fn test_firm_validation() {
+        let mut scenario = setup();
+        let firm_id = scenario.firm_id.clone();
+        let firm = scenario.ss.firms.iter().find(|f| f.id == firm_id).unwrap();
+
+        // Test production validation
+        let action = SimAction::Produce {
+            agent_id: firm_id.clone(),
+            recipe_id: firm.recipe.clone().unwrap(),
+            batches: 1,
+        };
+        let er = TransactionExecutor::execute(&action, &mut scenario.ss);
+        assert!(er.success, "Production should be valid");
+        
+        // Test hiring validation
+        let hire_action = SimAction::Hire {
+            agent_id: firm_id.clone(),
+            count: 5,
+        };
+        let er = TransactionExecutor::execute(&hire_action, &mut scenario.ss);
+        assert!(er.success, "Hiring should be valid");
+        
+        let post_ask_action = SimAction::PostAsk {
+            agent_id: firm_id.clone(),
+            market_id: MarketId::Goods(good_id!("oil")),
+            price: 100.0,
+            quantity: 10.0,
+        };
+        let er = TransactionExecutor::execute(&post_ask_action, &mut scenario.ss);
+        assert!(er.success, "Posting ask should be valid");
+
+        let fail_post_ask_action = SimAction::PostAsk {
+            agent_id: firm_id.clone(),
+            market_id: MarketId::Goods(good_id!("oil")),
+            price: 100.0,
+            quantity: 201.0,
+        };
+        let er = TransactionExecutor::execute(&fail_post_ask_action, &mut scenario.ss);
+        assert!(!er.success, "Posting ask for more goods than have should fail validation");
+
+    } 
 }

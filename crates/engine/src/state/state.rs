@@ -51,16 +51,12 @@ impl SimState {
         self
     }
 }
+
 pub fn initialize_economy(config: &SimConfig, rng: &mut StdRng) -> SimState {
     let mut ss = SimState::default();
 
     ss.financial_system.goods =
         GoodsRegistry::from_yaml(include_str!("../../../../config/goods.yaml")).expect("Failed to load goods and recipes");
-    println!(
-        "Loaded {} goods and {} recipes.",
-        ss.financial_system.goods.goods.len(),
-        ss.financial_system.goods.recipes.len()
-    );
 
     for good_id in ss.financial_system.goods.goods.keys() {
         ss.financial_system.exchange.register_goods_market(*good_id);
@@ -70,8 +66,6 @@ pub fn initialize_economy(config: &SimConfig, rng: &mut StdRng) -> SimState {
 
     let mut factory = AgentFactory::new(&mut ss, rng);
 
-    println!("=== Initializing Economy ===");
-
     let bank_ids: Vec<AgentId> = (0..2)
         .map(|_| {
             let bank = factory.create_bank();
@@ -79,21 +73,27 @@ pub fn initialize_economy(config: &SimConfig, rng: &mut StdRng) -> SimState {
         })
         .collect();
 
-    println!("\n  Creating {} firms...", config.firm_count);
-    for i in 0..config.firm_count {
-        let bank_id = bank_ids[i as usize % bank_ids.len()].clone();
-        let _firm = factory.create_firm(bank_id.clone(), oil_refining_recipe_id);
-    }
-
-    println!("\n  Creating {} consumers...", config.consumer_count);
     let mut income_distribution = vec![];
-
+    let mut consumer_ids = vec![];
+    
     for i in 0..config.consumer_count {
         let bank_id = bank_ids[i as usize % bank_ids.len()].clone();
         let consumer = factory.create_consumer(bank_id.clone());
-
+        
+        consumer_ids.push(consumer.id.clone());  // Store the ID
         let annual_income = consumer.income * 52.0;
         income_distribution.push(annual_income);
+    }
+
+    for i in 0..config.firm_count {
+        let bank_id = bank_ids[i as usize % bank_ids.len()].clone();
+        
+        if !consumer_ids.is_empty() {
+            let consumer_to_hire = &consumer_ids[i as usize % consumer_ids.len()];
+            let _firm = factory.create_firm(bank_id.clone(), oil_refining_recipe_id, consumer_to_hire);
+        } else {
+            println!("Warning: No consumers available to hire for firm {}", i);
+        }
     }
 
     drop(factory);

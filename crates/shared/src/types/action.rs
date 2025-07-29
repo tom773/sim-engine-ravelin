@@ -8,7 +8,7 @@ pub enum SimAction {
     Withdraw { agent_id: AgentId, bank: AgentId, amount: f64 },
     Transfer { agent_id: AgentId, from: AgentId, to: AgentId, amount: f64 },
     // Firms
-    Wages { agent_id: AgentId, amount: f64 },
+    PayWages { agent_id: AgentId, employee: AgentId, amount: f64 },
     Hire { agent_id: AgentId, count: u32 },
     Produce { agent_id: AgentId, recipe_id: RecipeId, batches: u32 },
     // Households 
@@ -25,7 +25,7 @@ pub enum SimAction {
 impl SimAction {
     pub fn name(&self) -> String {
         match self {
-            SimAction::Wages { .. } => "Issue Income".to_string(),
+            SimAction::PayWages { .. } => "Issue Income".to_string(),
             SimAction::Deposit { .. } => "Deposit Cash".to_string(),
             SimAction::Withdraw { .. } => "Withdraw Cash".to_string(),
             SimAction::Transfer { .. } => "Transfer Funds".to_string(),

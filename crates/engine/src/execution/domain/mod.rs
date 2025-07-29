@@ -1,8 +1,9 @@
-use std::any::type_name;
-use std::collections::HashMap;
+use crate::{EffectError, ExecutionResult, SimState};
 use serde::{Deserialize, Serialize};
 use shared::*;
-use crate::{ExecutionResult, SimState, EffectError};
+use std::any::type_name;
+use std::collections::HashMap;
+use std::fmt;
 
 pub mod banking;
 pub mod production;
@@ -17,20 +18,29 @@ pub trait ExecutionDomain: Send + Sync {
     fn can_handle(&self, action: &SimAction) -> bool;
     fn validate(&self, action: &SimAction, state: &SimState) -> bool;
     fn execute(&self, action: &SimAction, state: &SimState) -> ExecutionResult;
-    fn clone_box(&self) -> Box<dyn SerializableExecutionDomain>;
+    fn clone_box(&self) -> Box<dyn ExecutionDomain>;
 }
 
-impl Clone for Box<dyn SerializableExecutionDomain> {
+impl Clone for Box<dyn ExecutionDomain> {
     fn clone(&self) -> Self {
         self.clone_box()
     }
 }
 
 #[typetag::serde(tag = "domain_type")]
-pub trait SerializableExecutionDomain: ExecutionDomain {}
-impl std::fmt::Debug for dyn SerializableExecutionDomain {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "SerializableExecutionDomain({})", self.name())
+pub trait SerializableExecutionDomain: ExecutionDomain {
+    fn clone_box_serializable(&self) -> Box<dyn SerializableExecutionDomain>;
+}
+
+impl Clone for Box<dyn SerializableExecutionDomain> {
+    fn clone(&self) -> Self {
+        self.clone_box_serializable()
+    }
+}
+
+impl fmt::Debug for dyn SerializableExecutionDomain {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SerializableExecutionDomain").field("name", &self.name()).finish()
     }
 }
 
@@ -41,15 +51,13 @@ pub struct DomainRegistry {
 
 impl DomainRegistry {
     pub fn new() -> Self {
-        Self {
-            domains: HashMap::new(),
-        }
+        Self { domains: HashMap::new() }
     }
-    
+
     pub fn builder() -> DomainRegistryBuilder {
         DomainRegistryBuilder::new()
     }
-    
+
     pub fn execute(&self, action: &SimAction, state: &SimState) -> ExecutionResult {
         for (domain_type, domain) in &self.domains {
             if domain.can_handle(action) {
@@ -64,20 +72,21 @@ impl DomainRegistry {
                 }
             }
         }
-        
+
         ExecutionResult {
             success: false,
             effects: vec![],
-            errors: vec![EffectError::InvalidState(format!("No domain registered to handle action: {}", action.name()))],
+            errors: vec![EffectError::InvalidState(format!(
+                "No domain registered to handle action: {}",
+                action.name()
+            ))],
         }
     }
 }
 
 impl Default for DomainRegistry {
     fn default() -> Self {
-        DomainRegistryBuilder::new()
-            .with_defaults()
-            .build()
+        DomainRegistryBuilder::new().with_defaults().build()
     }
 }
 
@@ -88,26 +97,20 @@ pub struct DomainRegistryBuilder {
 
 impl DomainRegistryBuilder {
     pub fn new() -> Self {
-        Self {
-            domains: HashMap::new(),
-        }
+        Self { domains: HashMap::new() }
     }
-    
+
     pub fn with_domain<D: SerializableExecutionDomain + 'static>(mut self, domain: D) -> Self {
         let key = type_name::<D>().to_string();
         self.domains.insert(key, Box::new(domain));
         self
     }
-    
+
     pub fn with_defaults(self) -> Self {
-        self.with_domain(BankingDomain::new())
-            .with_domain(TradingDomain::new())
-            .with_domain(ProductionDomain::new())
+        self.with_domain(BankingDomain::new()).with_domain(TradingDomain::new()).with_domain(ProductionDomain::new())
     }
-    
+
     pub fn build(self) -> DomainRegistry {
-        DomainRegistry {
-            domains: self.domains,
-        }
+        DomainRegistry { domains: self.domains }
     }
 }

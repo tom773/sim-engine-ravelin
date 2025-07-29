@@ -18,3 +18,4 @@ once_cell = "1.21.3"
 thiserror = "2.0.12"
 yaml-rust = "0.4.5"
 serde_yaml = "0.9.34"
+phf = { version = "0.12.1", features = ["macros"] }

@@ -5,31 +5,12 @@ use shared::validation::FinancialValidator;
 use shared::*;
 use uuid::Uuid;
 
-pub struct BankingDomainImpl {}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct BankingDomain {}
 
-impl BankingDomainImpl {
+impl BankingDomain {
     pub fn new() -> Self {
-        BankingDomainImpl {}
-    }
-
-    pub fn execute(&self, action: &SimAction, state: &SimState) -> ExecutionResult {
-        match action {
-            SimAction::Deposit { agent_id, bank, amount } => self.execute_deposit(agent_id, bank, *amount, state),
-            SimAction::Withdraw { agent_id, bank, amount } => self.execute_withdraw(agent_id, bank, *amount, state),
-            SimAction::Transfer { from, to, amount, .. } => self.execute_transfer(from, to, *amount, state),
-            SimAction::UpdateReserves { bank, amount_change } => {
-                self.execute_update_reserves(bank, *amount_change, state)
-            }
-            SimAction::InjectLiquidity => self.execute_inject_liquidity(state),
-            _ => ExecutionResult {
-                success: false,
-                effects: vec![],
-                errors: vec![EffectError::InvalidState(format!(
-                    "Banking domain cannot handle action: {}",
-                    action.name()
-                ))],
-            },
-        }
+        Self {}
     }
 
     fn execute_deposit(&self, depositor: &AgentId, bank: &AgentId, amount: f64, state: &SimState) -> ExecutionResult {
@@ -162,28 +143,46 @@ impl BankingDomainImpl {
     }
 
     fn execute_transfer(&self, from: &AgentId, to: &AgentId, amount: f64, state: &SimState) -> ExecutionResult {
+        let mut effects = vec![];
+        if let Some(from_bs) = state.financial_system.balance_sheets.get(from) {
+            if let Some((from_inst_id, from_inst)) = from_bs.assets.iter().find(|(_, inst)| {
+                matches!(inst.instrument_type, InstrumentType::Cash) && inst.principal >= amount
+            }) {
+                if from_inst.principal == amount {
+                    effects.push(StateEffect::TransferInstrument {
+                        id: from_inst_id.clone(),
+                        new_creditor: to.clone(),
+                    });
+                } else {
+                    effects.push(StateEffect::UpdateInstrument {
+                        id: from_inst_id.clone(),
+                        new_principal: from_inst.principal - amount,
+                    });
+
+                    let to_cash = cash!(to.clone(), amount, state.financial_system.central_bank.id.clone(), state.ticknum);
+                    effects.push(StateEffect::CreateInstrument(to_cash));
+                }
+            }
+        }
+        
+        let success = !effects.is_empty();
         ExecutionResult {
-            success: false,
-            effects: vec![],
-            errors: vec![EffectError::UnimplementedAction("Transfer not yet implemented".to_string())],
+            success,
+            effects,
+            errors: if !success {
+                vec![EffectError::TransactionFailure("Transfer".to_string(), "Failed to process transfer".to_string())]
+            } else {
+                vec![]
+            },
         }
     }
-
-    fn execute_update_reserves(&self, bank: &AgentId, amount_change: f64, state: &SimState) -> ExecutionResult {
+     
+    fn execute_update_reserves(&self, _bank: &AgentId, _amount_change: f64, _state: &SimState) -> ExecutionResult {
         ExecutionResult {
             success: false,
             effects: vec![],
             errors: vec![EffectError::UnimplementedAction("Reserve update not yet implemented".to_string())],
         }
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-pub struct BankingDomain {}
-
-impl BankingDomain {
-    pub fn new() -> Self {
-        Self {}
     }
 }
 
@@ -200,6 +199,7 @@ impl ExecutionDomain for BankingDomain {
                 | SimAction::Transfer { .. }
                 | SimAction::UpdateReserves { .. }
                 | SimAction::InjectLiquidity
+                | SimAction::PayWages { .. }
         )
     }
 
@@ -223,14 +223,58 @@ impl ExecutionDomain for BankingDomain {
     }
 
     fn execute(&self, action: &SimAction, state: &SimState) -> ExecutionResult {
-        let impl_domain = BankingDomainImpl::new();
-        impl_domain.execute(action, state)
+        match action {
+            SimAction::Deposit { agent_id, bank, amount } => self.execute_deposit(agent_id, bank, *amount, state),
+            SimAction::Withdraw { agent_id, bank, amount } => self.execute_withdraw(agent_id, bank, *amount, state),
+            SimAction::InjectLiquidity => self.execute_inject_liquidity(state),
+            SimAction::Transfer { from, to, amount, .. } => self.execute_transfer(from, to, *amount, state),
+            SimAction::UpdateReserves { bank, amount_change } => {
+                self.execute_update_reserves(bank, *amount_change, state)
+            }
+            SimAction::PayWages { agent_id, employee, amount } => {
+                self.execute_transfer(agent_id, employee, *amount, state)
+            }
+            _ => ExecutionResult::unhandled(self.name()),
+        }
     }
 
-    fn clone_box(&self) -> Box<dyn SerializableExecutionDomain> {
+    fn clone_box(&self) -> Box<dyn ExecutionDomain> {
         Box::new(self.clone())
     }
 }
 
 #[typetag::serde]
-impl SerializableExecutionDomain for BankingDomain {}
+impl SerializableExecutionDomain for BankingDomain {
+    fn clone_box_serializable(&self) -> Box<dyn SerializableExecutionDomain> {
+        Box::new(self.clone())
+    }
+}
+
+#[cfg(test)]
+mod banking_tests {
+    use super::*;
+    use shared::BalanceSheet;
+    use uuid::Uuid;
+
+    fn create_test_state() -> SimState {
+        let mut state = SimState::default();
+        let agent_id = AgentId(Uuid::new_v4());
+        state.financial_system.balance_sheets.insert(agent_id, BalanceSheet::new(agent_id));
+        state
+    }
+
+    #[test]
+    fn test_create_instrument_effect() {
+        let mut state = create_test_state();
+        let creditor = AgentId(Uuid::new_v4());
+        let debtor = state.financial_system.central_bank.id.clone();
+
+        state.financial_system.balance_sheets.insert(creditor, BalanceSheet::new(creditor));
+
+        let inst = cash!(creditor, 1000.0, debtor, 0);
+        let effect = StateEffect::CreateInstrument(inst);
+
+        assert!(effect.apply(&mut state).is_ok());
+        assert_eq!(state.financial_system.instruments.len(), 1);
+    }
+}

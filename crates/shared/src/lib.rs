@@ -8,3 +8,6 @@ pub use types::*;
 
 pub mod validation;
 pub use validation::*;
+
+pub mod behaviour;
+pub use behaviour::*;

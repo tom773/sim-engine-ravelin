@@ -111,6 +111,7 @@ impl BalanceSheetQuery for FinancialSystem {
 pub trait InventoryQuery {
     fn update_inventory_market_value(&mut self);
     fn get_or_create_inventory_mut(&mut self) -> &mut HashMap<GoodId, InventoryItem>;
+    fn get_inventory(&self) -> Option<&HashMap<GoodId, InventoryItem>>;
     fn add_to_inventory(&mut self, good_id: &GoodId, quantity: f64, unit_cost: f64);
     fn remove_from_inventory(&mut self, good_id: &GoodId, quantity: f64) -> Result<(), String>;
 }
@@ -134,7 +135,23 @@ impl InventoryQuery for BalanceSheet {
             }
         }
     }
+    fn get_inventory(&self) -> Option<&HashMap<GoodId, InventoryItem>> {
+        let inventory_asset_id = self
+            .real_assets
+            .values()
+            .find(|asset| matches!(asset.asset_type, RealAssetType::Inventory { .. }))
+            .map(|asset| asset.id);
 
+        if let Some(id) = inventory_asset_id {
+            if let RealAssetType::Inventory { goods } = &self.real_assets[&id].asset_type {
+                return Some(goods);
+            } else {
+                return None;
+            }
+        } else {
+            return None;
+        }
+    }
     fn get_or_create_inventory_mut(&mut self) -> &mut HashMap<GoodId, InventoryItem> {
         let inventory_asset_id = self
             .real_assets

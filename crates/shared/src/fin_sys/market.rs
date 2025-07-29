@@ -7,7 +7,10 @@ use uuid::Uuid;
 pub enum FinancialMarketId {
     SecuredOvernightFinancing, // Represents the market for interbank lending of reserves.
 }
-
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum LabourMarketId {
+    Labour
+}
 pub trait RatesMarket {
     fn price_to_daily_rate(&self, price: f64) -> f64;
 
@@ -37,6 +40,7 @@ impl RatesMarket for FinancialMarketId {
 pub enum MarketId {
     Goods(GoodId),
     Financial(FinancialMarketId),
+    Labour(LabourMarketId),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
