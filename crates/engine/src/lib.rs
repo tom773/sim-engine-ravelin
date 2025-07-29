@@ -42,7 +42,7 @@ pub fn tick(sim_state: &mut SimState) -> (&mut SimState, Vec<SimAction>, Vec<Sta
             }
         }
     }
-
+    sim_state.financial_system.exchange.clear_markets();
     if let Err(e) = TransactionExecutor::apply(&all_effects, sim_state) {
         println!("Error applying effects: {}", e);
     }

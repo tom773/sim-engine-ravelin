@@ -11,6 +11,23 @@ pub enum FinancialMarketId {
 pub enum LabourMarketId {
     Labour
 }
+
+impl FinancialMarketId {
+    pub fn name(&self) -> &'static str {
+        match self {
+            FinancialMarketId::SecuredOvernightFinancing => "Secured Overnight Financing",
+        }
+    }
+}
+
+impl LabourMarketId {
+    pub fn name(&self) -> &'static str {
+        match self {
+            LabourMarketId::Labour => "Labour",
+        }
+    }
+}
+
 pub trait RatesMarket {
     fn price_to_daily_rate(&self, price: f64) -> f64;
 
@@ -41,6 +58,19 @@ pub enum MarketId {
     Goods(GoodId),
     Financial(FinancialMarketId),
     Labour(LabourMarketId),
+}
+impl MarketId {
+    pub fn name(&self, registry: &GoodsRegistry) -> String {
+        match self {
+            MarketId::Goods(good_id) => {
+                registry.get_good_name(good_id)
+                    .unwrap_or("Unknown Good")
+                    .to_string()
+            }
+            MarketId::Financial(financial_id) => financial_id.name().to_string(),
+            MarketId::Labour(labour_id) => labour_id.name().to_string(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -95,14 +125,20 @@ pub trait Market: Send + Sync {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GoodsMarket {
     pub good_id: GoodId,
+    pub name: String,  // Add this
     order_book: OrderBook,
 }
 
 impl GoodsMarket {
-    pub fn new(good_id: GoodId) -> Self {
-        Self { good_id, order_book: OrderBook::new() }
+    pub fn new(good_id: GoodId, name: String) -> Self {
+        Self { 
+            good_id, 
+            name,
+            order_book: OrderBook::new() 
+        }
     }
 }
+
 
 impl Market for GoodsMarket {
     fn quote(&self) -> Option<f64> {
@@ -127,6 +163,7 @@ impl Market for GoodsMarket {
 
     fn match_orders(&mut self) -> Vec<Trade> {
         let trades = Vec::new();
+        println!("Matching orders in goods market: {}", self.name);
         trades
     }
 }
@@ -134,37 +171,37 @@ impl Market for GoodsMarket {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FinancialMarket {
     pub market_id: FinancialMarketId,
+    pub name: String,  // Add this
     order_book: OrderBook,
 }
-
 impl FinancialMarket {
-    pub fn new(market_id: FinancialMarketId) -> Self {
-        Self { market_id, order_book: OrderBook::new() }
+    pub fn new(market_id: FinancialMarketId, name: String) -> Self {
+        Self { 
+            market_id, 
+            name,
+            order_book: OrderBook::new() 
+        }
     }
 }
-
 impl Market for FinancialMarket {
     fn quote(&self) -> Option<f64> {
         self.order_book.asks.first().map(|ask| ask.price)
     }
-
     fn best_bid(&self) -> Option<&Bid> {
         self.order_book.bids.first()
     }
-
     fn best_ask(&self) -> Option<&Ask> {
         self.order_book.asks.first()
     }
-
     fn post_ask(&mut self, seller: AgentId, qty: f64, price: f64) {
         self.order_book.asks.push(Ask { agent_id: seller, price, quantity: qty });
     }
-
     fn post_bid(&mut self, buyer: AgentId, qty: f64, price: f64) {
         self.order_book.bids.push(Bid { agent_id: buyer, price, quantity: qty });
     }
     fn match_orders(&mut self) -> Vec<Trade> {
         let mut trades = Vec::new();
+        println!("Matching orders in financial market: {}", self.name);
         trades
     }
 }
@@ -189,13 +226,22 @@ impl Exchange {
 
         exchange
     }
-
     pub fn register_goods_market(&mut self, good_id: GoodId) {
-        self.goods_markets.entry(good_id.clone()).or_insert_with(|| GoodsMarket::new(good_id));
+        let name = CATALOGUE.get_good_name(&good_id)
+            .unwrap_or("Unknown Good")
+            .to_string();
+        
+        self.goods_markets
+            .entry(good_id)
+            .or_insert_with(|| GoodsMarket::new(good_id, name));
     }
-
+    
     pub fn register_financial_market(&mut self, market_id: FinancialMarketId) {
-        self.financial_markets.entry(market_id.clone()).or_insert_with(|| FinancialMarket::new(market_id));
+        let name = market_id.name().to_string();
+        
+        self.financial_markets
+            .entry(market_id.clone())
+            .or_insert_with(|| FinancialMarket::new(market_id, name));
     }
 
     pub fn goods_market(&self, good_id: &GoodId) -> Option<&GoodsMarket> {
@@ -212,5 +258,9 @@ impl Exchange {
 
     pub fn financial_market_mut(&mut self, market_id: &FinancialMarketId) -> Option<&mut FinancialMarket> {
         self.financial_markets.get_mut(market_id)
+    }
+    pub fn clear_markets(&mut self) {
+        let trades = self.goods_markets.iter_mut().map(|(_, market)| market.match_orders()).collect::<Vec<_>>();
+        let trades = self.financial_markets.iter_mut().map(|(_, market)| market.match_orders()).collect::<Vec<_>>();
     }
 }

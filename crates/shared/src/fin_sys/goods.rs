@@ -129,6 +129,19 @@ impl GoodsRegistry {
     pub fn get_recipe_id_by_name(&self, name: &str) -> Option<RecipeId> {
         self.name_to_recipe_id.get(name).copied()
     }
+        pub fn get_good_name(&self, id: &GoodId) -> Option<&str> {
+        self.goods.get(id).map(|good| good.name.as_str())
+    }
+    
+    pub fn get_good_slug(&self, id: &GoodId) -> Option<&str> {
+        self.slug_to_id.iter()
+            .find(|(_, good_id)| *good_id == id)  // Compare references directly
+            .map(|(slug, _)| slug.as_str())       // Fix syntax error: use _ not *
+    }
+    
+    pub fn get_recipe_name(&self, id: &RecipeId) -> Option<&str> {
+        self.recipes.get(id).map(|recipe| recipe.name.as_str())
+    }
 }
 
 pub static CATALOGUE: Lazy<GoodsRegistry> = Lazy::new(|| {
