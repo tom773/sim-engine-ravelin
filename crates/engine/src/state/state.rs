@@ -1,7 +1,8 @@
-use crate::{AgentFactory, StateEffect, execution::domain::DomainRegistry};
+use crate::{AgentFactory, StateEffect, execution::domain::DomainRegistry, state::scenario::Scenario};
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 use shared::*;
+use std::collections::HashMap;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SimState {
@@ -16,9 +17,6 @@ pub struct SimState {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SimConfig {
     pub iterations: u32,
-    pub consumer_count: u32,
-    pub firm_count: u32,
-    pub scenario: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -29,7 +27,7 @@ pub struct SimHistory {
 
 impl Default for SimConfig {
     fn default() -> Self {
-        Self { iterations: 5, consumer_count: 2, firm_count: 1, scenario: "default".to_string() }
+        Self { iterations: 100 }
     }
 }
 impl Default for SimState {
@@ -52,52 +50,58 @@ impl SimState {
     }
 }
 
-pub fn initialize_economy(config: &SimConfig, rng: &mut StdRng) -> SimState {
+pub fn initialize_economy_from_scenario(scenario: &Scenario, rng: &mut StdRng) -> SimState {
     let mut ss = SimState::default();
+    ss.config.iterations = scenario.config.iterations;
 
     ss.financial_system.goods =
-        GoodsRegistry::from_yaml(include_str!("../../../../config/goods.yaml")).expect("Failed to load goods and recipes");
+        GoodsRegistry::from_toml(include_str!("./config/goods.toml")).expect("Failed to load goods and recipes");
 
     for good_id in ss.financial_system.goods.goods.keys() {
         ss.financial_system.exchange.register_goods_market(*good_id);
     }
+    for tenor in &scenario.config.treasury_tenors_to_register {
+        ss.financial_system.exchange.register_financial_market(FinancialMarketId::Treasury { tenor: *tenor });
+    }
 
-    let oil_refining_recipe_id = ss.financial_system.goods.get_recipe_id_by_name("Oil Refining");
-
-    let mut factory = AgentFactory::new(&mut ss, rng);
-
-    let bank_ids: Vec<AgentId> = (0..2)
-        .map(|_| {
-            let bank = factory.create_bank();
-            bank.id
+    let recipe_id_map: HashMap<String, Option<RecipeId>> = scenario
+        .firms
+        .iter()
+        .map(|f_conf| {
+            (f_conf.recipe_name.clone(), ss.financial_system.goods.get_recipe_id_by_name(&f_conf.recipe_name))
         })
         .collect();
 
-    let mut income_distribution = vec![];
-    let mut consumer_ids = vec![];
-    
-    for i in 0..config.consumer_count {
-        let bank_id = bank_ids[i as usize % bank_ids.len()].clone();
-        let consumer = factory.create_consumer(bank_id.clone());
-        
-        consumer_ids.push(consumer.id.clone());  // Store the ID
-        let annual_income = consumer.income * 52.0;
-        income_distribution.push(annual_income);
+    let mut factory = AgentFactory::new(&mut ss, rng);
+    let central_bank_id = factory.ss.financial_system.central_bank.id.clone();
+
+    let mut bank_id_map = HashMap::new();
+    let mut consumer_ids = Vec::new();
+
+    for bank_conf in &scenario.banks {
+        let bank = factory.create_bank_from_config(bank_conf, &central_bank_id);
+        bank_id_map.insert(bank_conf.id.clone(), bank.id);
     }
 
-    for i in 0..config.firm_count {
-        let bank_id = bank_ids[i as usize % bank_ids.len()].clone();
-        
+    for consumer_conf in &scenario.consumers {
+        let bank_id = bank_id_map.get(&consumer_conf.bank_id).expect("Bank ID not found for consumer").clone();
+        let consumer = factory.create_consumer_from_config(consumer_conf, bank_id, &central_bank_id);
+        consumer_ids.push(consumer.id);
+    }
+
+    for (i, firm_conf) in scenario.firms.iter().enumerate() {
+        let bank_id = bank_id_map.get(&firm_conf.bank_id).expect("Bank ID not found for firm").clone();
+        let recipe_id = *recipe_id_map.get(&firm_conf.recipe_name).expect("Recipe name not found in map");
+
         if !consumer_ids.is_empty() {
-            let consumer_to_hire = &consumer_ids[i as usize % consumer_ids.len()];
-            let _firm = factory.create_firm(bank_id.clone(), oil_refining_recipe_id, consumer_to_hire);
+            let employee_id = &consumer_ids[i % consumer_ids.len()];
+            factory.create_firm_from_config(firm_conf, bank_id, recipe_id, employee_id, &central_bank_id);
         } else {
-            println!("Warning: No consumers available to hire for firm {}", i);
+            println!("Warning: No consumers available to hire for firm {}", firm_conf.name);
         }
     }
 
     drop(factory);
-
     ss
 }
 

@@ -60,7 +60,7 @@ impl<'a> FinancialValidator<'a> {
         }
     }
     
-    fn ensure_sufficient_cash(&self, agent_id: &AgentId, amount: f64) -> Result<(), String> {
+    pub fn ensure_sufficient_cash(&self, agent_id: &AgentId, amount: f64) -> Result<(), String> {
         let cash = self.fs.get_cash_assets(agent_id);
         if cash >= amount {
             Ok(())

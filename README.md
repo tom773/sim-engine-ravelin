@@ -89,12 +89,6 @@ The simulation follows this flow:
 4. **Balance Sheet Updates**: All transactions update the relevant balance sheets in real-time
 
 The ML model is trained on actual consumer spending patterns, so the simulated consumers behave somewhat realistically!
-
-Excellent question. You've built a robust and well-structured foundation. Moving to a "professional-grade" simulator involves deepening the existing mechanics and adding new, interconnected systems that capture more of the complexity of a real economy.
-
-Think of it as moving from a detailed sketch to a full-scale, living blueprint of an economy. Here is a roadmap of features and mechanics you can add, categorized by domain.
-
-
 ### Roadmap
 
 #### 1: Deepening the Financial System

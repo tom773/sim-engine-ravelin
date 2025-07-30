@@ -1,13 +1,19 @@
-use crate::GoodId;
+use crate::{prep_serde_as, GoodId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
+use serde_with::serde_as;
+use std::{str::FromStr, fmt};
+use sscanf::RegexRepresentation;
+use thiserror::Error;
 
 #[derive(Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq, Copy)]
 pub struct AgentId(pub Uuid);
+prep_serde_as!(AgentId, Uuid);
 
 #[derive(Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq, Copy)]
 pub struct InstrumentId(pub Uuid);
+prep_serde_as!(InstrumentId, Uuid);
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct FinancialInstrument {
@@ -60,7 +66,7 @@ pub struct CollateralInfo {
     pub collateral_type: String,
     pub value: f64,
 }
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum CreditRating {
     AAA,
     AA,
@@ -72,6 +78,35 @@ pub enum CreditRating {
     CC,
     C,
     D,
+}
+impl fmt::Display for CreditRating {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The {:?} format for a simple enum variant is just its name.
+        write!(f, "{:?}", self)
+    }
+}
+
+#[derive(Debug, Error)]
+#[error("'{0}' is not a valid CreditRating")]
+pub struct ParseCreditRatingError(String);
+
+impl FromStr for CreditRating {
+    type Err = ParseCreditRatingError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "AAA" => Ok(CreditRating::AAA),
+            "AA" => Ok(CreditRating::AA),
+            "A" => Ok(CreditRating::A),
+            "BBB" => Ok(CreditRating::BBB),
+            "BB" => Ok(CreditRating::BB),
+            "B" => Ok(CreditRating::B),
+            "CCC" => Ok(CreditRating::CCC),
+            "CC" => Ok(CreditRating::CC),
+            "C" => Ok(CreditRating::C),
+            "D" => Ok(CreditRating::D),
+            _ => Err(ParseCreditRatingError(s.to_string())),
+        }
+    }
 }
 impl CreditRating {
     pub fn convert_fico(&self) -> u32 {
@@ -88,7 +123,27 @@ impl CreditRating {
             CreditRating::D => 300,
         }
     }
+    pub fn name(&self) -> &'static str {
+        match self {
+            CreditRating::AAA => "AAA",
+            CreditRating::AA => "AA",
+            CreditRating::A => "A",
+            CreditRating::BBB => "BBB",
+            CreditRating::BB => "BB",
+            CreditRating::B => "B",
+            CreditRating::CCC => "CCC",
+            CreditRating::CC => "CC",
+            CreditRating::C => "C",
+            CreditRating::D => "D",
+        }
+    }
 }
+
+impl RegexRepresentation for CreditRating {
+    const REGEX: &'static str = r"AAA|AA|A|BBB|BB|B|CCC|CC|C|D";
+}
+
+#[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct RealAsset {
     pub id: AssetId,
@@ -100,14 +155,20 @@ pub struct RealAsset {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Copy)]
 pub struct AssetId(pub Uuid);
+prep_serde_as!(AssetId, Uuid);
 
+#[serde_as]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum RealAssetType {
     RealEstate { address: String, property_type: String },
-    Inventory { goods: HashMap<GoodId, InventoryItem> },
+    Inventory {
+        #[serde_as(as = "HashMap<_, _>")]
+        goods: HashMap<GoodId, InventoryItem>
+    },
     Equipment { description: String, depreciation_rate: f64 },
     IntellectualProperty { description: String },
 }
+
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct InventoryItem {
@@ -220,7 +281,7 @@ macro_rules! loan {
 
 #[macro_export]
 macro_rules! bond {
-    ($investor:expr, $issuer:expr, $principal:expr, $coupon_rate:expr, $maturity:expr, $face_value:expr, $rating:expr, $originated:expr) => {
+    ($investor:expr, $issuer:expr, $principal:expr, $coupon_rate:expr, $maturity:expr, $face_value:expr, $rating:expr, $originated:expr, $bond_type:expr) => {
         FinancialInstrument {
             id: InstrumentId(Uuid::new_v4()),
             creditor: $investor,
@@ -229,7 +290,7 @@ macro_rules! bond {
             interest_rate: $coupon_rate,
             maturity: Some($maturity),
             instrument_type: InstrumentType::Bond {
-                bond_type: BondType::Corporate { spread: 0.0 },
+                bond_type: $bond_type, 
                 coupon_rate: $coupon_rate,
                 face_value: $face_value,
                 rating: $rating,

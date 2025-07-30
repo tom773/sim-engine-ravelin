@@ -1,14 +1,19 @@
 use crate::{types::*, *};
 use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 use std::collections::HashMap;
 use uuid::Uuid;
 
+#[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FinancialSystem {
+    #[serde_as(as = "HashMap<_, _>")]
     pub instruments: HashMap<InstrumentId, FinancialInstrument>,
+    #[serde_as(as = "HashMap<_, _>")]
     pub balance_sheets: HashMap<AgentId, BalanceSheet>,
-    pub central_bank: CentralBank,
+    #[serde_as(as = "HashMap<_, _>")]
     pub commercial_banks: HashMap<AgentId, Bank>,
+    pub central_bank: CentralBank,
     pub exchange: Exchange,
     pub goods: GoodsRegistry,
 }

@@ -1,8 +1,8 @@
 #[allow(unused)]
 pub mod execution;
 pub use execution::*;
-mod test;
 pub mod state;
+mod test;
 use rand::prelude::*;
 pub use shared::*;
 pub use state::*;
@@ -12,7 +12,7 @@ pub fn tick(sim_state: &mut SimState) -> (&mut SimState, Vec<SimAction>, Vec<Sta
     let mut rng = StdRng::from_os_rng();
 
     let mut all_sim_actions = Vec::new();
-     
+
     let banks: Vec<Bank> = sim_state.financial_system.commercial_banks.values().cloned().collect();
     for bank in &banks {
         let decisions = bank.decide(&sim_state.financial_system, &mut rng);
@@ -42,10 +42,56 @@ pub fn tick(sim_state: &mut SimState) -> (&mut SimState, Vec<SimAction>, Vec<Sta
             }
         }
     }
-    sim_state.financial_system.exchange.clear_markets();
+
     if let Err(e) = TransactionExecutor::apply(&all_effects, sim_state) {
-        println!("Error applying effects: {}", e);
+        println!("Error applying initial effects: {}", e);
     }
+
+    let trades = sim_state.financial_system.exchange.clear_markets();
+    let mut settlement_effects = Vec::new();
+
+    for trade in &trades {
+        let total_value = trade.quantity * trade.price;
+
+        let payment_action = SimAction::Transfer {
+            agent_id: trade.buyer.clone(),
+            from: trade.buyer.clone(),
+            to: trade.seller.clone(),
+            amount: total_value,
+        };
+
+        let payment_result = TransactionExecutor::execute(&payment_action, sim_state);
+
+        if payment_result.success {
+            settlement_effects.extend(payment_result.effects);
+
+            match &trade.market_id {
+                MarketId::Goods(good_id) => {
+                    settlement_effects.push(StateEffect::RemoveInventory {
+                        owner: trade.seller.clone(),
+                        good_id: *good_id,
+                        quantity: trade.quantity,
+                    });
+                    settlement_effects.push(StateEffect::AddInventory {
+                        owner: trade.buyer.clone(),
+                        good_id: *good_id,
+                        quantity: trade.quantity,
+                        unit_cost: trade.price,
+                    });
+                }
+                MarketId::Financial(_) => {}
+                MarketId::Labour(_) => {}
+            }
+        } else {
+            println!("Trade settlement failed for trade: {:?}", trade);
+        }
+    }
+
+    if let Err(e) = TransactionExecutor::apply(&settlement_effects, sim_state) {
+        println!("Error applying settlement effects: {}", e);
+    }
+
+    all_effects.extend(settlement_effects);
 
     (sim_state, all_sim_actions.clone(), all_effects.clone())
 }

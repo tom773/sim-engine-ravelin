@@ -28,8 +28,13 @@ impl ExecutionDomain for TradingDomain {
                     let validator = FirmValidator::new(&state.financial_system);
                     validator.validate_sell_inventory(agent_id, good_id, *quantity, *price).is_ok()
                 } else {
+                    // TODO: Add validation for selling financial instruments
                     true
                 }
+            }
+            SimAction::PostBid { agent_id, quantity, price, .. } => {
+                let validator = FinancialValidator::new(&state.financial_system);
+                validator.ensure_sufficient_cash(agent_id, *quantity * *price).is_ok()
             }
             _ => true,
         }

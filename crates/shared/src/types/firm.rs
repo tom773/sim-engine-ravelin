@@ -5,7 +5,8 @@ use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::collections::HashMap;
-
+use serde_with::serde_as;
+    
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum FirmDecision {
     Produce { recipe_id: RecipeId, batches: u32 },
@@ -59,7 +60,7 @@ impl FirmDecisionModel for BasicFirmDecisionModel {
             for employee in firm.get_employees() {
                 decisions.push(FirmDecision::PayWages {
                     employee: employee.clone(),
-                    amount: 1000.0, // TODO replace with either consumer income, or market based wage
+                    amount: 1000.0,
                 });
             }
         }
@@ -81,6 +82,7 @@ impl FirmDecisionModel for BasicFirmDecisionModel {
     }
 }
 
+#[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Firm {
     pub id: AgentId,
@@ -91,6 +93,7 @@ pub struct Firm {
     pub productivity: f64,
     pub recipe: Option<RecipeId>,
     pub decision_model: Box<dyn FirmDecisionModel>,
+    #[serde_as(as = "HashMap<_, _>")]
     pub committed_inventory: HashMap<GoodId, InventoryItem>,
 }
 
@@ -160,8 +163,8 @@ impl Agent for Firm {
                     actions.push(SimAction::PostAsk {
                         agent_id: self.id.clone(),
                         market_id: MarketId::Goods(*good_id),
-                        price: 100.0, // TODO pricing mechanism 
-                        quantity: *quantity, // Assuming each batch produces 10 units
+                        price: 100.0,
+                        quantity: *quantity,
                     });
                 }
             }

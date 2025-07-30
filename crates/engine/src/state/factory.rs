@@ -1,10 +1,8 @@
-use fake::Fake;
-use fake::faker::company::en::*;
 use rand::prelude::*;
-use shared::*;
+use shared::{*, types::finance::{BondType, CreditRating}};
 use uuid::Uuid;
 
-use crate::SimState;
+use crate::{state::scenario::{BankConfig, ConsumerConfig, FirmConfig}, *};
 
 pub struct AgentFactory<'a> {
     pub ss: &'a mut SimState,
@@ -16,65 +14,54 @@ impl<'a> AgentFactory<'a> {
         Self { ss, rng }
     }
 
-    pub fn create_consumer(&mut self, bank_id: AgentId) -> Consumer {
+    pub fn create_bank_from_config(&mut self, config: &BankConfig, cb_id: &AgentId) -> Bank {
+        let bank = Bank::new(config.name.clone(), 250.0, 50.0);
+        self.ss.financial_system.balance_sheets.insert(bank.id, BalanceSheet::new(bank.id));
+
+        let reserves = reserves!(bank.id, *cb_id, config.initial_reserves, 4.0, 0);
+        self.ss.financial_system.create_instrument(reserves).unwrap();
+
+        for bond_conf in &config.initial_bonds {
+            let bond = bond!(bank.id, *cb_id, bond_conf.face_value, 2.5, 365 * 10, bond_conf.face_value, CreditRating::AAA, 0, BondType::Government);
+            self.ss.financial_system.create_instrument(bond).unwrap();
+        }
+
+        self.ss.financial_system.commercial_banks.insert(bank.id, bank.clone());
+        bank
+    }
+
+    pub fn create_consumer_from_config(&mut self, config: &ConsumerConfig, bank_id: AgentId, cb_id: &AgentId) -> Consumer {
         let agent_id = AgentId(Uuid::new_v4());
+        self.ss.financial_system.balance_sheets.insert(agent_id, BalanceSheet::new(agent_id));
 
-        self.ss.financial_system.balance_sheets.insert(agent_id.clone(), BalanceSheet::new(agent_id.clone()));
-
-        let age = 35;
-        let annual_income = 60_000.0;
+        let cash = cash!(agent_id, config.initial_cash, *cb_id, 0);
+        self.ss.financial_system.create_or_consolidate_instrument(cash).unwrap();
 
         let decision_model = Box::new(BasicDecisionModel{});
-
-        let mut c = Consumer::new(age, agent_id.clone(), bank_id.clone(), decision_model);
-        c.income = annual_income / 52.0;
+        let mut c = Consumer::new(35, agent_id, bank_id, decision_model);
+        c.income = config.income / 52.0; // Convert annual income to weekly
 
         self.ss.consumers.push(c.clone());
         c
     }
 
-    pub fn create_bank(&mut self) -> Bank {
-        let bank_names = ["Bank", "Financial", "Savings & Loan", "Credit Union"];
-        let name =
-            format!("{} {}", CompanyName().fake::<String>(), bank_names[self.rng.random_range(0..bank_names.len())]);
-        let lending_spread = 250.0;
-        let deposit_spread = 50.0;
-
-        let bank = Bank::new(name, lending_spread, deposit_spread);
-        self.ss.financial_system.balance_sheets.insert(bank.id.clone(), BalanceSheet::new(bank.id.clone()));
-
-        let initial_reserves = 1_000.0;
-        let reserves = reserves!(
-            bank.id.clone(),
-            self.ss.financial_system.central_bank.id.clone(),
-            initial_reserves,
-            self.ss.financial_system.central_bank.policy_rate - 50.0,
-            0
-        );
-
-        self.ss.financial_system.create_instrument(reserves).expect("Failed to create initial reserves");
-
-        self.ss.financial_system.commercial_banks.insert(bank.id.clone(), bank.clone());
-        bank
-    }
-
-    pub fn create_firm(&mut self, bank_id: AgentId, recipe_id: Option<RecipeId>, to_hire: &AgentId) -> Firm {
+    pub fn create_firm_from_config(&mut self, config: &FirmConfig, bank_id: AgentId, recipe_id: Option<RecipeId>, employee_id: &AgentId, cb_id: &AgentId) -> Firm {
         let firm_id = AgentId(Uuid::new_v4());
-        let firm_name = CompanyName().fake::<String>();
+        self.ss.financial_system.balance_sheets.insert(firm_id, BalanceSheet::new(firm_id));
 
-        self.ss.financial_system.balance_sheets.insert(firm_id.clone(), BalanceSheet::new(firm_id.clone()));
-        let initial_cash = 20000.0;
-        let cash_instrument = cash!(firm_id.clone(), initial_cash, self.ss.financial_system.central_bank.id.clone(), 0);
-        self.ss.financial_system.create_or_consolidate_instrument(cash_instrument).unwrap();
+        let cash = cash!(firm_id, config.initial_cash, *cb_id, 0);
+        self.ss.financial_system.create_or_consolidate_instrument(cash).unwrap();
 
-        let input = good_id!("oil");
         let bs = self.ss.financial_system.balance_sheets.get_mut(&firm_id).unwrap();
-        bs.add_to_inventory(&input, 100.0, 50.0); // Add initial inventory
-        let mut f = Firm::new(firm_id, bank_id, firm_name, recipe_id);
-        f.employees.push(to_hire.clone());
-        f.wage_rate = 20.0;
-        f.productivity = 2.0;
+        for inv_conf in &config.initial_inventory {
+            let good_id = self.ss.financial_system.goods.get_good_id_by_slug(&inv_conf.good_slug).unwrap();
+            bs.add_to_inventory(&good_id, inv_conf.quantity, inv_conf.unit_cost);
+        }
 
+        let mut f = Firm::new(firm_id, bank_id, config.name.clone(), recipe_id);
+        f.employees.push(*employee_id);
+        f.wage_rate = 20.0;
+        
         self.ss.firms.push(f.clone());
         f
     }

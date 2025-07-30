@@ -2,12 +2,17 @@ use crate::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
+use serde_with::serde_as;
 
+#[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BalanceSheet {
     pub agent_id: AgentId,
+    #[serde_as(as = "HashMap<_, _>")]
     pub assets: HashMap<InstrumentId, FinancialInstrument>,
+    #[serde_as(as = "HashMap<_, _>")]
     pub liabilities: HashMap<InstrumentId, FinancialInstrument>,
+    #[serde_as(as = "HashMap<_, _>")]
     pub real_assets: HashMap<AssetId, RealAsset>,
 }
 
