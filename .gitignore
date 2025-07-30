@@ -1,6 +1,7 @@
 .env
 *.bin
 */node_modules
+ref.md
 */debug
 */target
 **/*.rs.bk

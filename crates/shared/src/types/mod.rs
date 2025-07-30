@@ -13,9 +13,6 @@ pub use bank::*;
 pub mod balance_sheet;
 pub use balance_sheet::*;
 
-pub mod finance;
-pub use finance::*;
-
 pub mod ml_interface;
 pub use ml_interface::*;
 

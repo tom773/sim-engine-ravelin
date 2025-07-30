@@ -19,7 +19,7 @@ impl BankingDomain {
             if let Some((cash_id, cash_inst)) = depositor_bs
                 .assets
                 .iter()
-                .find(|(_, inst)| matches!(inst.instrument_type, InstrumentType::Cash) && inst.principal >= amount)
+                .find(|(_, inst)| inst.details.as_any().is::<CashDetails>() && inst.principal >= amount)
             {
                 if cash_inst.principal == amount {
                     effects.push(StateEffect::TransferInstrument { id: cash_id.clone(), new_creditor: bank.clone() });
@@ -30,7 +30,7 @@ impl BankingDomain {
                     });
 
                     let bank_cash =
-                        cash!(bank.clone(), amount, state.financial_system.central_bank.id.clone(), state.ticknum);
+                        cash!(bank.clone(), amount, state.financial_system.central_bank.id.clone(), state.current_date);
                     effects.push(StateEffect::CreateInstrument(bank_cash));
                 }
 
@@ -39,7 +39,7 @@ impl BankingDomain {
                     bank.clone(),
                     amount,
                     state.financial_system.central_bank.policy_rate - 200.0,
-                    state.ticknum
+                    state.current_date
                 );
                 effects.push(StateEffect::CreateInstrument(deposit));
             }
@@ -61,7 +61,7 @@ impl BankingDomain {
         let mut effects = vec![];
         for consumer in &state.consumers {
             let cash =
-                cash!(consumer.id.clone(), 1000.0, state.financial_system.central_bank.id.clone(), state.ticknum);
+                cash!(consumer.id.clone(), 1000.0, state.financial_system.central_bank.id.clone(), state.current_date);
             effects.push(StateEffect::CreateInstrument(cash));
         }
         println!("Injecting liquidity: {:?}", effects);
@@ -88,7 +88,8 @@ impl BankingDomain {
         if let Some(account_bs) = state.financial_system.balance_sheets.get(account_holder) {
             if let Some((deposit_id, deposit)) = account_bs.assets.iter().find(|(_, inst)| {
                 inst.debtor == *bank
-                    && matches!(inst.instrument_type, InstrumentType::DemandDeposit)
+                    && (inst.details.as_any().is::<DemandDepositDetails>()
+                        || inst.details.as_any().is::<SavingsDepositDetails>())
                     && inst.principal >= amount
             }) {
                 if deposit.principal == amount {
@@ -102,7 +103,7 @@ impl BankingDomain {
 
                 if let Some(bank_bs) = state.financial_system.balance_sheets.get(bank) {
                     if let Some((cash_id, cash_inst)) = bank_bs.assets.iter().find(|(_, inst)| {
-                        matches!(inst.instrument_type, InstrumentType::Cash) && inst.principal >= amount
+                        inst.details.as_any().is::<CashDetails>() && inst.principal >= amount
                     }) {
                         if cash_inst.principal == amount {
                             effects.push(StateEffect::TransferInstrument {
@@ -119,7 +120,7 @@ impl BankingDomain {
                                 account_holder.clone(),
                                 amount,
                                 state.financial_system.central_bank.id.clone(),
-                                state.ticknum
+                                state.current_date
                             );
                             effects.push(StateEffect::CreateInstrument(withdrawn_cash));
                         }
@@ -145,26 +146,28 @@ impl BankingDomain {
     fn execute_transfer(&self, from: &AgentId, to: &AgentId, amount: f64, state: &SimState) -> ExecutionResult {
         let mut effects = vec![];
         if let Some(from_bs) = state.financial_system.balance_sheets.get(from) {
-            if let Some((from_inst_id, from_inst)) = from_bs.assets.iter().find(|(_, inst)| {
-                matches!(inst.instrument_type, InstrumentType::Cash) && inst.principal >= amount
-            }) {
+            if let Some((from_inst_id, from_inst)) = from_bs
+                .assets
+                .iter()
+                .find(|(_, inst)| inst.details.as_any().is::<CashDetails>() && inst.principal >= amount)
+            {
+
                 if from_inst.principal == amount {
-                    effects.push(StateEffect::TransferInstrument {
-                        id: from_inst_id.clone(),
-                        new_creditor: to.clone(),
-                    });
+                    effects
+                        .push(StateEffect::TransferInstrument { id: from_inst_id.clone(), new_creditor: to.clone() });
                 } else {
                     effects.push(StateEffect::UpdateInstrument {
                         id: from_inst_id.clone(),
                         new_principal: from_inst.principal - amount,
                     });
 
-                    let to_cash = cash!(to.clone(), amount, state.financial_system.central_bank.id.clone(), state.ticknum);
+                    let to_cash =
+                        cash!(to.clone(), amount, state.financial_system.central_bank.id.clone(), state.current_date);
                     effects.push(StateEffect::CreateInstrument(to_cash));
                 }
             }
         }
-        
+
         let success = !effects.is_empty();
         ExecutionResult {
             success,
@@ -176,7 +179,7 @@ impl BankingDomain {
             },
         }
     }
-     
+
     fn execute_update_reserves(&self, _bank: &AgentId, _amount_change: f64, _state: &SimState) -> ExecutionResult {
         ExecutionResult {
             success: false,
@@ -271,7 +274,8 @@ mod banking_tests {
 
         state.financial_system.balance_sheets.insert(creditor, BalanceSheet::new(creditor));
 
-        let inst = cash!(creditor, 1000.0, debtor, 0);
+        // Use the updated macro with the current_date
+        let inst = cash!(creditor, 1000.0, debtor, state.current_date);
         let effect = StateEffect::CreateInstrument(inst);
 
         assert!(effect.apply(&mut state).is_ok());

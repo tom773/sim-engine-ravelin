@@ -19,13 +19,15 @@ impl FinancialStatistics for FinancialSystem {
                 continue;
             }
             
+            // Fix 1: Check for CashDetails
             m1 += bs.assets.values()
-                .filter(|inst| matches!(inst.instrument_type, InstrumentType::Cash))
+                .filter(|inst| inst.details.as_any().is::<CashDetails>())
                 .map(|inst| inst.principal)
                 .sum::<f64>();
                 
+            // Fix 2: Check for DemandDepositDetails
             m1 += bs.assets.values()
-                .filter(|inst| matches!(inst.instrument_type, InstrumentType::DemandDeposit))
+                .filter(|inst| inst.details.as_any().is::<DemandDepositDetails>())
                 .map(|inst| inst.principal)
                 .sum::<f64>();
         }
@@ -41,7 +43,7 @@ impl FinancialStatistics for FinancialSystem {
             }
             
             m2 += bs.assets.values()
-                .filter(|inst| matches!(inst.instrument_type, InstrumentType::SavingsDeposit { .. }))
+                .filter(|inst| inst.details.as_any().is::<SavingsDepositDetails>())
                 .map(|inst| inst.principal)
                 .sum::<f64>();
         }
@@ -60,4 +62,4 @@ pub struct MonetaryAggregates {
     pub m0: f64,
     pub m1: f64,
     pub m2: f64,
-} 
+}

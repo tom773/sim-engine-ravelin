@@ -46,6 +46,7 @@ async fn main() {
         .route("/init", get(init))
         .route("/tick", get(routes::tick))
         .route("/inject", get(routes::inject))
+        .route("/tick_ret_date", get(routes::tick_ret_date))
         .with_state(state)
         .layer(cors);
 

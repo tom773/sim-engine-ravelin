@@ -4,6 +4,87 @@ use serde_with::serde_as;
 use std::collections::HashMap;
 use uuid::Uuid;
 
+// --- Core Financial System IDs and Data Structures ---
+
+#[derive(Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq, Copy)]
+pub struct AgentId(pub Uuid);
+prep_serde_as!(AgentId, Uuid);
+
+#[derive(Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq, Copy)]
+pub struct InstrumentId(pub Uuid);
+prep_serde_as!(InstrumentId, Uuid);
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Copy)]
+pub struct AssetId(pub Uuid);
+prep_serde_as!(AssetId, Uuid);
+
+#[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct RealAsset {
+    pub id: AssetId,
+    pub asset_type: RealAssetType,
+    pub owner: AgentId,
+    pub market_value: f64,
+    pub acquired_date: u32,
+}
+
+#[serde_as]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum RealAssetType {
+    RealEstate { address: String, property_type: String },
+    Inventory {
+        #[serde_as(as = "HashMap<_, _>")]
+        goods: HashMap<GoodId, InventoryItem>
+    },
+    Equipment { description: String, depreciation_rate: f64 },
+    IntellectualProperty { description: String },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct InventoryItem {
+    pub quantity: f64,
+    pub unit_cost: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Transaction {
+    pub id: Uuid,
+    pub date: u32,
+    pub qty: f64,
+    pub from: AgentId,
+    pub to: AgentId,
+    pub tx_type: TransactionType,
+    pub instrument_id: Option<InstrumentId>,
+}
+impl Transaction {
+    pub fn new(
+        tx_type: TransactionType,
+        inst: InstrumentId,
+        from: AgentId,
+        to: AgentId,
+        amount: f64,
+    ) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            date: chrono::Utc::now().timestamp() as u32,
+            from,
+            to,
+            qty: amount,
+            tx_type,
+            instrument_id: Some(inst),
+        }
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum TransactionType {
+    Deposit { holder: AgentId, bank: AgentId, amount: f64 },
+    Withdrawal { holder: AgentId, bank: AgentId, amount: f64 },
+    Transfer { from: AgentId, to: AgentId, amount: f64 },
+    InterestPayment,
+}
+
+// --- The Main Financial System Struct ---
+
 #[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FinancialSystem {

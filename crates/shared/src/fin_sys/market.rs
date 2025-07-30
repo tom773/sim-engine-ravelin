@@ -1,5 +1,4 @@
-use crate::fin_sys::goods::{CATALOGUE, GoodId, GoodsRegistry};
-use crate::types::finance::{AgentId, CreditRating, ParseCreditRatingError};
+use crate::*;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use std::collections::HashMap;

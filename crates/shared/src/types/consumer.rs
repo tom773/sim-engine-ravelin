@@ -137,7 +137,7 @@ impl DecisionModel for BasicDecisionModel {
             .map(|bs| {
                 bs.assets
                     .values()
-                    .filter(|inst| matches!(inst.instrument_type, crate::InstrumentType::Cash))
+                    .filter(|inst| inst.details.as_any().is::<CashDetails>())
                     .map(|inst| inst.principal)
                     .sum::<f64>()
             })
@@ -189,7 +189,7 @@ impl DecisionModel for MLDecisionModel {
                 .map(|bs| {
                     bs.assets
                         .values()
-                        .filter(|inst| matches!(inst.instrument_type, crate::InstrumentType::Cash))
+                        .filter(|inst| inst.details.as_any().is::<CashDetails>())
                         .map(|inst| inst.principal)
                         .sum::<f64>()
                 })

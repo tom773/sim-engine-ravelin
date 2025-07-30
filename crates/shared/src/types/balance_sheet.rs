@@ -1,8 +1,8 @@
 use crate::*;
 use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 use std::collections::HashMap;
 use uuid::Uuid;
-use serde_with::serde_as;
 
 #[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -24,7 +24,9 @@ impl BalanceSheet {
     pub fn liquid_assets(&self) -> f64 {
         self.assets
             .values()
-            .filter(|inst| matches!(inst.instrument_type, InstrumentType::Cash | InstrumentType::DemandDeposit))
+            .filter(|inst| {
+                inst.details.as_any().is::<CashDetails>() || inst.details.as_any().is::<DemandDepositDetails>()
+            })
             .map(|inst| inst.principal)
             .sum()
     }
@@ -33,11 +35,10 @@ impl BalanceSheet {
         self.assets
             .values()
             .filter(|inst| {
-                inst.debtor == *bank_id
-                    && matches!(
-                        inst.instrument_type,
-                        InstrumentType::DemandDeposit | InstrumentType::SavingsDeposit { .. }
-                    )
+                inst.debtor == *bank_id && (
+                    inst.details.as_any().is::<DemandDepositDetails>() 
+                    || inst.details.as_any().is::<SavingsDepositDetails>()
+                )
             })
             .map(|inst| inst.principal)
             .sum()
@@ -84,7 +85,7 @@ impl BalanceSheetQuery for FinancialSystem {
             .map(|bs| {
                 bs.assets
                     .values()
-                    .filter(|inst| matches!(inst.instrument_type, InstrumentType::Cash))
+                    .filter(|inst| inst.details.as_any().is::<CashDetails>())
                     .map(|inst| inst.principal)
                     .sum::<f64>()
             })
@@ -106,7 +107,7 @@ impl BalanceSheetQuery for FinancialSystem {
         self.balance_sheets.get(agent_id).map(|bs| {
             bs.assets
                 .values()
-                .filter(|inst| matches!(inst.instrument_type, InstrumentType::CentralBankReserves))
+                .filter(|inst| inst.details.as_any().is::<CentralBankReservesDetails>())
                 .map(|inst| inst.principal)
                 .sum::<f64>()
         })
@@ -177,8 +178,7 @@ impl InventoryQuery for BalanceSheet {
             new_id
         });
 
-        if let RealAssetType::Inventory { goods } = &mut self.real_assets.get_mut(&id_to_use).unwrap().asset_type
-        {
+        if let RealAssetType::Inventory { goods } = &mut self.real_assets.get_mut(&id_to_use).unwrap().asset_type {
             goods
         } else {
             unreachable!();
@@ -196,7 +196,7 @@ impl InventoryQuery for BalanceSheet {
             item.unit_cost = 0.0;
         }
         item.quantity = new_total_quantity;
-        
+
         self.update_inventory_market_value();
     }
 

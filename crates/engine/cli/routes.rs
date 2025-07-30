@@ -7,6 +7,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use serde::{Serialize, Deserialize};
 use crate::{Stats, Res};
+use std::collections::HashMap;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TickInfo {
@@ -38,4 +39,10 @@ pub async fn inject(State(state): State<Arc<RwLock<SimState>>>) -> Json<Res> {
         messages: None,
         state: state_guard.clone(),
     })
+}
+pub async fn tick_ret_date(State(state): State<Arc<RwLock<SimState>>>) -> Json<HashMap<InstrumentId, FinancialInstrument>> {
+    let mut state_guard = state.write().await;
+    let (ss, _actions, _effects) = engine::tick(&mut state_guard);
+    let instruments = ss.financial_system.instruments.clone();
+    Json(instruments)
 }

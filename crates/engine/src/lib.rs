@@ -6,9 +6,12 @@ mod test;
 use rand::prelude::*;
 pub use shared::*;
 pub use state::*;
+use chrono::Duration;
 
 pub fn tick(sim_state: &mut SimState) -> (&mut SimState, Vec<SimAction>, Vec<StateEffect>) {
     sim_state.ticknum += 1;
+    sim_state.current_date += Duration::days(1);
+
     let mut rng = StdRng::from_os_rng();
 
     let mut all_sim_actions = Vec::new();

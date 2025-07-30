@@ -3,6 +3,7 @@ use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 use shared::*;
 use std::collections::HashMap;
+use chrono::NaiveDate;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SimState {
@@ -12,6 +13,7 @@ pub struct SimState {
     pub firms: Vec<Firm>,
     pub financial_system: FinancialSystem,
     pub config: SimConfig,
+    pub current_date: NaiveDate,
     pub sim_history: SimHistory,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -37,6 +39,7 @@ impl Default for SimState {
             consumers: Vec::new(),
             domain_registry: DomainRegistry::default(),
             firms: Vec::new(),
+            current_date: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
             financial_system: FinancialSystem::default(),
             config: SimConfig::default(),
             sim_history: SimHistory::new(),

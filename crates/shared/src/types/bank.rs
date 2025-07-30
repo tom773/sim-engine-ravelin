@@ -108,7 +108,9 @@ impl Bank {
                 bs.assets
                     .values()
                     .filter(|inst| {
-                        matches!(inst.instrument_type, InstrumentType::Cash | InstrumentType::CentralBankReserves)
+                        inst.details.as_any().is::<CashDetails>() ||
+                        inst.details.as_any().is::<BondDetails>() ||
+                        inst.details.as_any().is::<CentralBankReservesDetails>()
                     })
                     .map(|inst| inst.principal)
                     .sum()
@@ -128,7 +130,7 @@ impl Bank {
             .map(|bs| {
                 bs.assets
                     .values()
-                    .filter(|inst| matches!(inst.instrument_type, InstrumentType::CentralBankReserves))
+                    .filter(|inst| inst.details.as_any().is::<CentralBankReservesDetails>())
                     .map(|inst| inst.principal)
                     .sum()
             })
