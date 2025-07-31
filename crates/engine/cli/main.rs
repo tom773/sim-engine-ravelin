@@ -1,6 +1,5 @@
 use axum::{Json, Router, extract::State, http::Method, routing::get};
 #[allow(unused)]
-use engine::SimState;
 use engine::*;
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -20,7 +19,7 @@ fn get_scenario_path() -> PathBuf {
 #[tokio::main]
 async fn main() {
     let scenario_path = get_scenario_path();
-    let scenario = match state::Scenario::from_file(scenario_path.to_str().unwrap()) {
+    let scenario = match Scenario::from_file(scenario_path.to_str().unwrap()) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("FATAL: Failed to load scenario from '{:?}': {}", scenario_path, e);

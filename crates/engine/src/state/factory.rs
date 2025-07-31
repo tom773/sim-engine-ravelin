@@ -1,6 +1,6 @@
 use chrono::Datelike;
 use rand::prelude::*;
-use shared::{fin_sys::BondType, *};
+use ravelin_core::*;
 use uuid::Uuid;
 
 use crate::{

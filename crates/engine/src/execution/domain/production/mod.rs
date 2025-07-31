@@ -4,7 +4,7 @@ use crate::{
     state::SimState,
 };
 use serde::{Deserialize, Serialize};
-use shared::*;
+use ravelin_core::*;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ProductionDomain {}

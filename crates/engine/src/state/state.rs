@@ -1,7 +1,7 @@
 use crate::{AgentFactory, StateEffect, execution::domain::DomainRegistry, state::scenario::Scenario};
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
-use shared::*;
+use ravelin_core::*;
 use std::collections::HashMap;
 use chrono::NaiveDate;
 

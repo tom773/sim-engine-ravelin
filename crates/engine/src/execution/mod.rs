@@ -1,4 +1,4 @@
-use shared::*;
+use ravelin_core::*;
 use crate::state::SimState;
 use uuid::Uuid;
 use std::collections::HashMap;

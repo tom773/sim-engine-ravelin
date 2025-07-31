@@ -1,8 +1,8 @@
 use super::{ExecutionDomain, SerializableExecutionDomain};
 use crate::{EffectError, ExecutionResult, SimState, StateEffect};
 use serde::{Deserialize, Serialize};
-use shared::validation::FinancialValidator;
-use shared::*;
+use ravelin_core::validation::FinancialValidator;
+use ravelin_core::*;
 use uuid::Uuid;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -256,7 +256,7 @@ impl SerializableExecutionDomain for BankingDomain {
 #[cfg(test)]
 mod banking_tests {
     use super::*;
-    use shared::BalanceSheet;
+    use ravelin_core::BalanceSheet;
     use uuid::Uuid;
 
     fn create_test_state() -> SimState {

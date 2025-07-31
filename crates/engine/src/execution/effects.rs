@@ -3,7 +3,7 @@ use std::fmt;
 use thiserror::Error;
 
 use crate::*;
-use shared::*;
+use ravelin_core::*;
 
 #[derive(Clone, Debug)]
 pub struct ExecutionResult {

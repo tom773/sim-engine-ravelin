@@ -1,0 +1,17 @@
+[package]
+name = "engine_core"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "engine_core"
+path = "src/lib.rs"
+
+[dependencies]
+inventory = "0.3.20"
+proc-macro2 = "1.0.95"
+quote = "1.0.40"
+serde = { version = "1.0.219", features = ["derive"] }
+syn = { version = "2.0.104", features = ["full", "derive", "extra-traits"] }
+thiserror = "2.0.12"
+engine_macros = { path = "../engine_macros" }
