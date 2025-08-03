@@ -1,12 +1,7 @@
 use chrono::Datelike;
 use rand::prelude::*;
-use ravelin_core::*;
+use crate::{*, state::*};
 use uuid::Uuid;
-
-use crate::{
-    state::scenario::{BankConfig, ConsumerConfig, FirmConfig},
-    *,
-};
 
 pub struct AgentFactory<'a> {
     pub ss: &'a mut SimState,

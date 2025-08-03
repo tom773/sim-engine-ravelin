@@ -1,7 +1,5 @@
-use crate::*;
-use dyn_clone::{DynClone, clone_trait_object};
+use crate::{behaviour::*, SimAction, Agent, model::*};
 use rand::RngCore;
-use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::collections::HashMap;
@@ -62,7 +60,7 @@ impl Firm {
 impl Agent for Firm {
     type DecisionType = FirmDecision;
 
-    fn decide(&self, fs: &FinancialSystem, rng: &mut StdRng) -> Vec<FirmDecision> {
+    fn decide(&self, fs: &FinancialSystem, rng: &mut dyn RngCore) -> Vec<FirmDecision> {
         self.decision_model.decide(self, fs, rng)
     }
 

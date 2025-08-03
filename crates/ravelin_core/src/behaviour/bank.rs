@@ -16,7 +16,7 @@ impl Debug for dyn BankDecisionModel {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Default, Deserialize)]
 pub struct BasicBankDecisionModel;
 
 #[typetag::serde]

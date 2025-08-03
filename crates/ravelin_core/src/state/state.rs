@@ -1,16 +1,19 @@
-use crate::{AgentFactory, StateEffect, execution::domain::DomainRegistry, state::scenario::Scenario};
+use crate::{*, state::*};
+use chrono::NaiveDate;
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
-use ravelin_core::*;
 use std::collections::HashMap;
-use chrono::NaiveDate;
+use ravelin_macros::*;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, CollectAgents)]
 pub struct SimState {
     pub ticknum: u32,
+    #[agent_collection]
     pub consumers: Vec<Consumer>,
     pub domain_registry: DomainRegistry,
+    #[agent_collection]
     pub firms: Vec<Firm>,
+    #[agent_collection]
     pub financial_system: FinancialSystem,
     pub config: SimConfig,
     pub current_date: NaiveDate,
@@ -46,6 +49,7 @@ impl Default for SimState {
         }
     }
 }
+
 impl SimState {
     pub fn with_domain_registry(mut self, registry: DomainRegistry) -> Self {
         self.domain_registry = registry;
@@ -76,7 +80,7 @@ pub fn initialize_economy_from_scenario(scenario: &Scenario, rng: &mut StdRng) -
         .collect();
 
     let mut factory = AgentFactory::new(&mut ss, rng);
-    let central_bank_id = factory.ss.financial_system.central_bank.id.clone();
+    let central_bank_id = factory.ss.financial_system.central_bank.id;
 
     let mut bank_id_map = HashMap::new();
     let mut consumer_ids = Vec::new();
@@ -87,18 +91,18 @@ pub fn initialize_economy_from_scenario(scenario: &Scenario, rng: &mut StdRng) -
     }
 
     for consumer_conf in &scenario.consumers {
-        let bank_id = bank_id_map.get(&consumer_conf.bank_id).expect("Bank ID not found for consumer").clone();
-        let consumer = factory.create_consumer_from_config(consumer_conf, bank_id, &central_bank_id);
+        let bank_id = bank_id_map.get(&consumer_conf.bank_id).expect("Bank ID not found for consumer");
+        let consumer = factory.create_consumer_from_config(consumer_conf, *bank_id, &central_bank_id);
         consumer_ids.push(consumer.id);
     }
 
     for (i, firm_conf) in scenario.firms.iter().enumerate() {
-        let bank_id = bank_id_map.get(&firm_conf.bank_id).expect("Bank ID not found for firm").clone();
+        let bank_id = bank_id_map.get(&firm_conf.bank_id).expect("Bank ID not found for firm");
         let recipe_id = *recipe_id_map.get(&firm_conf.recipe_name).expect("Recipe name not found in map");
 
         if !consumer_ids.is_empty() {
             let employee_id = &consumer_ids[i % consumer_ids.len()];
-            factory.create_firm_from_config(firm_conf, bank_id, recipe_id, employee_id, &central_bank_id);
+            factory.create_firm_from_config(firm_conf, *bank_id, recipe_id, employee_id, &central_bank_id);
         } else {
             println!("Warning: No consumers available to hire for firm {}", firm_conf.name);
         }

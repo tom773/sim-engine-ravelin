@@ -1,4 +1,5 @@
 use crate::*;
+use ravelin_macros::CollectAgents;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use std::collections::HashMap;
@@ -19,15 +20,15 @@ pub use instruments::*;
 pub mod markets;
 pub use markets::*;
 
-#[derive(Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq, Copy)]
+#[derive(Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq, Copy, Default)]
 pub struct AgentId(pub Uuid);
 prep_serde_as!(AgentId, Uuid);
 
-#[derive(Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq, Copy)]
+#[derive(Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq, Copy, Default)]
 pub struct InstrumentId(pub Uuid);
 prep_serde_as!(InstrumentId, Uuid);
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Copy)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Copy, Default)]
 pub struct AssetId(pub Uuid);
 prep_serde_as!(AssetId, Uuid);
 
@@ -88,6 +89,19 @@ impl Transaction {
         }
     }
 }
+impl Default for Transaction {
+    fn default() -> Self {
+        Self {
+            id: Uuid::nil(),
+            date: 0,
+            qty: 0.0,
+            from: Default::default(),
+            to: Default::default(),
+            tx_type: TransactionType::Transfer { from: Default::default(), to: Default::default(), amount: 0.0 },
+            instrument_id: None,
+        }
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum TransactionType {
     Deposit { holder: AgentId, bank: AgentId, amount: f64 },
@@ -99,13 +113,14 @@ pub enum TransactionType {
 // --- The Main Financial System Struct ---
 
 #[serde_as]
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, CollectAgents)]
 pub struct FinancialSystem {
     #[serde_as(as = "HashMap<_, _>")]
     pub instruments: HashMap<InstrumentId, FinancialInstrument>,
     #[serde_as(as = "HashMap<_, _>")]
     pub balance_sheets: HashMap<AgentId, BalanceSheet>,
     #[serde_as(as = "HashMap<_, _>")]
+    #[agent_collection]
     pub commercial_banks: HashMap<AgentId, Bank>,
     pub central_bank: CentralBank,
     pub exchange: Exchange,

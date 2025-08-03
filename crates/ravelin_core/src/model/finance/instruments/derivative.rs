@@ -37,7 +37,7 @@ impl InstrumentDetails for InterestRateSwapDetails {
 }
 
 impl InterestRateSwapDetails {
-    fn calculate_next_payment_date(&self, from_date: NaiveDate) -> NaiveDate {
+    fn _calculate_next_payment_date(&self, from_date: NaiveDate) -> NaiveDate {
         match self.payment_frequency {
             PaymentFrequency::Quarterly => from_date.with_month(from_date.month() + 3).unwrap(),
             PaymentFrequency::SemiAnnually => from_date.with_month(from_date.month() + 6).unwrap(),

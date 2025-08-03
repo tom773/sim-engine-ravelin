@@ -146,7 +146,11 @@ impl MarketId {
         }
     }
 }
-
+impl Default for MarketId {
+    fn default() -> Self {
+        MarketId::Goods(GoodId::default())
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Trade {
     pub market_id: MarketId,
@@ -264,7 +268,15 @@ pub enum Order {
     Bid(Bid),
     Ask(Ask),
 }
-
+impl Default for Order {
+    fn default() -> Self {
+        Order::Bid(Bid {
+            agent_id: Default::default(),
+            price: 0.0,
+            quantity: 0.0,
+        })
+    }
+}
 #[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Exchange {

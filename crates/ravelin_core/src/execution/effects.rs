@@ -1,27 +1,9 @@
 use serde::{Deserialize, Serialize};
-use std::fmt;
 use thiserror::Error;
-
+use strum_macros::{Display, EnumString};
 use crate::*;
-use ravelin_core::*;
 
-#[derive(Clone, Debug)]
-pub struct ExecutionResult {
-    pub success: bool,
-    pub effects: Vec<StateEffect>,
-    pub errors: Vec<EffectError>,
-}
-impl ExecutionResult {
-    pub fn unhandled(domain: &str) -> Self {
-        ExecutionResult {
-            success: false,
-            effects: vec![],
-            errors: vec![EffectError::Unhandled(format!("Action not handled in domain {}", domain))],
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Display, EnumString)]
 pub enum StateEffect {
     CreateInstrument(FinancialInstrument),
     UpdateInstrument { id: InstrumentId, new_principal: f64 },
@@ -180,32 +162,17 @@ impl StateEffect {
                     }
                     Ok(())
                 }
-                MarketId::Labour(lab_id) => {
-                    // Handle labour market orders if needed
+                MarketId::Labour(_) => {
                     Err(EffectError::UnimplementedAction("Labour market orders not implemented".to_string()))
                 }
             },
         }
     }
-
-    pub fn name(&self) -> &'static str {
-        match self {
-            StateEffect::CreateInstrument(_) => "CreateInstrument",
-            StateEffect::UpdateInstrument { .. } => "UpdateInstrument",
-            StateEffect::TransferInstrument { .. } => "TransferInstrument",
-            StateEffect::SwapInstrument { .. } => "SwapInstrument",
-            StateEffect::RemoveInstrument(_) => "RemoveInstrument",
-            StateEffect::AddInventory { .. } => "AddInventory",
-            StateEffect::RemoveInventory { .. } => "RemoveInventory",
-            StateEffect::RecordTransaction(_) => "RecordTransaction",
-            StateEffect::UpdateConsumerIncome { .. } => "UpdateConsumerIncome",
-            StateEffect::UpdateFirmRevenue { .. } => "UpdateFirmRevenue",
-            StateEffect::Hire { .. } => "Hire",
-            StateEffect::Produce { .. } => "Produce",
-            StateEffect::PlaceOrderInBook { .. } => "PlaceOrderInBook",
-        }
+    pub fn name(&self) -> String {
+        self.to_string()
     }
 }
+
 #[derive(Error, Debug, Clone)]
 pub enum EffectError {
     #[error("Instrument not found: {id:?}")]
@@ -222,8 +189,8 @@ pub enum EffectError {
     FinancialSystemError(String),
     #[error("Invalid state: {0}")]
     InvalidState(String),
-    #[error("Invalid recipie: {id:?}")]
-    RecipieError{ id: RecipeId },
+    #[error("Invalid recipe: {id:?}")]
+    RecipeError{ id: RecipeId },
     #[error("Unimplemented action: {0}")]
     UnimplementedAction(String),
     #[error("Unhandled action: {0}")]

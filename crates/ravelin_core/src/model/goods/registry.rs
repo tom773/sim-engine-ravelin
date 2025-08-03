@@ -4,15 +4,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use toml;
 use uuid::Uuid;
-use std::{str::FromStr, fmt};
 use serde_with::serde_as;
 
 const GOODS_NAMESPACE: Uuid = Uuid::from_u128(0x4A8B382D22C14A4C8F1A2E3D4B5C6F7A);
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Copy)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Copy, Default)]
 pub struct GoodId(pub Uuid);
 prep_serde_as!(GoodId, Uuid); // Use the macro
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Copy)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Copy, Default)]
 pub struct RecipeId(pub Uuid);
 prep_serde_as!(RecipeId, Uuid); // Use the macro
 
@@ -143,7 +142,7 @@ impl GoodsRegistry {
 }
 
 pub static CATALOGUE: Lazy<GoodsRegistry> = Lazy::new(|| {
-    GoodsRegistry::from_toml(include_str!("../../../../engine/src/state/config/goods.toml"))
+    GoodsRegistry::from_toml(include_str!("../../../../ravelin_core/src/state/config/goods.toml"))
         .expect("failed to parse goods catalogue")
 });
 

@@ -1,4 +1,4 @@
-use crate::*;
+use crate::{model::{FinancialSystem, AgentId, RecipeId, GoodId, balance_sheet::*}, validation::Validator};
 pub struct FirmValidator<'a> {
     fs: &'a FinancialSystem,
 }

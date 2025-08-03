@@ -7,16 +7,15 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::{fmt, str::FromStr};
 use thiserror::Error;
-use uuid::Uuid;
 
 pub mod bond;
 pub use bond::*;
 pub mod cash;
-pub use cash::*;
+//pub use cash::*;
 pub mod derivative;
 pub use derivative::*;
 pub mod equity;
-pub use equity::*;
+//pub use equity::*;
 
 
 #[typetag::serde(tag = "instrument_details_type")]
@@ -93,7 +92,18 @@ pub struct FinancialInstrument {
     pub originated_date: chrono::NaiveDate,
     pub details: Box<dyn InstrumentDetails>,
 }
-
+impl Default for FinancialInstrument {
+    fn default() -> Self {
+        Self {
+            id: Default::default(),
+            debtor: Default::default(),
+            creditor: Default::default(),
+            principal: 0.0,
+            originated_date: chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
+            details: Box::new(CashDetails), // A sensible default
+        }
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum LoanType {

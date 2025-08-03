@@ -1,48 +1,41 @@
-use axum::{
-    extract::{State},
-    response::Json,
-};
-use engine::*;
+use axum::{extract::State, response::Json};
+use ravelin_traits::*;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use serde::{Serialize, Deserialize};
-use crate::{Stats, Res};
-use std::collections::HashMap;
+use crate::Res;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TickInfo {
-    pub ticknum: u32,
-    pub actions: Vec<SimAction>,
-    pub effects: Vec<StateEffect>,
+#[derive(Clone, Debug, Serialize, Default, Deserialize)]
+pub struct TickInfo<A, E> {
+    pub actions: Vec<A>,
+    pub effects: Vec<E>,
 }
 
-pub async fn tick(State(state): State<Arc<RwLock<SimState>>>) -> Json<TickInfo> {
+pub async fn tick<C: Core>(State(state): State<Arc<RwLock<C::State>>>) -> Json<TickInfo<C::Action, C::Effect>> {
     let mut state_guard = state.write().await;
-    let (_ss, actions, effects) = engine::tick(&mut state_guard);
-    let ti = TickInfo {
-        ticknum: state_guard.ticknum,
+    let (_ss, actions, effects) = engine::tick::<C>(&mut state_guard);
+    Json(TickInfo {
         actions: actions.clone(),
         effects: effects.clone(),
-    };
-    Json(ti)
+    })
 }
-pub async fn inject(State(state): State<Arc<RwLock<SimState>>>) -> Json<Res> {
+
+pub async fn inject<C: Core>(State(state): State<Arc<RwLock<C::State>>>) -> Json<Res<C::State>> {
     let mut state_guard = state.write().await;
-    let _ss = engine::inject_liquidity(&mut state_guard);
+    
+    let action = C::inject_liquidity_action();
+    let registry = state_guard.get_domain_registry().clone();
+    let result = registry.execute(&action, &state_guard);
+
+    if result.success {
+        if let Err(e) = state_guard.apply_effects(&result.effects) {
+             println!("Error applying inject effects: {}", e);
+        }
+    }
     
     Json(Res {
-        stats: Some(Stats {
-            m0: state_guard.financial_system.m0(),
-            m1: state_guard.financial_system.m1(),
-            m2: state_guard.financial_system.m2(),
-        }),
+        stats: Some(state_guard.get_stats_json()),
         messages: None,
         state: state_guard.clone(),
     })
-}
-pub async fn tick_ret_date(State(state): State<Arc<RwLock<SimState>>>) -> Json<HashMap<InstrumentId, FinancialInstrument>> {
-    let mut state_guard = state.write().await;
-    let (ss, _actions, _effects) = engine::tick(&mut state_guard);
-    let instruments = ss.financial_system.instruments.clone();
-    Json(instruments)
 }

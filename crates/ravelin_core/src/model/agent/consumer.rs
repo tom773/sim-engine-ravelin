@@ -1,4 +1,4 @@
-use crate::*;
+use crate::{behaviour::*, good_id, SimAction, Agent, model::*};
 use dyn_clone::{DynClone, clone_trait_object};
 use ndarray::Array1;
 use rand::RngCore;
@@ -42,7 +42,7 @@ impl Consumer {
 impl Agent for Consumer {
     type DecisionType = ConsumerDecision;
 
-    fn decide(&self, fs: &FinancialSystem, rng: &mut StdRng) -> Vec<ConsumerDecision> {
+    fn decide(&self, fs: &FinancialSystem, rng: &mut dyn RngCore) -> Vec<ConsumerDecision> {
         self.decision_model.decide(self, fs, rng)
     }
 

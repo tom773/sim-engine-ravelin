@@ -1,9 +1,57 @@
-use crate::{EffectError, ExecutionResult, SimState};
+#[allow(unused_variables)]
+use crate::{EffectError, SimState};
+use ravelin_traits::ExecutionResult;
 use serde::{Deserialize, Serialize};
-use ravelin_core::*;
+use crate::*;
 use std::any::type_name;
 use std::collections::HashMap;
 use std::fmt;
+
+#[macro_export]
+macro_rules! impl_execution_domain {
+    (
+        $domain_struct:ty,
+        $domain_name:expr,
+        validate = |$action_validate:ident, $state_validate:ident| $validate_body:block,
+        execute = |$self_param:ident, $action_param:ident, $state_param:ident| {
+            $( $action_pat:pat => $handler_call:expr ),* $(,)?
+        }
+    ) => {
+        impl ExecutionDomain for $domain_struct {
+            fn name(&self) -> &'static str { $domain_name }
+
+            fn can_handle(&self, action: &SimAction) -> bool {
+                match action {
+                    $(
+                        $action_pat => true,
+                    )*
+                    _ => false,
+                }
+            }
+
+            fn validate(&self, $action_validate: &SimAction, $state_validate: &SimState) -> bool {
+                $validate_body
+            }
+
+            fn execute(&self, action: &SimAction, state: &SimState) -> ExecutionResult<StateEffect> {
+                let $self_param = self;
+                let $action_param = action;
+                let $state_param = state;
+                
+                match action {
+                    $(
+                        $action_pat => $handler_call,
+                    )*
+                    _ => crate::execution::domain::unhandled(self.name()),
+                }
+            }
+
+            fn clone_box(&self) -> Box<dyn ExecutionDomain> {
+                Box::new(self.clone())
+            }
+        }
+    };
+}
 
 pub mod banking;
 pub mod production;
@@ -13,11 +61,19 @@ pub use banking::BankingDomain;
 pub use production::ProductionDomain;
 pub use trading::TradingDomain;
 
+pub fn unhandled(domain: &str) -> ExecutionResult<StateEffect> {
+    ExecutionResult {
+        success: false,
+        effects: vec![],
+        errors: vec![Box::new(EffectError::Unhandled(format!("Action not handled in domain {}", domain)))],
+    }
+}
+
 pub trait ExecutionDomain: Send + Sync {
     fn name(&self) -> &'static str;
     fn can_handle(&self, action: &SimAction) -> bool;
     fn validate(&self, action: &SimAction, state: &SimState) -> bool;
-    fn execute(&self, action: &SimAction, state: &SimState) -> ExecutionResult;
+    fn execute(&self, action: &SimAction, state: &SimState) -> ExecutionResult<StateEffect>;
     fn clone_box(&self) -> Box<dyn ExecutionDomain>;
 }
 
@@ -58,7 +114,7 @@ impl DomainRegistry {
         DomainRegistryBuilder::new()
     }
 
-    pub fn execute(&self, action: &SimAction, state: &SimState) -> ExecutionResult {
+    pub fn execute(&self, action: &SimAction, state: &SimState) -> ExecutionResult<StateEffect> {
         for (domain_type, domain) in &self.domains {
             if domain.can_handle(action) {
                 if domain.validate(action, state) {
@@ -67,7 +123,10 @@ impl DomainRegistry {
                     return ExecutionResult {
                         success: false,
                         effects: vec![],
-                        errors: vec![EffectError::InvalidState(format!("Validation failed in domain {}", domain_type))],
+                        errors: vec![Box::new(EffectError::InvalidState(format!(
+                            "Validation failed in domain {}",
+                            domain_type
+                        )))],
                     };
                 }
             }
@@ -76,10 +135,10 @@ impl DomainRegistry {
         ExecutionResult {
             success: false,
             effects: vec![],
-            errors: vec![EffectError::InvalidState(format!(
+            errors: vec![Box::new(EffectError::InvalidState(format!(
                 "No domain registered to handle action: {}",
                 action.name()
-            ))],
+            )))],
         }
     }
 }

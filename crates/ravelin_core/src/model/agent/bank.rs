@@ -1,5 +1,4 @@
-use crate::*;
-use dyn_clone::{DynClone, clone_trait_object};
+use crate::{behaviour::*, SimAction, Agent, model::*};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
@@ -95,7 +94,7 @@ impl Bank {
 impl Agent for Bank {
     type DecisionType = BankDecision;
 
-    fn decide(&self, fs: &FinancialSystem, rng: &mut rand::prelude::StdRng) -> Vec<Self::DecisionType> {
+    fn decide(&self, fs: &FinancialSystem, rng: &mut dyn RngCore) -> Vec<Self::DecisionType> {
         self.decision_model.decide(self, fs, rng)
     }
 

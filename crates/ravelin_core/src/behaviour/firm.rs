@@ -16,7 +16,7 @@ impl Debug for dyn FirmDecisionModel {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Default, Deserialize)]
 pub struct BasicFirmDecisionModel;
 
 #[typetag::serde]
