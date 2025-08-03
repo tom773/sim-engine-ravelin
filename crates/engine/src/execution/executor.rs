@@ -1,5 +1,5 @@
 use super::*;
-use shared::*;
+use ravelin_core::*;
 
 pub struct TransactionExecutor;
 

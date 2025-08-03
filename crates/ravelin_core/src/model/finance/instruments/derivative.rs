@@ -1,6 +1,5 @@
 use chrono::{Datelike, NaiveDate};
-use crate::fin_sys::core::{ InstrumentId, AgentId };
-use crate::fin_sys::instruments::InstrumentDetails;
+use crate::*;
 use serde::{Deserialize, Serialize};
 pub trait Derivative {
     fn get_underlying_instrument_id(&self) -> &InstrumentId;

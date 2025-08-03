@@ -1,4 +1,4 @@
-use shared::{SpendingPredictor, DecisionModel, MLDecisionModel};
+use ravelin_core::{SpendingPredictor, DecisionModel, MLDecisionModel};
 use ndarray::Array1;
 use std::error::Error;
 

@@ -1,6 +1,6 @@
 use crate::{EffectError, ExecutionResult, SimState};
 use serde::{Deserialize, Serialize};
-use shared::*;
+use ravelin_core::*;
 use std::any::type_name;
 use std::collections::HashMap;
 use std::fmt;

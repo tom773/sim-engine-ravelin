@@ -1,0 +1,22 @@
+[package]
+name = "ravelin_core"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "ravelin_core"
+path = "src/lib.rs"
+
+[dependencies]
+dyn-clone = "1.0.20"
+rand = "0.9.2"
+serde = { version = "1.0.219", features = ["derive"] }
+typetag = "0.2.20"
+uuid = { version = "1.17.0", features = ["serde", "v5"] }
+ndarray = "0.15.0"
+serde_with = "3.14.0"
+chrono = { version = "0.4.41", features = ["serde"] }
+sscanf = "0.4.3"
+thiserror = "2.0.12"
+once_cell = "1.21.3"
+toml = "0.9.4"

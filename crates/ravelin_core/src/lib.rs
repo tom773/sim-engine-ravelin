@@ -19,14 +19,17 @@ macro_rules! prep_serde_as {
 
 #[allow(unused)]
 #[allow(ambiguous_glob_reexports)]
-pub mod fin_sys;
-pub use fin_sys::*;
-
-pub mod types;
-pub use types::*;
+pub mod model;
+pub use model::*;
 
 pub mod validation;
 pub use validation::*;
 
 pub mod behaviour;
 pub use behaviour::*;
+
+pub mod agent;
+pub use agent::*;
+
+pub mod action;
+pub use action::*;

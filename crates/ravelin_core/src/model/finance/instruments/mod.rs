@@ -163,12 +163,12 @@ impl RegexRepresentation for CreditRating {
 #[macro_export]
 macro_rules! cash {
     ($creditor:expr, $amount:expr, $cb_id:expr, $originated:expr) => {
-        $crate::fin_sys::instruments::FinancialInstrument {
-            id: $crate::fin_sys::core::InstrumentId(Uuid::new_v4()),
+        $crate::model::instruments::FinancialInstrument {
+            id: $crate::model::InstrumentId(Uuid::new_v4()),
             creditor: $creditor,
             debtor: $cb_id,
             principal: $amount,
-            details: Box::new($crate::fin_sys::instruments::CashDetails),
+            details: Box::new($crate::model::instruments::CashDetails),
             originated_date: $originated,
         }
     };
@@ -177,12 +177,12 @@ macro_rules! cash {
 #[macro_export]
 macro_rules! deposit {
     ($depositor:expr, $bank:expr, $amount:expr, $rate:expr, $originated:expr) => {
-        $crate::fin_sys::instruments::FinancialInstrument {
-            id: $crate::fin_sys::core::InstrumentId(Uuid::new_v4()),
+        $crate::model::instruments::FinancialInstrument {
+            id: $crate::model::InstrumentId(Uuid::new_v4()),
             creditor: $depositor,
             debtor: $bank,
             principal: $amount,
-            details: Box::new($crate::fin_sys::instruments::DemandDepositDetails { interest_rate: $rate }),
+            details: Box::new($crate::model::instruments::DemandDepositDetails { interest_rate: $rate }),
             originated_date: $originated,
         }
     };
@@ -191,12 +191,12 @@ macro_rules! deposit {
 #[macro_export]
 macro_rules! reserves {
     ($bank:expr, $cb_id:expr, $amount:expr, $originated:expr) => {
-        $crate::fin_sys::instruments::FinancialInstrument {
-            id: $crate::fin_sys::core::InstrumentId(Uuid::new_v4()),
+        $crate::model::instruments::FinancialInstrument {
+            id: $crate::model::InstrumentId(Uuid::new_v4()),
             creditor: $bank,
             debtor: $cb_id,
             principal: $amount,
-            details: Box::new($crate::fin_sys::instruments::CentralBankReservesDetails),
+            details: Box::new($crate::model::instruments::CentralBankReservesDetails),
             originated_date: $originated,
         }
     };
@@ -205,12 +205,12 @@ macro_rules! reserves {
 #[macro_export]
 macro_rules! bond {
     ($investor:expr, $issuer:expr, $principal:expr, $coupon_rate:expr, $maturity_date:expr, $face_value:expr, $bond_type:expr, $frequency:expr, $originated:expr) => {
-        $crate::fin_sys::instruments::FinancialInstrument {
-            id: $crate::fin_sys::core::InstrumentId(Uuid::new_v4()),
+        $crate::model::instruments::FinancialInstrument {
+            id: $crate::model::InstrumentId(Uuid::new_v4()),
             creditor: $investor,
             debtor: $issuer,
             principal: $principal,
-            details: Box::new($crate::fin_sys::instruments::BondDetails {
+            details: Box::new($crate::model::instruments::BondDetails {
                 bond_type: $bond_type,
                 coupon_rate: $coupon_rate,
                 face_value: $face_value,

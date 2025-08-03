@@ -1,7 +1,7 @@
 use super::{ExecutionDomain, SerializableExecutionDomain};
 use crate::{ExecutionResult, SimState, StateEffect};
 use serde::{Deserialize, Serialize};
-use shared::*;
+use ravelin_core::*;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct TradingDomain {}

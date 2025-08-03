@@ -4,7 +4,7 @@ pub use execution::*;
 pub mod state;
 mod test;
 use rand::prelude::*;
-pub use shared::*;
+pub use ravelin_core::*;
 pub use state::*;
 use chrono::Duration;
 

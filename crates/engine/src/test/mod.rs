@@ -6,7 +6,7 @@ mod simulation_flow_tests {
         SimState, TransactionExecutor,
     };
     use rand::prelude::*;
-    use shared::*;
+    use ravelin_core::*;
     use std::collections::HashMap;
 
     #[derive(Debug)]

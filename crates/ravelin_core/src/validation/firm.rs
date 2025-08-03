@@ -1,6 +1,4 @@
 use crate::*;
-use super::generic::Validator;
-
 pub struct FirmValidator<'a> {
     fs: &'a FinancialSystem,
 }

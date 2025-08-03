@@ -1,4 +1,3 @@
-use crate::FeatureSource;
 use crate::*;
 use dyn_clone::{DynClone, clone_trait_object};
 use ndarray::Array1;
@@ -6,7 +5,6 @@ use rand::RngCore;
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Consumer {
     pub id: AgentId,
@@ -16,7 +14,6 @@ pub struct Consumer {
     pub personality: PersonalityArchetype,
     pub income: f64,
 }
-
 impl Consumer {
     pub fn new(age: u32, id: AgentId, bank_id: AgentId, dm: Box<dyn DecisionModel>) -> Self {
         let mut rng = rand::rng();

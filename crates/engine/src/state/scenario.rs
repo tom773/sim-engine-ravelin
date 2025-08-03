@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use shared::*;
+use ravelin_core::*;
 use std::{error::Error, fs};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

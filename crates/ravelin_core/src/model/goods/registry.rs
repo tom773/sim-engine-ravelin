@@ -143,14 +143,14 @@ impl GoodsRegistry {
 }
 
 pub static CATALOGUE: Lazy<GoodsRegistry> = Lazy::new(|| {
-    GoodsRegistry::from_toml(include_str!("../../../engine/src/state/config/goods.toml"))
+    GoodsRegistry::from_toml(include_str!("../../../../engine/src/state/config/goods.toml"))
         .expect("failed to parse goods catalogue")
 });
 
 #[macro_export]
 macro_rules! good_id {
     ($slug:literal) => {
-        $crate::fin_sys::goods::CATALOGUE
+        $crate::model::goods::CATALOGUE
             .get_good_id_by_slug($slug)
             .expect(concat!("unknown good slug: ", $slug))
     };
@@ -159,7 +159,7 @@ macro_rules! good_id {
 #[macro_export]
 macro_rules! recipe_id {
     ($name:literal) => {
-        $crate::fin_sys::goods::CATALOGUE
+        $crate::model::goods::CATALOGUE
             .get_recipe_id_by_name($name)
             .expect(concat!("unknown recipe name: ", $name))
     };
