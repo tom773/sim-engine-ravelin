@@ -1,0 +1,10 @@
+[package]
+name = "domains_prelude"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+domains_banking = { path = "../banking" }
+domains_production = { path = "../production" }
+domains_trading = { path = "../trading" }
+domains_consumption = { path = "../consumption" }

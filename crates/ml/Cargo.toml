@@ -12,15 +12,14 @@ name = "ml"
 path = "src/lib.rs"
 
 [dependencies]
-engine = { path = "../engine" }
-ravelin_core = { path = "../ravelin_core" }
-polars = {version="0.49.1", features=["lazy", "csv", "serde", "parquet"]}
+sim_prelude = { path = "../core/sim_prelude" }
+domains_prelude = { path = "../domains/prelude" }
+polars = {version="0.50.0", features=["lazy", "csv", "serde", "parquet"]}
 ndarray = "0.15.0"
 linfa = {version="0.7.1", features = ["serde"]}
 linfa-logistic = {version = "0.7.1", features = ["serde"]}
 lightgbm3 = "1.0.8"
 dyn-clone = "1.0.19"
-# For ML data handling
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.141"
 bincode = { version = "2.0.1", features = ["serde"] }

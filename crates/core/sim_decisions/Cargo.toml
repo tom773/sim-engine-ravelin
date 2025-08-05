@@ -1,0 +1,13 @@
+[package]
+name = "sim_decisions"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+sim_types = { path = "../sim_types" }
+sim_traits = { path = "../sim_traits" }
+serde = { workspace = true }
+rand = { workspace = true }
+ndarray = { workspace = true }
+dyn-clone = { workspace = true }
+typetag = { workspace = true }

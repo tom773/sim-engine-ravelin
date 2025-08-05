@@ -1,0 +1,10 @@
+[package]
+name = "domains_production"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+sim_prelude = { path = "../../core/sim_prelude" }
+serde = { workspace = true }
+uuid = { workspace = true }
+rand = { workspace = true }

@@ -1,0 +1,45 @@
+name = "Base Scenario"
+description = "A simple economy with two banks, one oil refinery, and a few consumers."
+
+[config]
+iterations = 100
+treasuryTenorsToRegister = ["T2Y", "T5Y", "T10Y", "T30Y"]
+
+[[banks]]
+id = "bank_a"
+name = "Ravelin National Bank"
+initialReserves = 5000000.0
+initialBonds = [
+    { tenor = "T10Y", faceValue = 500000.0 }
+]
+
+[[banks]]
+id = "bank_b"
+name = "Economic Sim Savings & Loan"
+initialReserves = 3000000.0
+initialBonds = [
+    { tenor = "T2Y", faceValue = 200000.0 },
+    { tenor = "T10Y", faceValue = 150000.0 }
+]
+
+[[firms]]
+id = "global_oil"
+name = "Global Oil Corp"
+bankId = "bank_a"
+recipeName = "Oil Refining"
+initialCash = 250000.0
+initialInventory = [
+    { goodSlug = "oil", quantity = 1000.0, unitCost = 50.0 }
+]
+
+[[consumers]]
+id = "consumer_1"
+bankId = "bank_a"
+initialCash = 5000.0
+income = 60000.0 # Annual
+
+[[consumers]]
+id = "consumer_2"
+bankId = "bank_b"
+initialCash = 7500.0
+income = 85000.0 # Annual

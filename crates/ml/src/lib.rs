@@ -1,4 +1,4 @@
-use ravelin_core::{SpendingPredictor, DecisionModel, MLDecisionModel};
+use sim_prelude::*;
 use ndarray::Array1;
 use std::error::Error;
 

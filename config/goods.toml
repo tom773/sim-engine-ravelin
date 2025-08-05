@@ -1,0 +1,21 @@
+[[goods]]
+slug = "oil"
+name = "Crude Oil"
+unit = "barrel"
+category = "RawMaterial"
+
+[[goods]]
+slug = "petrol"
+name = "Petrol"
+unit = "gallon"
+category = "Energy"
+
+[[recipes]]
+name = "Oil Refining"
+output = { slug = "petrol", qty = 19.5 }
+inputs = [
+  { slug = "oil",   qty = 1.0 }
+]
+labourHours = 0.5
+capitalRequired = 100.0
+efficiency = 0.85

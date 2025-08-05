@@ -17,7 +17,8 @@ pub fn extract_ce_data(data_dir: &str) -> Result<DataFrame, Box<dyn Error>> {
         if std::path::Path::new(&file_path).exists() {
             println!("  Loading {}", file_path);
             
-            let df = LazyCsvReader::new(&file_path)
+            let path = PlPath::new(&file_path);
+            let df = LazyCsvReader::new(path)
                 .with_dtype_overwrite(Some(Arc::from(Schema::from_iter([
                     ("AGE_REF".into(), DataType::UInt32),
                     ("FAM_SIZE".into(), DataType::UInt32),

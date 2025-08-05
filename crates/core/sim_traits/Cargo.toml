@@ -1,0 +1,9 @@
+[package]
+name = "sim_traits"
+version = "0.1.0"  
+edition = "2024"
+
+[dependencies]
+sim_types = { path = "../sim_types" }
+serde = { workspace = true }
+
