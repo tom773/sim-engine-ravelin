@@ -26,4 +26,9 @@ pub use domains_fiscal::{
     FiscalDomain, 
     FiscalResult,
     BasicGovernmentDecisionModel
-}; 
+};
+
+pub use domains_settlement::{
+    SettlementDomain, 
+    SettlementResult,
+};

@@ -12,7 +12,8 @@ members = [
     "crates/domains/prelude", 
     "crates/domains/production",
     "crates/domains/trading",
-    "crates/domains/fiscal", 
+    "crates/domains/fiscal",
+    "crates/domains/settlement", 
 ]
 resolver = "3"
 

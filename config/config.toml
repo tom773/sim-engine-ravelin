@@ -10,7 +10,7 @@ id = "bank_a"
 name = "Ravelin National Bank"
 initialReserves = 5000000.0
 initialBonds = [
-    { tenor = "T10Y", faceValue = 500000.0 }
+    { tenor = "T10Y", quantity = 500 }
 ]
 
 [[banks]]
@@ -18,8 +18,8 @@ id = "bank_b"
 name = "Economic Sim Savings & Loan"
 initialReserves = 3000000.0
 initialBonds = [
-    { tenor = "T2Y", faceValue = 200000.0 },
-    { tenor = "T10Y", faceValue = 150000.0 }
+    { tenor = "T2Y", quantity = 200 },
+    { tenor = "T10Y", quantity = 150 }
 ]
 
 [[firms]]

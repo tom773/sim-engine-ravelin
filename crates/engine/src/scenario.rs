@@ -57,7 +57,7 @@ pub struct ConsumerConfig {
 #[serde(rename_all = "camelCase")]
 pub struct BondConfig {
     pub tenor: String,
-    pub face_value: f64,
+    pub quantity: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -125,6 +125,7 @@ impl Scenario {
             engine.state.financial_system.government.id,
             Box::new(BasicGovernmentDecisionModel::default()),
         ); 
+        engine.run_initialization();
         engine
     }
 }

@@ -34,17 +34,18 @@ impl FiscalDomain {
             FiscalAction::ChangeTaxRate { government_id, tax_type, new_rate } => {
                 println!("[FISCAL DOMAIN] Executing ChangeTaxRate for {} | Setting {:?} to {}", government_id, tax_type, new_rate);
             }
-            FiscalAction::IssueDebt { government_id, tenor, face_value } => {
+            FiscalAction::IssueDebt { government_id, tenor, face_value: _ } => {
                  let maturity_date = tenor.add_to_date(state.current_date);
                  let bond = bond!(
                     *government_id, // Initially, the gov holds its own debt
                     *government_id,
-                    *face_value,
+                    1000.0,
                     0.04, 
                     maturity_date,
-                    *face_value,
+                    1000.0,
                     BondType::Government,
                     2,
+                    *tenor,
                     state.current_date
                  );
                  effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(bond)));

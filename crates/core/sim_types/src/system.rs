@@ -1,7 +1,9 @@
+use crate::*;
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
-use std::collections::{HashSet, HashMap};
-use crate::*;
+use std::collections::{HashMap, HashSet};
+use uuid::Uuid;
 
 #[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -14,6 +16,12 @@ pub struct FinancialSystem {
     pub government: Government,
     pub exchange: Exchange,
     pub goods: GoodsRegistry,
+    pub yield_curve: YieldCurve,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct YieldCurve {
+    pub date: chrono::NaiveDate,
+    pub yields: HashMap<Tenor, f64>,
 }
 
 impl Default for FinancialSystem {
@@ -37,6 +45,10 @@ impl Default for FinancialSystem {
             government,
             exchange: Exchange::default(),
             goods: GoodsRegistry::new(),
+            yield_curve: YieldCurve {
+                date: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                yields: HashMap::new(),
+            },
         }
     }
 }
@@ -123,7 +135,6 @@ impl InstrumentManager for FinancialSystem {
 
         Ok(())
     }
-
     fn find_consolidatable_instrument(&self, new_inst: &FinancialInstrument) -> Option<InstrumentId> {
         if let Some(key) = new_inst.consolidation_key() {
             if let Some(creditor_bs) = self.balance_sheets.get(&new_inst.creditor) {
@@ -207,6 +218,94 @@ impl InstrumentManager for FinancialSystem {
 
         Ok(())
     }
+    fn split_and_transfer_instrument(
+        &mut self, instrument_id: &InstrumentId, buyer: AgentId, quantity_to_transfer: u64,
+    ) -> Result<InstrumentId, String> {
+        let seller_instrument = self.instruments.get(instrument_id).ok_or("Instrument not found")?.clone();
+
+        let bond_details =
+            seller_instrument.details.as_any().downcast_ref::<BondDetails>().ok_or("Instrument is not a bond")?;
+
+        if bond_details.quantity < quantity_to_transfer {
+            return Err(format!(
+                "Insufficient bond quantity: have {}, need {}",
+                bond_details.quantity, quantity_to_transfer
+            ));
+        }
+
+        let seller = seller_instrument.creditor;
+        let remaining_quantity = bond_details.quantity - quantity_to_transfer;
+        let principal_per_bond = seller_instrument.principal / bond_details.quantity as f64;
+        let transfer_principal = principal_per_bond * quantity_to_transfer as f64;
+        let remaining_principal = seller_instrument.principal - transfer_principal;
+
+        if remaining_quantity == 0 {
+            self.remove_instrument(instrument_id)?;
+        } else {
+            let updated_instrument =
+                self.instruments.get_mut(instrument_id).ok_or("Instrument not found for update")?;
+            updated_instrument.principal = remaining_principal;
+
+            if let Some(updated_details) = updated_instrument.details.as_any_mut().downcast_mut::<BondDetails>() {
+                updated_details.quantity = remaining_quantity;
+            }
+
+            if let Some(seller_bs) = self.balance_sheets.get_mut(&seller) {
+                if let Some(asset) = seller_bs.assets.get_mut(instrument_id) {
+                    asset.principal = remaining_principal;
+                    if let Some(asset_details) = asset.details.as_any_mut().downcast_mut::<BondDetails>() {
+                        asset_details.quantity = remaining_quantity;
+                    }
+                }
+            }
+
+            let debtor = updated_instrument.debtor;
+            if let Some(debtor_bs) = self.balance_sheets.get_mut(&debtor) {
+                if let Some(liability) = debtor_bs.liabilities.get_mut(instrument_id) {
+                    liability.principal = remaining_principal;
+                    if let Some(liability_details) = liability.details.as_any_mut().downcast_mut::<BondDetails>() {
+                        liability_details.quantity = remaining_quantity;
+                    }
+                }
+            }
+        }
+
+        let mut buyer_bond_details = bond_details.clone();
+        buyer_bond_details.quantity = quantity_to_transfer;
+
+        let buyer_instrument = FinancialInstrument {
+            id: InstrumentId(Uuid::new_v4()),
+            creditor: buyer,
+            debtor: seller_instrument.debtor,
+            principal: transfer_principal,
+            details: Box::new(buyer_bond_details),
+            originated_date: seller_instrument.originated_date,
+            accrued_interest: (seller_instrument.accrued_interest / bond_details.quantity as f64)
+                * quantity_to_transfer as f64,
+            last_accrual_date: seller_instrument.last_accrual_date,
+        };
+
+        self.create_or_consolidate_instrument(buyer_instrument)
+    }
+    fn pay_interest(&mut self, instrument_id: InstrumentId, payment_date: NaiveDate) -> Result<(), String> {
+        let instrument = self.instruments.get_mut(&instrument_id).ok_or("Instrument not found")?;
+        let bond_details =
+            instrument.details.as_any_mut().downcast_mut::<BondDetails>().ok_or("Instrument is not a bond")?;
+
+        let interest_payment = bond_details.coupon_rate * instrument.principal / 100.0;
+
+        instrument.accrued_interest += interest_payment;
+
+        instrument.last_accrual_date = payment_date;
+
+        if let Some(bs) = self.balance_sheets.get_mut(&instrument.creditor) {
+            bs.assets.entry(instrument_id).and_modify(|inst| {
+                inst.accrued_interest += interest_payment;
+            });
+        }
+
+        Ok(())
+    }
 }
 impl FinancialStatistics for FinancialSystem {
     fn m0(&self) -> f64 {
@@ -224,7 +323,6 @@ impl FinancialStatistics for FinancialSystem {
             .sum()
     }
     fn m1(&self, bank_ids: &HashSet<AgentId>) -> f64 {
-        // <-- Use the new signature
         self.balance_sheets
             .values()
             .filter(|bs| !bank_ids.contains(&bs.agent_id) && bs.agent_id != self.central_bank.id)
@@ -241,7 +339,6 @@ impl FinancialStatistics for FinancialSystem {
     }
 
     fn m2(&self, bank_ids: &HashSet<AgentId>) -> f64 {
-        // <-- Use the new signature
         let m1 = self.m1(bank_ids); // <-- Pass the hashset through
 
         let savings_deposits: f64 = self
@@ -258,5 +355,22 @@ impl FinancialStatistics for FinancialSystem {
             .sum();
 
         m1 + savings_deposits
+    }
+}
+
+impl FinancialSystem {
+    pub fn update_yield_curve(&mut self, date: chrono::NaiveDate) {
+        let mut yields = HashMap::new();
+        for (market_id, market) in &self.exchange.financial_markets {
+            if let FinancialMarketId::Treasury { tenor } = market_id {
+                if let (Some(bid), Some(ask)) = (market.order_book.best_bid(), market.order_book.best_ask()) {
+                    let price = (bid.price + ask.price) / 2.0;
+                    let daily_rate = market_id.price_to_daily_rate(price);
+                    let annual_rate = (1.0 + daily_rate).powf(365.0) - 1.0;
+                    yields.insert(*tenor, annual_rate);
+                }
+            }
+        }
+        self.yield_curve = YieldCurve { date, yields };
     }
 }

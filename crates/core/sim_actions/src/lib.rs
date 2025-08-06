@@ -4,7 +4,9 @@ pub mod production;
 pub mod consumption;
 pub mod validation;
 pub mod fiscal;
+pub mod settlement;
 
+pub use settlement::*;
 pub use fiscal::*;
 pub use banking::*;
 pub use trading::*;
@@ -22,6 +24,7 @@ pub enum SimAction {
     Production(ProductionAction),
     Consumption(ConsumptionAction),
     Fiscal(FiscalAction),
+    Settlement(SettlementAction),
 }
 
 impl SimAction {
@@ -32,6 +35,7 @@ impl SimAction {
             SimAction::Production(action) => format!("Production::{}", action.name()),
             SimAction::Consumption(action) => format!("Consumption::{}", action.name()),
             SimAction::Fiscal(_) => "Fiscal".to_string(), // + Handle new variant
+            SimAction::Settlement(action) => format!("Settlement::{}", action.name()),
         }
     }
 
@@ -46,6 +50,7 @@ impl SimAction {
                 FiscalAction::IssueDebt { government_id, .. } => *government_id,
                 FiscalAction::SetSpendingTarget { government_id, .. } => *government_id,
             }
+            SimAction::Settlement(action) => action.agent_id(),
         }
     }
 }

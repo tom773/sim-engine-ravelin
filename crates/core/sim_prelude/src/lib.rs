@@ -7,6 +7,7 @@ pub use sim_actions::{
     TradingAction,
     FiscalAction,
     ActionValidator,
+    SettlementAction,
     Validator,
 };
 pub use sim_effects::{

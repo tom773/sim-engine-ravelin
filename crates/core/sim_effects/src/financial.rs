@@ -1,5 +1,6 @@
-use sim_types::*;
 use serde::{Deserialize, Serialize};
+use sim_types::*;
+use chrono::NaiveDate;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum FinancialEffect {
@@ -9,6 +10,13 @@ pub enum FinancialEffect {
     RemoveInstrument(InstrumentId),
     SwapInstrument { id: InstrumentId, new_debtor: AgentId, new_creditor: AgentId },
     RecordTransaction(Transaction),
+    SplitAndTransferInstrument { id: InstrumentId, buyer: AgentId, quantity: u64 },
+    AccrueInterest {
+        instrument_id: InstrumentId,
+        accrued_amount: f64,
+        accrual_date: NaiveDate,
+    },
+    ResetAccruedInterest { instrument_id: InstrumentId },
 }
 
 impl FinancialEffect {
@@ -20,6 +28,9 @@ impl FinancialEffect {
             FinancialEffect::RemoveInstrument(_) => "RemoveInstrument",
             FinancialEffect::SwapInstrument { .. } => "SwapInstrument",
             FinancialEffect::RecordTransaction(_) => "RecordTransaction",
+            FinancialEffect::SplitAndTransferInstrument { .. } => "SplitAndTransferInstrument",
+            FinancialEffect::AccrueInterest { .. } => "AccrueInterest",
+            FinancialEffect::ResetAccruedInterest { .. } => "ResetAccruedInterest",
         }
     }
 }

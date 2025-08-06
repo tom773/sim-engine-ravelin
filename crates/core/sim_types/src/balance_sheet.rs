@@ -14,11 +14,22 @@ pub struct BalanceSheet {
     pub liabilities: HashMap<InstrumentId, FinancialInstrument>,
     #[serde_as(as = "HashMap<DisplayFromStr, _>")]
     pub real_assets: HashMap<AssetId, RealAsset>,
+    pub income_statement: IncomeStatement,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct IncomeStatement {
+    pub revenue: f64,
+    pub cost_of_goods_sold: f64,
+    pub operating_expenses: f64, // e.g., Wages
+    pub interest_income: f64,
+    pub interest_expense: f64,
+    pub net_income: f64,
 }
 
 impl BalanceSheet {
     pub fn new(owner: AgentId) -> Self {
-        Self { agent_id: owner, assets: HashMap::new(), liabilities: HashMap::new(), real_assets: HashMap::new() }
+        Self { agent_id: owner, assets: HashMap::new(), liabilities: HashMap::new(), real_assets: HashMap::new(), income_statement: IncomeStatement::default() }
     }
 
     pub fn liquid_assets(&self) -> f64 {

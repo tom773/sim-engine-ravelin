@@ -1,6 +1,6 @@
 use crate::*;
 use std::collections::HashSet;
-
+use chrono::NaiveDate;
 pub trait InstrumentManager {
     fn update_instrument(&mut self, id: &InstrumentId, new_principal: f64) -> Result<(), String>;
     fn create_instrument(&mut self, instrument: FinancialInstrument) -> Result<(), String>;
@@ -10,6 +10,15 @@ pub trait InstrumentManager {
     fn transfer_instrument(&mut self, id: &InstrumentId, new_creditor: AgentId) -> Result<(), String>;
     fn swap_instrument(
         &mut self, id: &InstrumentId, new_debtor: &AgentId, new_creditor: &AgentId,
+    ) -> Result<(), String>;
+    fn split_and_transfer_instrument(
+        &mut self,
+        instrument_id: &InstrumentId,
+        buyer: AgentId,
+        quantity_to_transfer: u64,
+    ) -> Result<InstrumentId, String>;
+    fn pay_interest(
+        &mut self, instrument_id: InstrumentId, payment_date: NaiveDate,
     ) -> Result<(), String>;
 }
 

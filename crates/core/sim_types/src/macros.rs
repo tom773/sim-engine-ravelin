@@ -26,6 +26,8 @@ macro_rules! cash {
             principal: $amount,
             details: Box::new($crate::CashDetails),
             originated_date: $originated,
+            accrued_interest: 0.0,
+            last_accrual_date: $originated,
         }
     };
 }
@@ -40,6 +42,8 @@ macro_rules! deposit {
             principal: $amount,
             details: Box::new($crate::DemandDepositDetails { interest_rate: $rate }),
             originated_date: $originated,
+            accrued_interest: 0.0,
+            last_accrual_date: $originated,
         }
     };
 }
@@ -54,13 +58,15 @@ macro_rules! reserves {
             principal: $amount,
             details: Box::new($crate::CentralBankReservesDetails),
             originated_date: $originated,
+            accrued_interest: 0.0,
+            last_accrual_date: $originated,
         }
     };
 }
 
 #[macro_export]
 macro_rules! bond {
-    ($investor:expr, $issuer:expr, $principal:expr, $coupon_rate:expr, $maturity_date:expr, $face_value:expr, $bond_type:expr, $frequency:expr, $originated:expr) => {
+    ($investor:expr, $issuer:expr, $principal:expr, $coupon_rate:expr, $maturity_date:expr, $face_value:expr, $bond_type:expr, $frequency:expr, $tenor:expr, $originated:expr) => {
         $crate::FinancialInstrument {
             id: $crate::InstrumentId(uuid::Uuid::new_v4()),
             creditor: $investor,
@@ -72,8 +78,12 @@ macro_rules! bond {
                 face_value: $face_value,
                 maturity_date: $maturity_date,
                 frequency: $frequency,
+                tenor: $tenor, // Pass tenor
+                quantity: 1,
             }),
             originated_date: $originated,
+            accrued_interest: 0.0,
+            last_accrual_date: $originated,
         }
     };
 }

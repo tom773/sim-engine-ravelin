@@ -1,8 +1,9 @@
 use crate::scenario::{BankConfig, ConsumerConfig, FirmConfig};
-use chrono::Datelike;
 use rand::prelude::*;
 use sim_prelude::*;
 use std::str::FromStr;
+
+const STANDARD_BOND_FACE_VALUE: f64 = 1000.0;
 
 pub struct AgentFactory<'a> {
     pub state: &'a mut SimState,
@@ -19,36 +20,42 @@ impl<'a> AgentFactory<'a> {
         self.state.financial_system.balance_sheets.insert(bank.id, BalanceSheet::new(bank.id));
 
         let reserves = reserves!(bank.id, cb_id, config.initial_reserves, self.state.current_date);
+        let cash = cash!(bank.id, 200_000.0, cb_id, self.state.current_date);
         self.state.financial_system.create_instrument(reserves).unwrap();
+        self.state.financial_system.create_instrument(cash).unwrap();
+
+        let government_id = self.state.financial_system.government.id;
+        let policy_rate = self.state.financial_system.central_bank.policy_rate;
 
         for bond_conf in &config.initial_bonds {
             let tenor = Tenor::from_str(&bond_conf.tenor).unwrap();
-            let years_to_maturity = match tenor {
-                Tenor::T2Y => 2,
-                Tenor::T5Y => 5,
-                Tenor::T10Y => 10,
-                Tenor::T30Y => 30,
+            let maturity_date = tenor.add_to_date(self.state.current_date);
+            let coupon_rate = policy_rate;
+            let quantity = bond_conf.quantity as u64;
+
+            let bond_instrument = FinancialInstrument {
+                id: InstrumentId(uuid::Uuid::new_v4()),
+                creditor: bank.id,
+                debtor: government_id,
+
+                principal: STANDARD_BOND_FACE_VALUE * quantity as f64,
+                details: Box::new(BondDetails {
+                    bond_type: BondType::Government,
+                    coupon_rate,
+                    face_value: STANDARD_BOND_FACE_VALUE,
+                    maturity_date,
+                    frequency: 2,
+                    tenor,
+                    quantity,
+                }),
+                originated_date: self.state.current_date,
+                accrued_interest: 0.0,
+                last_accrual_date: self.state.current_date,
             };
-            let maturity_date = self
-                .state
-                .current_date
-                .with_year(self.state.current_date.year() + years_to_maturity)
-                .expect("Failed to calculate maturity date");
-
-            let bond = bond!(
-                bank.id,
-                cb_id,
-                bond_conf.face_value,
-                0.04,
-                maturity_date,
-                bond_conf.face_value,
-                BondType::Government,
-                2,
-                self.state.current_date
-            );
-            self.state.financial_system.create_instrument(bond).unwrap();
+            
+            self.state.financial_system.create_or_consolidate_instrument(bond_instrument).unwrap();
         }
-
+        
         self.state.agents.banks.insert(bank.id, bank.clone());
         bank
     }

@@ -71,7 +71,12 @@ impl StateEffectApplicator {
             FinancialEffect::RemoveInstrument(id) => {
                 state.financial_system.remove_instrument(id).map_err(|e| EffectError::FinancialSystemError(e))
             }
-
+            FinancialEffect::SplitAndTransferInstrument { id, buyer, quantity } => {
+                state.financial_system
+                    .split_and_transfer_instrument(id, *buyer, *quantity)
+                    .map(|_| ())
+                    .map_err( EffectError::FinancialSystemError)
+            }
             FinancialEffect::SwapInstrument { id, new_debtor, new_creditor } => state
                 .financial_system
                 .swap_instrument(id, new_debtor, new_creditor)
@@ -80,6 +85,47 @@ impl StateEffectApplicator {
             FinancialEffect::RecordTransaction(tx) => {
                 state.history.transactions.push(tx.clone());
                 Ok(())
+            }
+            FinancialEffect::AccrueInterest { instrument_id, accrued_amount, accrual_date } => {
+                if let Some(instrument) = state.financial_system.instruments.get_mut(instrument_id) {
+                    instrument.accrued_interest += *accrued_amount;
+                    instrument.last_accrual_date = *accrual_date;
+
+                    if let Some(creditor_bs) = state.financial_system.balance_sheets.get_mut(&instrument.creditor) {
+                        if let Some(asset) = creditor_bs.assets.get_mut(instrument_id) {
+                             asset.accrued_interest += *accrued_amount;
+                             asset.last_accrual_date = *accrual_date;
+                        }
+                    }
+                     if let Some(debtor_bs) = state.financial_system.balance_sheets.get_mut(&instrument.debtor) {
+                        if let Some(liability) = debtor_bs.liabilities.get_mut(instrument_id) {
+                             liability.accrued_interest += *accrued_amount;
+                             liability.last_accrual_date = *accrual_date;
+                        }
+                    }
+
+                    Ok(())
+                } else {
+                     Err(EffectError::InstrumentNotFound { id: *instrument_id })
+                }
+            }
+            FinancialEffect::ResetAccruedInterest { instrument_id } => {
+                if let Some(instrument) = state.financial_system.instruments.get_mut(instrument_id) {
+                    instrument.accrued_interest = 0.0;
+                    if let Some(creditor_bs) = state.financial_system.balance_sheets.get_mut(&instrument.creditor) {
+                        if let Some(asset) = creditor_bs.assets.get_mut(instrument_id) {
+                             asset.accrued_interest = 0.0;
+                        }
+                    }
+                     if let Some(debtor_bs) = state.financial_system.balance_sheets.get_mut(&instrument.debtor) {
+                        if let Some(liability) = debtor_bs.liabilities.get_mut(instrument_id) {
+                             liability.accrued_interest = 0.0;
+                        }
+                    }
+                    Ok(())
+                } else {
+                     Err(EffectError::InstrumentNotFound { id: *instrument_id })
+                }
             }
         }
     }

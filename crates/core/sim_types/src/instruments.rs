@@ -1,17 +1,18 @@
 use crate::*;
-use serde::{Deserialize, Serialize};
 use chrono::NaiveDate;
-use dyn_clone::{clone_trait_object, DynClone};
+use dyn_clone::{DynClone, clone_trait_object};
+use serde::{Deserialize, Serialize};
+use serde_with::{DisplayFromStr, serde_as};
 use std::any::Any;
+use std::collections::HashMap;
+use std::fmt;
 use std::fmt::Debug;
 use std::str::FromStr;
-use std::fmt;
 use thiserror::Error;
-use serde_with::{DisplayFromStr, serde_as};
-use std::collections::HashMap;
 #[typetag::serde(tag = "instrument_details_type")]
 pub trait InstrumentDetails: DynClone + Debug + Send + Sync {
     fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 clone_trait_object!(InstrumentDetails);
 
@@ -23,13 +24,20 @@ pub struct FinancialInstrument {
     pub principal: f64,
     pub originated_date: NaiveDate,
     pub details: Box<dyn InstrumentDetails>,
+    pub accrued_interest: f64,
+    pub last_accrual_date: NaiveDate,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CashDetails;
 #[typetag::serde]
 impl InstrumentDetails for CashDetails {
-    fn as_any(&self) -> &dyn Any { self }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -38,7 +46,12 @@ pub struct DemandDepositDetails {
 }
 #[typetag::serde]
 impl InstrumentDetails for DemandDepositDetails {
-    fn as_any(&self) -> &dyn Any { self }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -47,14 +60,24 @@ pub struct SavingsDepositDetails {
 }
 #[typetag::serde]
 impl InstrumentDetails for SavingsDepositDetails {
-    fn as_any(&self) -> &dyn Any { self }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CentralBankReservesDetails;
 #[typetag::serde]
 impl InstrumentDetails for CentralBankReservesDetails {
-    fn as_any(&self) -> &dyn Any { self }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -64,10 +87,17 @@ pub struct BondDetails {
     pub face_value: f64,
     pub maturity_date: NaiveDate,
     pub frequency: usize,
+    pub tenor: Tenor,
+    pub quantity: u64,
 }
 #[typetag::serde]
 impl InstrumentDetails for BondDetails {
-    fn as_any(&self) -> &dyn Any { self }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -79,7 +109,12 @@ pub struct LoanDetails {
 }
 #[typetag::serde]
 impl InstrumentDetails for LoanDetails {
-    fn as_any(&self) -> &dyn Any { self }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -105,7 +140,16 @@ pub struct CollateralInfo {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum CreditRating {
-    AAA, AA, A, BBB, BB, B, CCC, CC, C, D,
+    AAA,
+    AA,
+    A,
+    BBB,
+    BB,
+    B,
+    CCC,
+    CC,
+    C,
+    D,
 }
 
 impl fmt::Display for CreditRating {
@@ -144,12 +188,13 @@ impl Default for FinancialInstrument {
             debtor: Default::default(),
             creditor: Default::default(),
             principal: 0.0,
-            originated_date: chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
+            originated_date: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
             details: Box::new(CashDetails),
+            accrued_interest: 0.0,
+            last_accrual_date: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
         }
     }
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ConsolidationKey {
@@ -189,6 +234,14 @@ impl Consolidatable for FinancialInstrument {
                 subtype: Some(format!("rate_{}", (details.interest_rate * 10000.0) as i32)),
             });
         }
+        if let Some(details) = self.details.as_any().downcast_ref::<BondDetails>() {
+            return Some(ConsolidationKey {
+                creditor: self.creditor,
+                debtor: self.debtor,
+                instrument_type: "Bond".to_string(),
+                subtype: Some(format!("{:?}_{}", details.tenor, (details.coupon_rate * 10000.0) as i32,)),
+            });
+        }
         None
     }
 }
@@ -205,13 +258,21 @@ pub struct RealAsset {
 #[serde_as]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum RealAssetType {
-    RealEstate { address: String, property_type: String },
+    RealEstate {
+        address: String,
+        property_type: String,
+    },
     Inventory {
         #[serde_as(as = "HashMap<DisplayFromStr, _>")]
-        goods: HashMap<GoodId, InventoryItem>
+        goods: HashMap<GoodId, InventoryItem>,
     },
-    Equipment { description: String, depreciation_rate: f64 },
-    IntellectualProperty { description: String },
+    Equipment {
+        description: String,
+        depreciation_rate: f64,
+    },
+    IntellectualProperty {
+        description: String,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -245,5 +306,10 @@ pub struct EquityDetails {
 
 #[typetag::serde]
 impl InstrumentDetails for EquityDetails {
-    fn as_any(&self) -> &dyn Any { self }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
 }

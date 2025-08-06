@@ -4,11 +4,12 @@ use sim_prelude::*;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DomainRegistry {
-    banking: BankingDomain,
-    production: ProductionDomain,
-    trading: TradingDomain,
-    consumption: ConsumptionDomain,
-    fiscal: FiscalDomain,
+    pub banking: BankingDomain,
+    pub production: ProductionDomain,
+    pub trading: TradingDomain,
+    pub consumption: ConsumptionDomain,
+    pub fiscal: FiscalDomain,
+    pub settlement: SettlementDomain,
 }
 
 impl DomainRegistry {
@@ -19,6 +20,7 @@ impl DomainRegistry {
             trading: TradingDomain::new(),
             consumption: ConsumptionDomain::new(),
             fiscal: FiscalDomain::new(),
+            settlement: SettlementDomain::new(),
         }
     }
 
@@ -81,6 +83,18 @@ impl DomainRegistry {
                     result.effects
                 } else {
                     println!("Fiscal domain cannot handle action: {:?}", action);
+                    vec![]
+                }
+            }
+            SimAction::Settlement(action) => {
+                if self.settlement.can_handle(action) {
+                    let result = self.settlement.execute(action, state);
+                    if !result.success {
+                        println!("Settlement action failed: {:?}", result.errors);
+                    }
+                    result.effects
+                } else {
+                    println!("Settlement domain cannot handle action: {:?}", action);
                     vec![]
                 }
             }
