@@ -1,6 +1,5 @@
 use crate::*;
 use serde::{Deserialize, Serialize};
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Bank {
     pub id: AgentId,
@@ -29,6 +28,14 @@ pub struct Firm {
     pub recipe: Option<RecipeId>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Government {
+    pub id: AgentId,
+    pub tax_rates: TaxRates,
+    pub spending_targets: SpendingTargets,
+    pub debt_ceiling: Option<f64>,
+    pub fiscal_policy: FiscalPolicy,
+}
 
 impl Bank {
     pub fn new(name: String, lending_spread: f64, deposit_spread: f64) -> Self {
@@ -65,10 +72,30 @@ impl Firm {
             recipe,
         }
     }
-
     pub fn get_employees(&self) -> &Vec<AgentId> {
         &self.employees
     }
+    // TODO: Market needs to store transaction details 
+    pub fn calculate_profits(&self, revenues: f64, costs: f64) -> FirmProfits {
+        let gross_profit = revenues - costs;
+        let tax_liability = gross_profit * 0.21;
+        let net_profit = gross_profit - tax_liability;
+        
+        FirmProfits {
+            gross: gross_profit,
+            tax: tax_liability,
+            net: net_profit,
+            retained_earnings_ratio: 0.6,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FirmProfits {
+    pub gross: f64,
+    pub tax: f64,
+    pub net: f64,
+    pub retained_earnings_ratio: f64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -83,4 +110,30 @@ pub enum PersonalityArchetype {
     Balanced,
     Spender,
     Saver,
+}
+
+impl Government {
+    pub fn new(tax_rates: TaxRates, spending_targets: SpendingTargets, fiscal_policy: FiscalPolicy) -> Self {
+        Self {
+            id: AgentId(uuid::Uuid::new_v4()),
+            tax_rates,
+            spending_targets,
+            debt_ceiling: None,
+            fiscal_policy,
+        }
+    }
+    pub fn get_id(&self) -> &AgentId {
+        &self.id
+    }
+}
+impl Default for Government {
+    fn default() -> Self {
+        Self {
+            id: AgentId(uuid::Uuid::new_v4()),
+            tax_rates: TaxRates::default(),
+            spending_targets: SpendingTargets::default(),
+            debt_ceiling: None,
+            fiscal_policy: FiscalPolicy::default(),
+        }
+    }
 }

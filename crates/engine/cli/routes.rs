@@ -1,6 +1,5 @@
 use crate::AppState;
 use async_nats::{Client, Message};
-use engine::*;
 use rand::rngs::ThreadRng;
 use serde_json::json;
 use std::sync::Arc;
@@ -32,13 +31,12 @@ fn handle_init_sim(state: &Arc<AppState>) -> Result<String, String> {
     println!("[SIMCTL] Received INIT command.");
     let mut engine_guard = state.sim_engine.lock().unwrap();
     
-    let sim_state = state.scenario.initialize_state();
-    *engine_guard = Some(SimulationEngine::new(sim_state));
+    let engine = state.scenario.initialize_engine();
+    *engine_guard = Some(engine);
 
     println!("[SIMCTL] Simulation Initialized.");
     Ok(json!({ "status": "ok", "message": "Simulation initialized successfully." }).to_string())
 }
-
 fn handle_tick(state: &Arc<AppState>) -> Result<String, String> {
     println!("[SIMCTL] Received TICK command.");
     let mut engine_guard = state.sim_engine.lock().unwrap();

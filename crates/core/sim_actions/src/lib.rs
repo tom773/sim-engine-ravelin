@@ -3,7 +3,9 @@ pub mod trading;
 pub mod production;
 pub mod consumption;
 pub mod validation;
+pub mod fiscal;
 
+pub use fiscal::*;
 pub use banking::*;
 pub use trading::*;
 pub use production::*;
@@ -19,6 +21,7 @@ pub enum SimAction {
     Trading(TradingAction),
     Production(ProductionAction),
     Consumption(ConsumptionAction),
+    Fiscal(FiscalAction),
 }
 
 impl SimAction {
@@ -28,6 +31,7 @@ impl SimAction {
             SimAction::Trading(action) => format!("Trading::{}", action.name()),
             SimAction::Production(action) => format!("Production::{}", action.name()),
             SimAction::Consumption(action) => format!("Consumption::{}", action.name()),
+            SimAction::Fiscal(_) => "Fiscal".to_string(), // + Handle new variant
         }
     }
 
@@ -37,6 +41,11 @@ impl SimAction {
             SimAction::Trading(action) => action.agent_id(),
             SimAction::Production(action) => action.agent_id(),
             SimAction::Consumption(action) => action.agent_id(),
+            SimAction::Fiscal(action) => match action { // + Handle new variant
+                FiscalAction::ChangeTaxRate { government_id, .. } => *government_id,
+                FiscalAction::IssueDebt { government_id, .. } => *government_id,
+                FiscalAction::SetSpendingTarget { government_id, .. } => *government_id,
+            }
         }
     }
 }

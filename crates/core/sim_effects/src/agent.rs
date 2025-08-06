@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub enum AgentEffect {
     Hire { firm: AgentId, count: u32 },
     UpdateIncome { id: AgentId, new_income: f64 },
+    RecordDividendIncome { recipient: AgentId, amount: f64 },
     UpdateRevenue { id: AgentId, revenue: f64 },
     Produce { firm: AgentId, good_id: GoodId, amount: f64 },
 }
@@ -14,6 +15,7 @@ impl AgentEffect {
         match self {
             AgentEffect::Hire { .. } => "Hire",
             AgentEffect::UpdateIncome { .. } => "UpdateIncome",
+            AgentEffect::RecordDividendIncome { .. } => "RecordDividendIncome",
             AgentEffect::UpdateRevenue { .. } => "UpdateRevenue",
             AgentEffect::Produce { .. } => "Produce",
         }

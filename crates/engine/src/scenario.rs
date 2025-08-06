@@ -3,7 +3,8 @@ use serde::Deserialize;
 use sim_prelude::*;
 use std::{collections::HashMap, str::FromStr};
 use uuid::Uuid;
-
+use crate::*;
+use domains_prelude::*;
 const _SCENARIO_NAMESPACE: Uuid = uuid::uuid!("6E62B743-2623-404B-84C8-45F48A85189A");
 
 #[derive(Debug, Deserialize)]
@@ -72,7 +73,7 @@ impl Scenario {
         toml::from_str(toml_str)
     }
 
-    pub fn initialize_state(&self) -> SimState {
+    pub fn initialize_engine(&self) -> SimulationEngine {
         let mut state = SimState::default();
         state.config.iterations = self.config.iterations;
         state.financial_system.goods = goods::CATALOGUE.clone();
@@ -109,6 +110,21 @@ impl Scenario {
         }
         state.financial_system.exchange.register_financial_market(FinancialMarketId::SecuredOvernightFinancing);
 
-        state
+        let mut engine = SimulationEngine::new(state);
+
+        for bank_id in engine.state.agents.banks.keys() {
+            engine.decision_models.insert(*bank_id, Box::new(BasicBankDecisionModel::default()));
+        }
+        for consumer_id in engine.state.agents.consumers.keys() {
+            engine.decision_models.insert(*consumer_id, Box::new(BasicConsumerDecisionModel::default()));
+        }
+        for firm_id in engine.state.agents.firms.keys() {
+            engine.decision_models.insert(*firm_id, Box::new(BasicFirmDecisionModel::default()));
+        }
+        engine.decision_models.insert(
+            engine.state.financial_system.government.id,
+            Box::new(BasicGovernmentDecisionModel::default()),
+        ); 
+        engine
     }
 }

@@ -8,6 +8,7 @@ pub struct DomainRegistry {
     production: ProductionDomain,
     trading: TradingDomain,
     consumption: ConsumptionDomain,
+    fiscal: FiscalDomain,
 }
 
 impl DomainRegistry {
@@ -17,6 +18,7 @@ impl DomainRegistry {
             production: ProductionDomain::new(),
             trading: TradingDomain::new(),
             consumption: ConsumptionDomain::new(),
+            fiscal: FiscalDomain::new(),
         }
     }
 
@@ -67,6 +69,18 @@ impl DomainRegistry {
                     result.effects
                 } else {
                     println!("Consumption domain cannot handle action: {:?}", action);
+                    vec![]
+                }
+            }
+            SimAction::Fiscal(action) => {
+                if self.fiscal.can_handle(action) {
+                    let result = self.fiscal.execute(action, state);
+                    if !result.success {
+                        println!("Fiscal action failed: {:?}", result.errors);
+                    }
+                    result.effects
+                } else {
+                    println!("Fiscal domain cannot handle action: {:?}", action);
                     vec![]
                 }
             }

@@ -175,6 +175,10 @@ impl StateEffectApplicator {
                  println!("[EFFECT] Firm {} producing {} of {:?}", firm, amount, good_id);
                  Ok(())
             }
+            AgentEffect::RecordDividendIncome { recipient, amount } => {
+                println!("[EFFECT] Agent {} receiving dividend income of {}", recipient, amount);
+                Ok(())
+            }
         }
     }
 }
@@ -182,5 +186,148 @@ impl StateEffectApplicator {
 impl EffectApplicator for SimState {
     fn apply_effect(&mut self, effect: &StateEffect) -> Result<(), EffectError> {
         StateEffectApplicator::apply_to_state(self, effect)
+    }
+}
+
+
+
+#[cfg(test)]
+mod eff_tests {
+    use super::*;
+    use uuid::Uuid;
+
+    fn setup_test_state() -> (SimState, AgentId, AgentId, AgentId) {
+        let mut state = SimState::default();
+        let agent_a = AgentId(Uuid::new_v4());
+        let agent_b = AgentId(Uuid::new_v4());
+        let agent_c = AgentId(Uuid::new_v4());
+
+        let mut consumer_a = Consumer::new(30, AgentId::default(), PersonalityArchetype::Balanced);
+        consumer_a.id = agent_a; // Manually set ID to match our test agent
+        consumer_a.income = 50000.0;
+        state.agents.consumers.insert(agent_a, consumer_a);
+
+        state.financial_system.balance_sheets.insert(agent_a, BalanceSheet::new(agent_a));
+        state.financial_system.balance_sheets.insert(agent_b, BalanceSheet::new(agent_b));
+        state.financial_system.balance_sheets.insert(agent_c, BalanceSheet::new(agent_c));
+
+        (state, agent_a, agent_b, agent_c)
+    }
+
+
+    #[test]
+    fn test_apply_create_instrument() {
+        let (mut state, agent_a, _, _) = setup_test_state();
+        let cb_id = state.financial_system.central_bank.id;
+        let cash_instrument = cash!(agent_a, 1000.0, cb_id, state.current_date);
+        let effect = StateEffect::Financial(FinancialEffect::CreateInstrument(cash_instrument.clone()));
+
+        let result = StateEffectApplicator::apply_to_state(&mut state, &effect);
+        assert!(result.is_ok());
+
+        assert!(state.financial_system.instruments.contains_key(&cash_instrument.id));
+
+        let creditor_bs = state.financial_system.get_bs_by_id(&agent_a).unwrap();
+        assert_eq!(creditor_bs.assets.get(&cash_instrument.id).unwrap().principal, 1000.0);
+
+        let debtor_bs = state.financial_system.get_bs_by_id(&cb_id).unwrap();
+        assert!(debtor_bs.liabilities.contains_key(&cash_instrument.id));
+    }
+
+    #[test]
+    fn test_apply_update_instrument() {
+        let (mut state, agent_a, agent_b, _) = setup_test_state();
+        let instrument = deposit!(agent_a, agent_b, 500.0, 0.01, state.current_date);
+        state.financial_system.create_instrument(instrument.clone()).unwrap();
+
+        let effect = StateEffect::Financial(FinancialEffect::UpdateInstrument { id: instrument.id, new_principal: 350.0 });
+        
+        StateEffectApplicator::apply_to_state(&mut state, &effect).unwrap();
+
+        assert_eq!(state.financial_system.instruments.get(&instrument.id).unwrap().principal, 350.0);
+        assert_eq!(state.financial_system.get_bs_by_id(&agent_a).unwrap().assets.get(&instrument.id).unwrap().principal, 350.0);
+        assert_eq!(state.financial_system.get_bs_by_id(&agent_b).unwrap().liabilities.get(&instrument.id).unwrap().principal, 350.0);
+    }
+
+    #[test]
+    fn test_apply_transfer_instrument() {
+        let (mut state, agent_a, agent_b, agent_c) = setup_test_state();
+        let instrument = deposit!(agent_a, agent_b, 500.0, 0.01, state.current_date);
+        state.financial_system.create_instrument(instrument.clone()).unwrap();
+
+        let effect = StateEffect::Financial(FinancialEffect::TransferInstrument { id: instrument.id, new_creditor: agent_c });
+
+        StateEffectApplicator::apply_to_state(&mut state, &effect).unwrap();
+        
+        assert_eq!(state.financial_system.instruments.get(&instrument.id).unwrap().creditor, agent_c);
+
+        assert!(!state.financial_system.get_bs_by_id(&agent_a).unwrap().assets.contains_key(&instrument.id));
+        assert!(state.financial_system.get_bs_by_id(&agent_c).unwrap().assets.contains_key(&instrument.id));
+        assert!(state.financial_system.get_bs_by_id(&agent_b).unwrap().liabilities.contains_key(&instrument.id));
+    }
+    #[test]
+    fn test_apply_add_and_remove_inventory() {
+        let (mut state, agent_a, _, _) = setup_test_state();
+        let oil_id = good_id!("oil");
+
+        let add_effect = StateEffect::Inventory(InventoryEffect::AddInventory {
+            owner: agent_a, good_id: oil_id, quantity: 100.0, unit_cost: 50.0,
+        });
+        StateEffectApplicator::apply_to_state(&mut state, &add_effect).unwrap();
+
+        let bs = state.financial_system.get_bs_by_id(&agent_a).unwrap();
+        let inventory = bs.get_inventory().unwrap();
+        assert_eq!(inventory.get(&oil_id).unwrap().quantity, 100.0);
+        
+        let inv_asset_value = bs.real_assets.values().find(|a| matches!(a.asset_type, RealAssetType::Inventory{..})).unwrap().market_value;
+        assert_eq!(inv_asset_value, 5000.0);
+
+        let remove_effect = StateEffect::Inventory(InventoryEffect::RemoveInventory {
+            owner: agent_a, good_id: oil_id, quantity: 30.0,
+        });
+        StateEffectApplicator::apply_to_state(&mut state, &remove_effect).unwrap();
+        
+        let bs_after_removal = state.financial_system.get_bs_by_id(&agent_a).unwrap();
+        let inventory_after_removal = bs_after_removal.get_inventory().unwrap();
+        assert_eq!(inventory_after_removal.get(&oil_id).unwrap().quantity, 70.0);
+
+        let remove_too_much = StateEffect::Inventory(InventoryEffect::RemoveInventory {
+            owner: agent_a, good_id: oil_id, quantity: 100.0, // Only 70 left
+        });
+        let result = StateEffectApplicator::apply_to_state(&mut state, &remove_too_much);
+        assert!(result.is_err());
+    }
+
+
+    #[test]
+    fn test_apply_place_order_in_book() {
+        let (mut state, agent_a, _, _) = setup_test_state();
+        let petrol_id = good_id!("petrol");
+        let market_id = MarketId::Goods(petrol_id);
+        
+        state.financial_system.exchange.register_goods_market(petrol_id, &goods::CATALOGUE);
+
+        let bid = Order::Bid(Bid { agent_id: agent_a, price: 10.0, quantity: 5.0 });
+        let effect = StateEffect::Market(MarketEffect::PlaceOrderInBook { market_id, order: bid });
+        
+        StateEffectApplicator::apply_to_state(&mut state, &effect).unwrap();
+        
+        let market = state.financial_system.exchange.goods_market(&petrol_id).unwrap();
+        assert_eq!(market.order_book.bids.len(), 1);
+        assert_eq!(market.order_book.bids[0].price, 10.0);
+    }
+    
+
+    #[test]
+    fn test_apply_update_income() {
+        let (mut state, agent_a, _, _) = setup_test_state();
+        assert_eq!(state.agents.get_consumer(&agent_a).unwrap().income, 50000.0);
+
+        let effect = StateEffect::Agent(AgentEffect::UpdateIncome { id: agent_a, new_income: 95000.0 });
+        
+        StateEffectApplicator::apply_to_state(&mut state, &effect).unwrap();
+        
+        let consumer = state.agents.get_consumer(&agent_a).unwrap();
+        assert_eq!(consumer.income, 95000.0);
     }
 }

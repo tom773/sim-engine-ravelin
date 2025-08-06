@@ -43,7 +43,13 @@ impl BalanceSheet {
             .map(|inst| inst.principal)
             .sum()
     }
-
+    pub fn total_deposits(&self) -> f64 {
+        self.assets
+            .values()
+            .filter(|inst| inst.details.as_any().is::<DemandDepositDetails>() || inst.details.as_any().is::<SavingsDepositDetails>())
+            .map(|inst| inst.principal)
+            .sum()
+    }
     pub fn total_assets(&self) -> f64 {
         let financial = self.assets.values().map(|inst| inst.principal).sum::<f64>();
         let real = self.real_assets.values().map(|asset| asset.market_value).sum::<f64>();
@@ -67,6 +73,7 @@ pub trait BalanceSheetQuery {
     fn get_total_liabilities(&self, agent_id: &AgentId) -> f64;
     fn get_liquid_assets(&self, agent_id: &AgentId) -> f64;
     fn get_deposits_at_bank(&self, agent_id: &AgentId, bank_id: &AgentId) -> f64;
+    fn get_total_deposits(&self, agent_id: &AgentId) -> f64;
     fn get_cash_assets(&self, agent_id: &AgentId) -> f64;
     fn liquidity(&self, agent_id: &AgentId) -> f64;
     fn get_bank_reserves(&self, agent_id: &AgentId) -> Option<f64>;

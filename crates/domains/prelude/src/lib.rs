@@ -21,3 +21,9 @@ pub use domains_trading::{
     TradingDomain, 
     TradingResult,
 };
+
+pub use domains_fiscal::{
+    FiscalDomain, 
+    FiscalResult,
+    BasicGovernmentDecisionModel
+}; 

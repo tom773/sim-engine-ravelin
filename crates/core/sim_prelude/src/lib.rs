@@ -5,6 +5,7 @@ pub use sim_actions::{
     ConsumptionAction,
     ProductionAction,
     TradingAction,
+    FiscalAction,
     ActionValidator,
     Validator,
 };

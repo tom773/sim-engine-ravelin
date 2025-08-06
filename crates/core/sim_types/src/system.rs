@@ -11,6 +11,7 @@ pub struct FinancialSystem {
     #[serde_as(as = "HashMap<DisplayFromStr, _>")]
     pub balance_sheets: HashMap<AgentId, BalanceSheet>,
     pub central_bank: CentralBank,
+    pub government: Government,
     pub exchange: Exchange,
     pub goods: GoodsRegistry,
 }
@@ -19,13 +20,21 @@ impl Default for FinancialSystem {
     fn default() -> Self {
         let central_bank =
             CentralBank { id: AgentId(uuid::Uuid::new_v4()), policy_rate: 430.0, reserve_requirement: 0.1 };
+        let government = Government {
+            id: AgentId(uuid::Uuid::new_v4()),
+            tax_rates: TaxRates::default(),
+            spending_targets: SpendingTargets::default(),
+            debt_ceiling: Some(1_000_000_000.0),
+            fiscal_policy: FiscalPolicy::default(),
+        };
         let mut balance_sheets = HashMap::new();
         balance_sheets.insert(central_bank.id, BalanceSheet::new(central_bank.id));
-
+        balance_sheets.insert(government.id, BalanceSheet::new(government.id));
         Self {
             instruments: HashMap::new(),
             balance_sheets,
             central_bank,
+            government,
             exchange: Exchange::default(),
             goods: GoodsRegistry::new(),
         }
@@ -64,6 +73,9 @@ impl BalanceSheetQuery for FinancialSystem {
     }
     fn liquidity(&self, agent_id: &AgentId) -> f64 {
         self.balance_sheets.get(agent_id).map(|bs| bs.liquid_assets()).unwrap_or(0.0)
+    }
+    fn get_total_deposits(&self, agent_id: &AgentId) -> f64 {
+        self.balance_sheets.get(agent_id).map(|bs| bs.total_deposits()).unwrap_or(0.0)
     }
     fn get_bank_reserves(&self, agent_id: &AgentId) -> Option<f64> {
         self.balance_sheets.get(agent_id).map(|bs| {

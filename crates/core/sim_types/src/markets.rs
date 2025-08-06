@@ -17,6 +17,9 @@ impl Tenor {
             Tenor::T30Y => 10950,
         }
     }
+    pub fn add_to_date(&self, date: chrono::NaiveDate) -> chrono::NaiveDate {
+        date + chrono::Duration::days(self.to_days() as i64)
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FinancialMarketId {

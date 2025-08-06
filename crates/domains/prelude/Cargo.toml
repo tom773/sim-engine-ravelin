@@ -8,3 +8,4 @@ domains_banking = { path = "../banking" }
 domains_production = { path = "../production" }
 domains_trading = { path = "../trading" }
 domains_consumption = { path = "../consumption" }
+domains_fiscal = { path = "../fiscal" }

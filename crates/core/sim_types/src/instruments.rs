@@ -230,5 +230,20 @@ pub enum TransactionType {
     Deposit { holder: AgentId, bank: AgentId, amount: f64 },
     Withdrawal { holder: AgentId, bank: AgentId, amount: f64 },
     Transfer { from: AgentId, to: AgentId, amount: f64 },
-    InterestPayment,
+    InterestPayment { payer: AgentId, receiver: AgentId, amount: f64 },
+    DividendPayment { payer: AgentId, receiver: AgentId, amount: f64 },
+    TaxPayment { payer: AgentId, tax_type: TaxType, period: NaiveDate },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EquityDetails {
+    pub shares_outstanding: u64,
+    pub par_value: f64,
+    pub voting_rights: bool,
+    pub dividend_yield: Option<f64>,
+}
+
+#[typetag::serde]
+impl InstrumentDetails for EquityDetails {
+    fn as_any(&self) -> &dyn Any { self }
 }
