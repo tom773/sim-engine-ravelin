@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub enum ConsumptionAction {
     Purchase { agent_id: AgentId, seller: AgentId, good_id: GoodId, amount: f64 },
     Consume { agent_id: AgentId, good_id: GoodId, amount: f64 },
+    NoAction { agent_id: AgentId },
 }
 
 impl ConsumptionAction {
@@ -12,6 +13,7 @@ impl ConsumptionAction {
         match self {
             ConsumptionAction::Purchase { .. } => "Purchase",
             ConsumptionAction::Consume { .. } => "Consume",
+            ConsumptionAction::NoAction { .. } => "NoAction",
         }
     }
 
@@ -19,6 +21,7 @@ impl ConsumptionAction {
         match self {
             ConsumptionAction::Purchase { agent_id, .. } => *agent_id,
             ConsumptionAction::Consume { agent_id, .. } => *agent_id,
+            ConsumptionAction::NoAction { agent_id } => *agent_id,
         }
     }
 }

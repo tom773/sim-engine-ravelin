@@ -1,8 +1,7 @@
-use sim_types::*;
 use crate::SimAction;
 
 pub trait ActionValidator {
-    fn validate(&self, action: &SimAction, state: &SimState) -> Result<(), String>;
+    fn validate(&self, action: &SimAction) -> Result<(), String>;
 }
 
 pub struct Validator;

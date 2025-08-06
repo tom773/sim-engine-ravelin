@@ -1,28 +1,23 @@
 pub use domains_banking::{
     BankingDomain, 
-    BankingOperations, 
-    BankingValidator, 
     BankingResult,
-    BankingAgent, 
+    BasicBankDecisionModel,
 };
 
 pub use domains_consumption::{
     ConsumptionDomain, 
-    ConsumptionOperations, 
-    ConsumptionValidator, 
     ConsumptionResult,
+    BasicConsumerDecisionModel,
+    ParametricMPC,
 };
 
 pub use domains_production::{
     ProductionDomain, 
-    ProductionOperations, 
-    ProductionValidator, 
     ProductionResult,
+    BasicFirmDecisionModel,
 };
 
 pub use domains_trading::{
     TradingDomain, 
-    TradingOperations, 
-    TradingValidator, 
     TradingResult,
 };

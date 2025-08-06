@@ -8,5 +8,4 @@ edition = "2024"
 sim_types = { path = "../sim_types" }
 sim_actions = { path = "../sim_actions" }
 sim_effects = { path = "../sim_effects" }
-sim_traits = { path = "../sim_traits" }
 sim_decisions = { path = "../sim_decisions" }

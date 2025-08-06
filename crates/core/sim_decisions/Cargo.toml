@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 sim_types = { path = "../sim_types" }
-sim_traits = { path = "../sim_traits" }
+sim_actions = { path = "../sim_actions" }
 serde = { workspace = true }
 rand = { workspace = true }
 ndarray = { workspace = true }

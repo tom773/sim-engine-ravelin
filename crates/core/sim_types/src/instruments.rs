@@ -7,7 +7,8 @@ use std::fmt::Debug;
 use std::str::FromStr;
 use std::fmt;
 use thiserror::Error;
-
+use serde_with::{DisplayFromStr, serde_as};
+use std::collections::HashMap;
 #[typetag::serde(tag = "instrument_details_type")]
 pub trait InstrumentDetails: DynClone + Debug + Send + Sync {
     fn as_any(&self) -> &dyn Any;
@@ -190,4 +191,44 @@ impl Consolidatable for FinancialInstrument {
         }
         None
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct RealAsset {
+    pub id: AssetId,
+    pub asset_type: RealAssetType,
+    pub owner: AgentId,
+    pub market_value: f64,
+    pub acquired_date: u32,
+}
+
+#[serde_as]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum RealAssetType {
+    RealEstate { address: String, property_type: String },
+    Inventory {
+        #[serde_as(as = "HashMap<DisplayFromStr, _>")]
+        goods: HashMap<GoodId, InventoryItem>
+    },
+    Equipment { description: String, depreciation_rate: f64 },
+    IntellectualProperty { description: String },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Transaction {
+    pub id: uuid::Uuid,
+    pub date: u32,
+    pub qty: f64,
+    pub from: AgentId,
+    pub to: AgentId,
+    pub tx_type: TransactionType,
+    pub instrument_id: Option<InstrumentId>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum TransactionType {
+    Deposit { holder: AgentId, bank: AgentId, amount: f64 },
+    Withdrawal { holder: AgentId, bank: AgentId, amount: f64 },
+    Transfer { from: AgentId, to: AgentId, amount: f64 },
+    InterestPayment,
 }

@@ -1,8 +1,8 @@
+use crate::scenario::{BankConfig, ConsumerConfig, FirmConfig};
 use chrono::Datelike;
 use rand::prelude::*;
 use sim_prelude::*;
 use std::str::FromStr;
-use crate::scenario::{BankConfig, ConsumerConfig, FirmConfig};
 
 pub struct AgentFactory<'a> {
     pub state: &'a mut SimState,
@@ -54,9 +54,10 @@ impl<'a> AgentFactory<'a> {
     }
 
     pub fn create_consumer(&mut self, config: &ConsumerConfig, bank_id: AgentId, cb_id: AgentId) -> Consumer {
-        let personality = *vec![PersonalityArchetype::Balanced, PersonalityArchetype::Saver, PersonalityArchetype::Spender]
-            .choose(self.rng)
-            .unwrap();
+        let personality =
+            *vec![PersonalityArchetype::Balanced, PersonalityArchetype::Saver, PersonalityArchetype::Spender]
+                .choose(self.rng)
+                .unwrap();
         let mut consumer = Consumer::new(self.rng.random_range(25..65), bank_id, personality);
         consumer.income = config.income;
 

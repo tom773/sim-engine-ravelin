@@ -9,37 +9,13 @@ pub struct Bank {
     pub deposit_spread: f64,
 }
 
-impl Bank {
-    pub fn new(name: String, lending_spread: f64, deposit_spread: f64) -> Self {
-        Self { id: AgentId(uuid::Uuid::new_v4()), name, lending_spread, deposit_spread }
-    }
-
-    pub fn total_liabilities(&self, fs: &FinancialSystem) -> f64 {
-        fs.get_total_liabilities(&self.id)
-    }
-
-    pub fn get_reserves(&self, fs: &FinancialSystem) -> f64 {
-        fs.get_bank_reserves(&self.id).unwrap_or(0.0)
-    }
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Consumer {
     pub id: AgentId,
     pub age: u32,
     pub bank_id: AgentId,
-    pub income: f64, // Annual income
+    pub income: f64,
     pub personality: PersonalityArchetype,
-}
-
-impl Consumer {
-    pub fn new(age: u32, bank_id: AgentId, personality: PersonalityArchetype) -> Self {
-        Self { id: AgentId(uuid::Uuid::new_v4()), age, bank_id, income: 0.0, personality }
-    }
-
-    pub fn get_cash_holdings(&self, fs: &FinancialSystem) -> f64 {
-        fs.get_cash_assets(&self.id)
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -48,9 +24,33 @@ pub struct Firm {
     pub bank_id: AgentId,
     pub name: String,
     pub employees: Vec<AgentId>,
-    pub wage_rate: f64, // Hourly wage
+    pub wage_rate: f64,
     pub productivity: f64,
     pub recipe: Option<RecipeId>,
+}
+
+
+impl Bank {
+    pub fn new(name: String, lending_spread: f64, deposit_spread: f64) -> Self {
+        Self { 
+            id: AgentId(uuid::Uuid::new_v4()), 
+            name, 
+            lending_spread, 
+            deposit_spread, 
+        }
+    }
+}
+
+impl Consumer {
+    pub fn new(age: u32, bank_id: AgentId, personality: PersonalityArchetype) -> Self {
+        Self { 
+            id: AgentId(uuid::Uuid::new_v4()), 
+            age, 
+            bank_id, 
+            income: 0.0, 
+            personality, 
+        }
+    }
 }
 
 impl Firm {
@@ -74,7 +74,7 @@ impl Firm {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CentralBank {
     pub id: AgentId,
-    pub policy_rate: f64, // e.g., 0.05 for 5%
+    pub policy_rate: f64,
     pub reserve_requirement: f64,
 }
 

@@ -9,3 +9,4 @@ serde = { workspace = true }
 uuid = { workspace = true }
 rand = { workspace = true }
 ndarray = { workspace = true }
+typetag = { workspace = true }

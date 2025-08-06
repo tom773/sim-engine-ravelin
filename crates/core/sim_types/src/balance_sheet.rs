@@ -58,6 +58,8 @@ impl BalanceSheet {
         self.total_assets() - self.total_liabilities()
     }
 }
+
+// Trait Definition: Defines the interface for querying balance sheet data
 pub trait BalanceSheetQuery {
     fn get_bs_by_id(&self, agent_id: &AgentId) -> Option<&BalanceSheet>;
     fn get_bs_mut_by_id(&mut self, agent_id: &AgentId) -> Option<&mut BalanceSheet>;
@@ -70,50 +72,7 @@ pub trait BalanceSheetQuery {
     fn get_bank_reserves(&self, agent_id: &AgentId) -> Option<f64>;
 }
 
-impl BalanceSheetQuery for FinancialSystem {
-    fn get_bs_by_id(&self, agent_id: &AgentId) -> Option<&BalanceSheet> {
-        self.balance_sheets.get(agent_id)
-    }
-    fn get_bs_mut_by_id(&mut self, agent_id: &AgentId) -> Option<&mut BalanceSheet> {
-        self.balance_sheets.get_mut(agent_id)
-    }
-    fn get_total_assets(&self, agent_id: &AgentId) -> f64 {
-        self.balance_sheets.get(agent_id).map(|bs| bs.total_assets()).unwrap_or(0.0)
-    }
-    fn get_cash_assets(&self, agent_id: &AgentId) -> f64 {
-        self.get_bs_by_id(agent_id)
-            .map(|bs| {
-                bs.assets
-                    .values()
-                    .filter(|inst| inst.details.as_any().is::<CashDetails>())
-                    .map(|inst| inst.principal)
-                    .sum::<f64>()
-            })
-            .unwrap_or(0.0)
-    }
-    fn get_total_liabilities(&self, agent_id: &AgentId) -> f64 {
-        self.balance_sheets.get(agent_id).map(|bs| bs.total_liabilities()).unwrap_or(0.0)
-    }
-    fn get_liquid_assets(&self, agent_id: &AgentId) -> f64 {
-        self.balance_sheets.get(agent_id).map(|bs| bs.liquid_assets()).unwrap_or(0.0)
-    }
-    fn get_deposits_at_bank(&self, agent_id: &AgentId, bank_id: &AgentId) -> f64 {
-        self.balance_sheets.get(agent_id).map(|bs| bs.deposits_at_bank(bank_id)).unwrap_or(0.0)
-    }
-    fn liquidity(&self, agent_id: &AgentId) -> f64 {
-        self.balance_sheets.get(agent_id).map(|bs| bs.liquid_assets()).unwrap_or(0.0)
-    }
-    fn get_bank_reserves(&self, agent_id: &AgentId) -> Option<f64> {
-        self.balance_sheets.get(agent_id).map(|bs| {
-            bs.assets
-                .values()
-                .filter(|inst| inst.details.as_any().is::<CentralBankReservesDetails>())
-                .map(|inst| inst.principal)
-                .sum::<f64>()
-        })
-    }
-}
-
+// Trait Definition: Defines the interface for inventory management
 pub trait InventoryQuery {
     fn update_inventory_market_value(&mut self);
     fn get_or_create_inventory_mut(&mut self) -> &mut HashMap<GoodId, InventoryItem>;
@@ -122,6 +81,7 @@ pub trait InventoryQuery {
     fn remove_from_inventory(&mut self, good_id: &GoodId, quantity: f64) -> Result<(), String>;
 }
 
+// Implementation for the local BalanceSheet struct
 impl InventoryQuery for BalanceSheet {
     fn update_inventory_market_value(&mut self) {
         let mut inventory_value = 0.0;

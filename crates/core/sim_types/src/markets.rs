@@ -1,7 +1,8 @@
 use crate::*;
 use serde::{Deserialize, Serialize};
-use std::{fmt, str::FromStr};
+use std::{fmt, str::FromStr, collections::HashMap}; // Add HashMap
 use thiserror::Error;
+use serde_with::{serde_as, DisplayFromStr}; // Add serde_with
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Copy)]
 pub enum Tenor {
@@ -220,5 +221,87 @@ impl FromStr for Tenor {
             "T30Y" => Ok(Tenor::T30Y),
             _ => Err(ParseTenorError(s.to_string())),
         }
+    }
+}
+
+#[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct Exchange {
+    #[serde_as(as = "HashMap<DisplayFromStr, _>")]
+    pub goods_markets: HashMap<GoodId, GoodsMarket>,
+    #[serde_as(as = "HashMap<DisplayFromStr, _>")]
+    pub financial_markets: HashMap<FinancialMarketId, FinancialMarket>,
+}
+
+impl Exchange {
+    pub fn register_goods_market(&mut self, good_id: GoodId, goods_registry: &GoodsRegistry) {
+        let name = goods_registry.get_good_name(&good_id).unwrap_or("Unknown Good").to_string();
+        self.goods_markets.entry(good_id).or_insert_with(|| GoodsMarket::new(good_id, name));
+    }
+
+    pub fn register_financial_market(&mut self, market_id: FinancialMarketId) {
+        let name = match &market_id {
+            FinancialMarketId::SecuredOvernightFinancing => "Secured Overnight Financing".to_string(),
+            FinancialMarketId::Treasury { tenor } => format!("Treasury {}", tenor),
+            FinancialMarketId::CorporateBond { rating } => format!("Corporate Bond {:?}", rating),
+        };
+        self.financial_markets.entry(market_id.clone()).or_insert_with(|| FinancialMarket::new(market_id, name));
+    }
+
+    pub fn goods_market(&self, good_id: &GoodId) -> Option<&GoodsMarket> {
+        self.goods_markets.get(good_id)
+    }
+
+    pub fn goods_market_mut(&mut self, good_id: &GoodId) -> Option<&mut GoodsMarket> {
+        self.goods_markets.get_mut(good_id)
+    }
+
+    pub fn financial_market(&self, market_id: &FinancialMarketId) -> Option<&FinancialMarket> {
+        self.financial_markets.get(market_id)
+    }
+
+    pub fn financial_market_mut(&mut self, market_id: &FinancialMarketId) -> Option<&mut FinancialMarket> {
+        self.financial_markets.get_mut(market_id)
+    }
+
+    pub fn clear_markets(&mut self) -> Vec<Trade> {
+        let mut all_trades = Vec::new();
+        for (id, market) in self.goods_markets.iter_mut() {
+            all_trades.extend(market.order_book.clear_and_match(&MarketId::Goods(*id)));
+        }
+        for (id, market) in self.financial_markets.iter_mut() {
+            all_trades.extend(market.order_book.clear_and_match(&MarketId::Financial(id.clone())));
+        }
+        all_trades
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GoodsMarket {
+    pub good_id: GoodId,
+    pub name: String,
+    pub order_book: OrderBook,
+}
+
+impl GoodsMarket {
+    pub fn new(good_id: GoodId, name: String) -> Self {
+        Self { good_id, name, order_book: OrderBook::new() }
+    }
+
+    pub fn best_ask(&self) -> Option<&Ask> {
+        self.order_book.asks.iter().min_by(|a, b| a.price.partial_cmp(&b.price).unwrap())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FinancialMarket {
+    pub market_id: FinancialMarketId,
+    pub name: String,
+    pub order_book: OrderBook,
+}
+
+impl FinancialMarket {
+    pub fn new(market_id: FinancialMarketId, name: String) -> Self {
+        Self { market_id, name, order_book: OrderBook::new() }
     }
 }
