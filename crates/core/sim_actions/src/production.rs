@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 pub enum ProductionAction {
     Hire { agent_id: AgentId, count: u32 },
     Produce { agent_id: AgentId, recipe_id: RecipeId, batches: u32 },
-    PayWages { agent_id: AgentId, employee: AgentId, amount: f64 },
 }
 
 impl ProductionAction {
@@ -13,7 +12,6 @@ impl ProductionAction {
         match self {
             ProductionAction::Hire { .. } => "Hire",
             ProductionAction::Produce { .. } => "Produce",
-            ProductionAction::PayWages { .. } => "PayWages",
         }
     }
 
@@ -21,7 +19,6 @@ impl ProductionAction {
         match self {
             ProductionAction::Hire { agent_id, .. } => *agent_id,
             ProductionAction::Produce { agent_id, .. } => *agent_id,
-            ProductionAction::PayWages { agent_id, .. } => *agent_id,
         }
     }
 }

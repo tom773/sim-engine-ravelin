@@ -19,7 +19,7 @@ impl ProductionDomain {
     }
 
     pub fn can_handle(&self, action: &ProductionAction) -> bool {
-        matches!(action, ProductionAction::Hire { .. } | ProductionAction::Produce { .. } | ProductionAction::PayWages { .. })
+        matches!(action, ProductionAction::Hire { .. } | ProductionAction::Produce { .. })
     }
 
     pub fn validate(&self, action: &ProductionAction, state: &SimState) -> Result<(), String> {
@@ -27,13 +27,6 @@ impl ProductionDomain {
             ProductionAction::Hire { agent_id, count } => self.validate_hire(*agent_id, *count, state),
             ProductionAction::Produce { agent_id, recipe_id, batches } => {
                 self.validate_produce(*agent_id, *recipe_id, *batches, state)
-            }
-            ProductionAction::PayWages { agent_id, amount, .. } => {
-                Validator::positive_amount(*amount)?;
-                if state.financial_system.get_liquid_assets(agent_id) < *amount {
-                    return Err("Insufficient funds for wages".to_string());
-                }
-                Ok(())
             }
         }
     }
@@ -83,9 +76,6 @@ impl ProductionDomain {
             ProductionAction::Hire { agent_id, count } => self.execute_hire(*agent_id, *count),
             ProductionAction::Produce { agent_id, recipe_id, batches } => {
                 self.execute_produce(*agent_id, *recipe_id, *batches, state)
-            }
-            ProductionAction::PayWages { .. } => {
-                ProductionResult { success: true, effects: vec![], errors: vec![] }
             }
         }
     }
