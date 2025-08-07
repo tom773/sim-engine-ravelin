@@ -1,4 +1,4 @@
-use sim_prelude::*;
+use sim_core::*;
 use ndarray::Array1;
 use std::error::Error;
 

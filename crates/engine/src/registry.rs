@@ -1,6 +1,6 @@
-use domains_prelude::*;
+use domains::*;
 use serde::{Deserialize, Serialize};
-use sim_prelude::*;
+use sim_core::*;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DomainRegistry {

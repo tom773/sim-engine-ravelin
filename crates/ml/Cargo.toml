@@ -12,8 +12,8 @@ name = "ml"
 path = "src/lib.rs"
 
 [dependencies]
-sim_prelude = { path = "../core/sim_prelude" }
-domains_prelude = { path = "../domains/prelude" }
+sim_core = { path = "../sim_core" }
+domains = { path = "../domains" }
 polars = {version="0.50.0", features=["lazy", "csv", "serde", "parquet"]}
 ndarray = "0.15.0"
 linfa = {version="0.7.1", features = ["serde"]}

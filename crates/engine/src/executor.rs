@@ -1,7 +1,7 @@
 use crate::*;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use sim_prelude::*;
+use sim_core::*;
 use std::collections::HashMap;
 use chrono::{Datelike, NaiveDate};
 pub struct SimulationEngine {

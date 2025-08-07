@@ -2,18 +2,8 @@
 members = [
     "crates/ml", 
     "crates/engine", 
-    "crates/core/sim_actions", 
-    "crates/core/sim_prelude", 
-    "crates/core/sim_types",
-    "crates/core/sim_effects", 
-    "crates/core/sim_decisions",
-    "crates/domains/consumption", 
-    "crates/domains/banking",
-    "crates/domains/prelude", 
-    "crates/domains/production",
-    "crates/domains/trading",
-    "crates/domains/fiscal",
-    "crates/domains/settlement", 
+    "crates/sim_core",
+    "crates/domains", 
 ]
 resolver = "3"
 

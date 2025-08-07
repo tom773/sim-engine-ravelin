@@ -1,6 +1,6 @@
 use crate::scenario::{BankConfig, ConsumerConfig, FirmConfig};
 use rand::prelude::*;
-use sim_prelude::*;
+use sim_core::*;
 use std::str::FromStr;
 
 const STANDARD_BOND_FACE_VALUE: f64 = 1000.0;

@@ -1,0 +1,16 @@
+[package]
+name = "domains"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "domains"
+path = "src/lib.rs"
+
+[dependencies]
+sim_core = { path = "../sim_core" }
+serde = { workspace = true }
+rand = { workspace = true }
+typetag = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
