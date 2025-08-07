@@ -3,7 +3,7 @@ members = [
     "crates/ml", 
     "crates/engine", 
     "crates/sim_core",
-    "crates/domains", 
+    "crates/domains", "crates/sim_macros", 
 ]
 resolver = "3"
 

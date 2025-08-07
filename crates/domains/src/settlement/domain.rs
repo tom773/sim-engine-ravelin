@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 use sim_core::*;
+use sim_macros::SimDomain;
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, SimDomain)]
 pub struct SettlementDomain {}
 
 #[derive(Debug, Clone)]
@@ -94,13 +95,9 @@ impl SettlementDomain {
         Ok(())
     }
 
-    fn create_payment_effects(
-        &self, from: AgentId, to: AgentId, amount: f64, state: &SimState,
-    ) -> Vec<StateEffect> {
+    fn create_payment_effects(&self, from: AgentId, to: AgentId, amount: f64, state: &SimState) -> Vec<StateEffect> {
         let mut effects = vec![];
         let cb_id = state.financial_system.central_bank.id;
-        // This simplified payment function assumes the paying agent ('from') has a cash instrument.
-        // The validation step ensures they have sufficient total liquid assets.
         if let Some(from_bs) = state.financial_system.get_bs_by_id(&from) {
             if let Some((cash_inst_id, cash_inst)) =
                 from_bs.assets.iter().find(|(_, inst)| inst.details.as_any().is::<CashDetails>())
@@ -134,7 +131,7 @@ impl SettlementDomain {
             }
         }
     }
-    // TODO fix bug with accruing interest on demand deposits
+
     fn calculate_daily_interest_accrual(
         &self, instrument: &FinancialInstrument, current_date: chrono::NaiveDate,
     ) -> f64 {
@@ -143,14 +140,13 @@ impl SettlementDomain {
             return 0.0;
         }
 
-        let annual_rate =
-            if let Some(deposit) = instrument.details.as_any().downcast_ref::<DemandDepositDetails>() {
-                deposit.interest_rate
-            } else if let Some(bond) = instrument.details.as_any().downcast_ref::<BondDetails>() {
-                bond.coupon_rate
-            } else {
-                return 0.0;
-            };
+        let annual_rate = if let Some(deposit) = instrument.details.as_any().downcast_ref::<DemandDepositDetails>() {
+            deposit.interest_rate
+        } else if let Some(bond) = instrument.details.as_any().downcast_ref::<BondDetails>() {
+            bond.coupon_rate
+        } else {
+            return 0.0;
+        };
 
         let daily_rate = annual_rate / 365.0;
         instrument.principal * daily_rate * days_since_last_accrual as f64
@@ -182,9 +178,8 @@ impl SettlementDomain {
             }
             let mut effects =
                 self.create_payment_effects(instrument.debtor, instrument.creditor, interest_amount, state);
-            effects.push(StateEffect::Financial(FinancialEffect::ResetAccruedInterest {
-                instrument_id: *instrument_id,
-            }));
+            effects
+                .push(StateEffect::Financial(FinancialEffect::ResetAccruedInterest { instrument_id: *instrument_id }));
             SettlementResult { success: true, effects, errors: vec![] }
         } else {
             SettlementResult { success: false, effects: vec![], errors: vec!["Instrument not found".to_string()] }

@@ -1,103 +1,54 @@
-use domains::*;
-use serde::{Deserialize, Serialize};
-use sim_core::*;
+use domains::prelude::*;
+use sim_core::{SimAction, SimState, StateEffect, Trade};
+use std::collections::HashMap;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DomainRegistry {
-    pub banking: BankingDomain,
-    pub production: ProductionDomain,
-    pub trading: TradingDomain,
-    pub consumption: ConsumptionDomain,
-    pub fiscal: FiscalDomain,
-    pub settlement: SettlementDomain,
+    domains: HashMap<&'static str, Box<dyn Domain>>,
 }
 
 impl DomainRegistry {
     pub fn new() -> Self {
-        Self {
-            banking: BankingDomain::new(),
-            production: ProductionDomain::new(),
-            trading: TradingDomain::new(),
-            consumption: ConsumptionDomain::new(),
-            fiscal: FiscalDomain::new(),
-            settlement: SettlementDomain::new(),
+        let mut domains = HashMap::new();
+        for registration in inventory::iter::<DomainRegistration> {
+            let domain_instance = (registration.constructor)();
+            domains.insert(registration.name, domain_instance);
         }
+        println!("[Registry] Loaded {} domains.", domains.len());
+        Self { domains }
     }
 
     pub fn execute(&self, action: &SimAction, state: &SimState) -> Vec<StateEffect> {
-        match action {
-            SimAction::Banking(action) => {
-                if self.banking.can_handle(action) {
-                    let result = self.banking.execute(action, state);
-                    if !result.success {
-                        println!("Banking action failed: {:?}", result.errors);
-                    }
-                    result.effects
-                } else {
-                    println!("Banking domain cannot handle action: {:?}", action);
-                    vec![]
-                }
+        let domain_name = match action {
+            SimAction::Banking(_) => "Banking",
+            SimAction::Consumption(_) => "Consumption",
+            SimAction::Fiscal(_) => "Fiscal",
+            SimAction::Production(_) => "Production",
+            SimAction::Settlement(_) => "Settlement",
+            SimAction::Trading(_) => "Trading",
+        };
+
+        if let Some(domain) = self.domains.get(domain_name) {
+            let result = domain.execute(action, state);
+            if !result.success {
+                println!("[ERROR] Action failed in domain '{}'. Errors: {:?}", domain.name(), result.errors);
             }
-            SimAction::Production(action) => {
-                if self.production.can_handle(action) {
-                    let result = self.production.execute(action, state);
-                    if !result.success {
-                        println!("Production action failed: {:?}", result.errors);
-                    }
-                    result.effects
-                } else {
-                    println!("Production domain cannot handle action: {:?}", action);
-                    vec![]
-                }
+            result.effects
+        } else {
+            println!("[ERROR] No domain registered to handle action: {:?}", action.name());
+            vec![]
+        }
+    }
+
+    pub fn settle_financial_trade(&self, trade: &Trade, state: &SimState) -> TradingResult {
+        if let Some(domain) = self.domains.get("Trading") {
+            if let Some(trading_domain) = domain.as_any().downcast_ref::<TradingDomain>() {
+                return trading_domain.settle_financial_trade(trade, state);
             }
-            SimAction::Trading(action) => {
-                if self.trading.can_handle(action) {
-                    let result = self.trading.execute(action, state);
-                    if !result.success {
-                        println!("Trading action failed: {:?}", result.errors);
-                    }
-                    result.effects
-                } else {
-                    println!("Trading domain cannot handle action: {:?}", action);
-                    vec![]
-                }
-            }
-            SimAction::Consumption(action) => {
-                if self.consumption.can_handle(action) {
-                    let result = self.consumption.execute(action, state);
-                    if !result.success {
-                        println!("Consumption action failed: {:?}", result.errors);
-                    }
-                    result.effects
-                } else {
-                    println!("Consumption domain cannot handle action: {:?}", action);
-                    vec![]
-                }
-            }
-            SimAction::Fiscal(action) => {
-                if self.fiscal.can_handle(action) {
-                    let result = self.fiscal.execute(action, state);
-                    if !result.success {
-                        println!("Fiscal action failed: {:?}", result.errors);
-                    }
-                    result.effects
-                } else {
-                    println!("Fiscal domain cannot handle action: {:?}", action);
-                    vec![]
-                }
-            }
-            SimAction::Settlement(action) => {
-                if self.settlement.can_handle(action) {
-                    let result = self.settlement.execute(action, state);
-                    if !result.success {
-                        println!("Settlement action failed: {:?}", result.errors);
-                    }
-                    result.effects
-                } else {
-                    println!("Settlement domain cannot handle action: {:?}", action);
-                    vec![]
-                }
-            }
+        }
+        TradingResult {
+            success: false,
+            effects: vec![],
+            errors: vec!["TradingDomain not found for settlement.".to_string()],
         }
     }
 }

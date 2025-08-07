@@ -4,7 +4,7 @@ use sim_core::*;
 use std::{collections::HashMap, str::FromStr};
 use uuid::Uuid;
 use crate::*;
-use domains::*;
+use domains::prelude::*;
 const _SCENARIO_NAMESPACE: Uuid = uuid::uuid!("6E62B743-2623-404B-84C8-45F48A85189A");
 
 #[derive(Debug, Deserialize)]

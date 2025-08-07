@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use sim_core::*;
+use sim_macros::SimDomain;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+// The SimDomain derive macro is added here. It will auto-generate the `impl Domain for BankingDomain` block.
+#[derive(Clone, Debug, Serialize, Deserialize, SimDomain)]
 pub struct BankingDomain {}
 
 impl BankingDomain {
@@ -9,14 +11,24 @@ impl BankingDomain {
         Self {}
     }
 
-    pub fn can_handle(&self, action: &BankingAction) -> bool {
+    pub fn execute(&self, action: &BankingAction, state: &SimState) -> BankingResult {
+        if let Err(error) = self.validate(action, state) {
+            return BankingResult { success: false, effects: vec![], errors: vec![error] };
+        }
+
         match action {
-            BankingAction::Deposit { .. } => true,
-            BankingAction::Withdraw { .. } => true,
-            BankingAction::Transfer { .. } => true,
-            BankingAction::PayWages { .. } => true,
-            BankingAction::UpdateReserves { .. } => true,
-            BankingAction::InjectLiquidity => true,
+            BankingAction::Deposit { agent_id, bank, amount } => self.execute_deposit(*agent_id, *bank, *amount, state),
+            BankingAction::Withdraw { agent_id, bank, amount } => {
+                self.execute_withdraw(*agent_id, *bank, *amount, state)
+            }
+            BankingAction::Transfer { from, to, amount } => self.execute_transfer(*from, *to, *amount, state),
+            BankingAction::PayWages { agent_id, employee, amount } => {
+                self.execute_transfer(*agent_id, *employee, *amount, state)
+            }
+            BankingAction::UpdateReserves { bank, amount_change } => {
+                self.execute_update_reserves(*bank, *amount_change, state)
+            }
+            BankingAction::InjectLiquidity => self.execute_inject_liquidity(state),
         }
     }
 
@@ -257,26 +269,6 @@ impl BankingDomain {
         }
         effects
     }
-    pub fn execute(&self, action: &BankingAction, state: &SimState) -> BankingResult {
-        if let Err(error) = self.validate(action, state) {
-            return BankingResult { success: false, effects: vec![], errors: vec![error] };
-        }
-
-        match action {
-            BankingAction::Deposit { agent_id, bank, amount } => self.execute_deposit(*agent_id, *bank, *amount, state),
-            BankingAction::Withdraw { agent_id, bank, amount } => {
-                self.execute_withdraw(*agent_id, *bank, *amount, state)
-            }
-            BankingAction::Transfer { from, to, amount } => self.execute_transfer(*from, *to, *amount, state),
-            BankingAction::PayWages { agent_id, employee, amount } => {
-                self.execute_transfer(*agent_id, *employee, *amount, state)
-            }
-            BankingAction::UpdateReserves { bank, amount_change } => {
-                self.execute_update_reserves(*bank, *amount_change, state)
-            }
-            BankingAction::InjectLiquidity => self.execute_inject_liquidity(state),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -284,10 +276,4 @@ pub struct BankingResult {
     pub success: bool,
     pub effects: Vec<StateEffect>,
     pub errors: Vec<String>,
-}
-
-impl Default for BankingDomain {
-    fn default() -> Self {
-        Self::new()
-    }
 }

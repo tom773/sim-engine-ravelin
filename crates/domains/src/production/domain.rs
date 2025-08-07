@@ -1,9 +1,9 @@
-use sim_core::*;
 use serde::{Deserialize, Serialize};
+use sim_core::*;
+use sim_macros::SimDomain;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ProductionDomain {
-}
+#[derive(Clone, Debug, Serialize, Deserialize, SimDomain)]
+pub struct ProductionDomain {}
 
 #[derive(Debug, Clone)]
 pub struct ProductionResult {
@@ -14,8 +14,7 @@ pub struct ProductionResult {
 
 impl ProductionDomain {
     pub fn new() -> Self {
-        Self {
-        }
+        Self {}
     }
 
     pub fn can_handle(&self, action: &ProductionAction) -> bool {
@@ -40,15 +39,12 @@ impl ProductionDomain {
     }
 
     fn validate_produce(
-        &self,
-        firm_id: AgentId,
-        recipe_id: RecipeId,
-        batches: u32,
-        state: &SimState,
+        &self, firm_id: AgentId, recipe_id: RecipeId, batches: u32, state: &SimState,
     ) -> Result<(), String> {
         Validator::positive_integer(batches, "production batches")?;
         let firm = state.agents.firms.get(&firm_id).ok_or(format!("Firm {:?} not found", firm_id))?;
-        let recipe = state.financial_system.goods.recipes.get(&recipe_id).ok_or(format!("Recipe {:?} not found", recipe_id))?;
+        let recipe =
+            state.financial_system.goods.recipes.get(&recipe_id).ok_or(format!("Recipe {:?} not found", recipe_id))?;
 
         let bs = state.financial_system.balance_sheets.get(&firm_id).ok_or("Firm has no balance sheet")?;
         let inventory = bs.get_inventory().ok_or("Firm has no inventory")?;
@@ -57,7 +53,10 @@ impl ProductionDomain {
             let available = inventory.get(input_good).map_or(0.0, |item| item.quantity);
             let total_needed = *required_qty * batches as f64;
             if available < total_needed {
-                return Err(format!("Insufficient input {:?}: have {:.2}, need {:.2}", input_good, available, total_needed));
+                return Err(format!(
+                    "Insufficient input {:?}: have {:.2}, need {:.2}",
+                    input_good, available, total_needed
+                ));
             }
         }
 
@@ -85,11 +84,7 @@ impl ProductionDomain {
     }
 
     pub fn execute_produce(
-        &self,
-        firm_id: AgentId,
-        recipe_id: RecipeId,
-        batches: u32,
-        state: &SimState,
+        &self, firm_id: AgentId, recipe_id: RecipeId, batches: u32, state: &SimState,
     ) -> ProductionResult {
         let recipe = match state.financial_system.goods.recipes.get(&recipe_id) {
             Some(r) => r,
@@ -98,7 +93,7 @@ impl ProductionDomain {
                     success: false,
                     effects: vec![],
                     errors: vec![format!("Recipe {:?} not found", recipe_id)],
-                }
+                };
             }
         };
 

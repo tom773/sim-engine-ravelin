@@ -70,24 +70,17 @@ impl SimulationEngine {
         all_effects
     }
     fn settle_trades(&self, trades: &[Trade]) -> Vec<StateEffect> {
-        let mut effects = Vec::new();
-
+        let mut all_effects = Vec::new();
         for trade in trades {
-            match &trade.market_id {
-                MarketId::Financial(_) => {
-                    let result = self.domain_registry.trading.settle_financial_trade(trade, &self.state);
-                    effects.extend(result.effects);
-                }
-                MarketId::Goods(_) => {
-                    effects.push(StateEffect::Market(MarketEffect::ExecuteTrade(trade.clone())));
-                }
-                _ => {
-                    effects.push(StateEffect::Market(MarketEffect::ExecuteTrade(trade.clone())));
-                }
+            let result = self.domain_registry.settle_financial_trade(trade, &self.state);
+
+            if result.success {
+                all_effects.extend(result.effects);
+            } else {
+                println!("[Executor] Trade settlement failed: {:?}", result.errors);
             }
         }
-
-        effects
+        all_effects
     }
     fn process_financial_updates(&self) -> Vec<SimAction> {
         let mut actions = Vec::new();

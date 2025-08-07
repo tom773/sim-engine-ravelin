@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 use sim_core::*;
+use sim_macros::SimDomain;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, SimDomain)]
 pub struct TradingDomain {}
 
 #[derive(Debug, Clone)]

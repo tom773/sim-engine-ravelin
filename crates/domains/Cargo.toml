@@ -9,8 +9,10 @@ path = "src/lib.rs"
 
 [dependencies]
 sim_core = { path = "../sim_core" }
+sim_macros = { path = "../sim_macros" }
 serde = { workspace = true }
 rand = { workspace = true }
 typetag = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
+inventory = "0.3.20"

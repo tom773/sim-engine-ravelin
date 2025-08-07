@@ -1,7 +1,8 @@
-use sim_core::*;
 use serde::{Deserialize, Serialize};
+use sim_core::*;
+use sim_macros::SimDomain;
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, SimDomain)]
 pub struct FiscalDomain {}
 
 #[derive(Debug, Clone)]
@@ -24,34 +25,34 @@ impl FiscalDomain {
     }
     pub fn validate(&self, _action: &FiscalAction, _state: &SimState) -> FiscalResult {
         let errors = vec![];
-        
+
         FiscalResult { success: errors.is_empty(), effects: vec![], errors }
     }
     pub fn execute(&self, action: &FiscalAction, state: &SimState) -> FiscalResult {
         let mut effects = vec![];
-        
+
         match action {
             FiscalAction::ChangeTaxRate { government_id, tax_type, new_rate } => {
                 println!("[FISCAL DOMAIN] Executing ChangeTaxRate for {} | Setting {:?} to {}", government_id, tax_type, new_rate);
             }
-            FiscalAction::IssueDebt { government_id, tenor, face_value: _ } => {
-                 let maturity_date = tenor.add_to_date(state.current_date);
-                 let bond = bond!(
-                    *government_id, // Initially, the gov holds its own debt
+            FiscalAction::IssueDebt { government_id, tenor, face_value } => {
+                let maturity_date = tenor.add_to_date(state.current_date);
+                let bond = bond!(
                     *government_id,
-                    1000.0,
-                    0.04, 
+                    *government_id,
+                    *face_value,
+                    0.04,
                     maturity_date,
-                    1000.0,
+                    *face_value,
                     BondType::Government,
                     2,
                     *tenor,
                     state.current_date
-                 );
-                 effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(bond)));
+                );
+                effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(bond)));
             }
             FiscalAction::SetSpendingTarget { government_id, .. } => {
-                 println!("[FISCAL DOMAIN] Executing SetSpendingTarget for {}", government_id);
+                println!("[FISCAL DOMAIN] Executing SetSpendingTarget for {}", government_id);
             }
         }
 
