@@ -41,3 +41,4 @@ pub mod prelude;
 pub mod production;
 pub mod settlement;
 pub mod trading;
+pub mod labor;

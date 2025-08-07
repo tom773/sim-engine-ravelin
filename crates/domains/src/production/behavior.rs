@@ -40,18 +40,20 @@ impl DecisionModel for BasicFirmDecisionModel {
             }
         }
 
-        for employee_id in firm.get_employees() {
-            let weekly_wage = firm.wage_rate * 40.0;
-            actions.push(SimAction::Banking(BankingAction::PayWages { 
-                agent_id: firm.id, 
-                employee: *employee_id, 
-                amount: weekly_wage 
-            }));
+        for (employee_id, contract) in &firm.employees {
+            let weekly_wage = contract.wage_rate * contract.hours;
+            if weekly_wage > 0.0 {
+                actions.push(SimAction::Banking(BankingAction::PayWages {
+                    agent_id: firm.id,
+                    employee: *employee_id,
+                    amount: weekly_wage,
+                }));
+            }
         }
 
         if let Some(recipe_id) = firm.recipe {
             if let Some(recipe) = fs.goods.get_recipe(&recipe_id) {
-                let weekly_labor_cost = firm.employees.len() as f64 * firm.wage_rate * 40.0;
+                let weekly_labor_cost: f64 = firm.employees.values().map(|c| c.wage_rate * c.hours).sum();
                 let weekly_output = recipe.output.1 * recipe.efficiency * firm.employees.len() as f64;
                 
                 if weekly_output > 0.0 {

@@ -1,12 +1,100 @@
-use serde::{Deserialize, Serialize};
-use std::{fmt, str::FromStr, collections::HashMap}; // Add HashMap
-use thiserror::Error;
-use serde_with::{serde_as, DisplayFromStr}; // Add serde_with
 use crate::*;
+use serde::{Deserialize, Serialize};
+use serde_with::{DisplayFromStr, serde_as}; // Add serde_with
+use std::{collections::HashMap, fmt, str::FromStr}; // Add HashMap
+use thiserror::Error;
+use uuid::Uuid;
+
+pub trait Tradable {
+    fn check_holdings(&self, agent_id: &AgentId, quantity: f64, fs: &FinancialSystem) -> Result<(), String>;
+}
+
+impl Tradable for GoodId {
+    fn check_holdings(&self, agent_id: &AgentId, quantity: f64, fs: &FinancialSystem) -> Result<(), String> {
+        let bs = fs.get_bs_by_id(agent_id).ok_or(format!("Agent {} not found", agent_id))?;
+        let available = bs.get_inventory().and_then(|inv| inv.get(self)).map_or(0.0, |item| item.quantity);
+        if available < quantity {
+            Err(format!("Insufficient inventory for GoodId({:?}): have {:.2}, need {:.2}", self.0, available, quantity))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl Tradable for FinancialMarketId {
+    fn check_holdings(&self, agent_id: &AgentId, quantity: f64, fs: &FinancialSystem) -> Result<(), String> {
+        match self {
+            FinancialMarketId::SecuredOvernightFinancing => {
+                let reserves = fs.get_bank_reserves(agent_id).unwrap_or(0.0);
+                if reserves < quantity {
+                    Err(format!(
+                        "Insufficient reserves for SOFR ask (lending): need ${:.2}, has ${:.2}",
+                        quantity, reserves
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+            FinancialMarketId::Treasury { tenor } => {
+                let bs = fs.get_bs_by_id(agent_id).ok_or(format!("Agent {} not found", agent_id))?;
+                let held_quantity = bs
+                    .assets
+                    .values()
+                    .map(|inst| {
+                        if let Some(bond_details) = inst.details.as_any().downcast_ref::<BondDetails>() {
+                            if bond_details.bond_type == BondType::Government && &bond_details.tenor == tenor {
+                                bond_details.quantity as f64
+                            } else {
+                                0.0
+                            }
+                        } else {
+                            0.0
+                        }
+                    })
+                    .sum::<f64>();
+
+                if held_quantity < quantity {
+                    Err(format!(
+                        "Insufficient Treasury holdings ({:?}): need {:.0}, has {:.0}",
+                        tenor, quantity, held_quantity
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+            FinancialMarketId::CorporateBond { .. } => Ok(()), // Placeholder
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum LabourMarketId {
+    GeneralLabour,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum MarketId {
+    Goods(GoodId),
+    Financial(FinancialMarketId),
+    Labour(LabourMarketId),
+}
+
+impl Tradable for MarketId {
+    fn check_holdings(&self, agent_id: &AgentId, quantity: f64, fs: &FinancialSystem) -> Result<(), String> {
+        match self {
+            MarketId::Goods(good_id) => good_id.check_holdings(agent_id, quantity, fs),
+            MarketId::Financial(fin_id) => fin_id.check_holdings(agent_id, quantity, fs),
+            MarketId::Labour(_) => Err("Labour market holdings check not implemented".to_string()),
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Copy)]
 pub enum Tenor {
-    T2Y, T5Y, T10Y, T30Y,
+    T2Y,
+    T5Y,
+    T10Y,
+    T30Y,
 }
 impl Tenor {
     pub fn to_days(&self) -> u32 {
@@ -67,7 +155,6 @@ impl FromStr for FinancialMarketId {
     }
 }
 
-
 pub trait RatesMarket {
     fn price_to_daily_rate(&self, price: f64) -> f64;
     fn daily_rate_to_annual_bps(&self, daily_rate: f64) -> f64;
@@ -76,7 +163,9 @@ pub trait RatesMarket {
 
 impl RatesMarket for FinancialMarketId {
     fn price_to_daily_rate(&self, price: f64) -> f64 {
-        if price <= 0.0 { return f64::INFINITY; }
+        if price <= 0.0 {
+            return f64::INFINITY;
+        }
         (1.0 / price) - 1.0
     }
     fn daily_rate_to_annual_bps(&self, daily_rate: f64) -> f64 {
@@ -85,18 +174,6 @@ impl RatesMarket for FinancialMarketId {
     fn annual_bps_to_daily_rate(&self, annual_bps: f64) -> f64 {
         annual_bps / 10000.0 / 360.0
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum LabourMarketId {
-    Labour,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum MarketId {
-    Goods(GoodId),
-    Financial(FinancialMarketId),
-    Labour(LabourMarketId),
 }
 
 impl Default for MarketId {
@@ -136,11 +213,7 @@ pub enum Order {
 
 impl Default for Order {
     fn default() -> Self {
-        Order::Bid(Bid {
-            agent_id: Default::default(),
-            price: 0.0,
-            quantity: 0.0,
-        })
+        Order::Bid(Bid { agent_id: Default::default(), price: 0.0, quantity: 0.0 })
     }
 }
 
@@ -190,8 +263,12 @@ impl OrderBook {
                 bid.quantity -= trade_qty;
                 ask.quantity -= trade_qty;
 
-                if bid.quantity < 1e-6 { bid_idx += 1; }
-                if ask.quantity < 1e-6 { ask_idx += 1; }
+                if bid.quantity < 1e-6 {
+                    bid_idx += 1;
+                }
+                if ask.quantity < 1e-6 {
+                    ask_idx += 1;
+                }
             } else {
                 break;
             }
@@ -234,6 +311,8 @@ pub struct Exchange {
     pub goods_markets: HashMap<GoodId, GoodsMarket>,
     #[serde_as(as = "HashMap<DisplayFromStr, _>")]
     pub financial_markets: HashMap<FinancialMarketId, FinancialMarket>,
+    #[serde_as(as = "HashMap<DisplayFromStr, _>")]
+    pub labour_markets: HashMap<LabourMarketId, LabourMarket>,
 }
 
 impl Exchange {
@@ -277,6 +356,19 @@ impl Exchange {
         }
         all_trades
     }
+    pub fn register_labour_market(&mut self, market_id: LabourMarketId) {
+        let name = market_id.clone().to_string();
+        self.labour_markets.entry(market_id.clone()).or_insert_with(|| LabourMarket {
+            market_id,
+            name,
+            job_offers: Vec::new(),
+            job_applications: Vec::new(),
+        });
+    }
+
+    pub fn labour_market_mut(&mut self, market_id: &LabourMarketId) -> Option<&mut LabourMarket> {
+        self.labour_markets.get_mut(market_id)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -307,4 +399,47 @@ impl FinancialMarket {
     pub fn new(market_id: FinancialMarketId, name: String) -> Self {
         Self { market_id, name, order_book: OrderBook::new() }
     }
+}
+
+impl fmt::Display for LabourMarketId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LabourMarketId::GeneralLabour => write!(f, "GeneralLabour"),
+        }
+    }
+}
+
+impl FromStr for LabourMarketId {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "GeneralLabour" => Ok(LabourMarketId::GeneralLabour),
+            _ => Err(format!("Unknown LabourMarketId: {}", s)),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct JobOffer {
+    pub offer_id: Uuid,
+    pub firm_id: AgentId,
+    pub wage_rate: f64,
+    pub hours_required: f64,
+    pub quantity: u32, // Number of positions open
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct JobApplication {
+    pub application_id: Uuid,
+    pub consumer_id: AgentId,
+    pub reservation_wage: f64, // Minimum wage acceptable
+    pub hours_desired: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LabourMarket {
+    pub market_id: LabourMarketId,
+    pub name: String,
+    pub job_offers: Vec<JobOffer>,
+    pub job_applications: Vec<JobApplication>,
 }

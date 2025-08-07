@@ -1,5 +1,7 @@
 use crate::*;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Bank {
     pub id: AgentId,
@@ -9,12 +11,29 @@ pub struct Bank {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ConsumerPreferences {
+    pub alpha_consumption: f64,
+    pub alpha_leisure: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Consumer {
     pub id: AgentId,
     pub age: u32,
     pub bank_id: AgentId,
     pub income: f64,
     pub personality: PersonalityArchetype,
+    pub preferences: ConsumerPreferences,
+    pub employed_by: Option<AgentId>,
+    pub hours_worked: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EmploymentContract {
+    pub employee_id: AgentId,
+    pub wage_rate: f64,
+    pub hours: f64,
+    pub start_date: chrono::NaiveDate,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -22,10 +41,12 @@ pub struct Firm {
     pub id: AgentId,
     pub bank_id: AgentId,
     pub name: String,
-    pub employees: Vec<AgentId>,
+    pub employees: HashMap<AgentId, EmploymentContract>,
     pub wage_rate: f64,
     pub productivity: f64,
     pub recipe: Option<RecipeId>,
+    pub capital_stock: f64,
+    pub desired_markup: f64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -49,33 +70,40 @@ impl Bank {
 }
 
 impl Consumer {
+
     pub fn new(age: u32, bank_id: AgentId, personality: PersonalityArchetype) -> Self {
-        Self { 
-            id: AgentId(uuid::Uuid::new_v4()), 
-            age, 
-            bank_id, 
-            income: 0.0, 
-            personality, 
+        Self {
+            id: AgentId(uuid::Uuid::new_v4()),
+            age,
+            bank_id,
+            income: 0.0,
+            personality,
+
+            preferences: ConsumerPreferences { alpha_consumption: 0.5, alpha_leisure: 0.5 },
+            employed_by: None,
+            hours_worked: 0.0,
         }
     }
 }
 
 impl Firm {
-    pub fn new(bank_id: AgentId, name: String, recipe: Option<RecipeId>) -> Self {
+
+    pub fn new(bank_id: AgentId, name: String, recipe: Option<RecipeId>, wage_rate: f64) -> Self {
         Self {
             id: AgentId(uuid::Uuid::new_v4()),
             bank_id,
             name,
-            employees: Vec::new(),
-            wage_rate: 25.0,
+            employees: HashMap::new(),
+            wage_rate,
             productivity: 1.0,
             recipe,
+            capital_stock: 10000.0,
+            desired_markup: 0.20,
         }
     }
-    pub fn get_employees(&self) -> &Vec<AgentId> {
-        &self.employees
+    pub fn get_employees(&self) -> Vec<AgentId> {
+        self.employees.keys().cloned().collect()
     }
-    // TODO: Market needs to store transaction details 
     pub fn calculate_profits(&self, revenues: f64, costs: f64) -> FirmProfits {
         let gross_profit = revenues - costs;
         let tax_liability = gross_profit * 0.21;

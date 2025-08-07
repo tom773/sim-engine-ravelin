@@ -78,7 +78,7 @@ impl<'a> AgentFactory<'a> {
 
     pub fn create_firm(&mut self, config: &FirmConfig, bank_id: AgentId, cb_id: AgentId) -> Firm {
         let recipe_id = self.state.financial_system.goods.get_recipe_id_by_name(&config.recipe_name);
-        let firm = Firm::new(bank_id, config.name.clone(), recipe_id);
+        let firm = Firm::new(bank_id, config.name.clone(), recipe_id, 25.0); // Set a default wage rate
 
         self.state.financial_system.balance_sheets.insert(firm.id, BalanceSheet::new(firm.id));
         let cash = cash!(firm.id, config.initial_cash, cb_id, self.state.current_date);

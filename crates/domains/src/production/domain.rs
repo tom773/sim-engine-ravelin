@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use sim_core::*;
 use sim_macros::SimDomain;
+use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize, SimDomain)]
 pub struct ProductionDomain {}
@@ -72,15 +73,38 @@ impl ProductionDomain {
         }
 
         match action {
-            ProductionAction::Hire { agent_id, count } => self.execute_hire(*agent_id, *count),
+            ProductionAction::Hire { agent_id, count } => self.execute_hire(*agent_id, *count, state),
             ProductionAction::Produce { agent_id, recipe_id, batches } => {
                 self.execute_produce(*agent_id, *recipe_id, *batches, state)
             }
         }
     }
-    pub fn execute_hire(&self, firm_id: AgentId, count: u32) -> ProductionResult {
-        let effects = vec![StateEffect::Agent(AgentEffect::Hire { firm: firm_id, count })];
-        ProductionResult { success: true, effects, errors: vec![] }
+    pub fn execute_hire(&self, firm_id: AgentId, count: u32, state: &SimState) -> ProductionResult {
+        let firm = match state.agents.firms.get(&firm_id) {
+            Some(f) => f,
+            None => {
+                return ProductionResult {
+                    success: false,
+                    effects: vec![],
+                    errors: vec![format!("Firm {:?} not found", firm_id)],
+                };
+            }
+        };
+
+        let offer = JobOffer {
+            offer_id: Uuid::new_v4(),
+            firm_id,
+            wage_rate: firm.wage_rate,
+            hours_required: 40.0,
+            quantity: count,
+        };
+
+        let effect = StateEffect::Market(MarketEffect::UpdateLabourMarket {
+            market_id: LabourMarketId::GeneralLabour,
+            update: LabourMarketUpdate::AddOffer(offer),
+        });
+
+        ProductionResult { success: true, effects: vec![effect], errors: vec![] }
     }
 
     pub fn execute_produce(

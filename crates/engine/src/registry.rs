@@ -25,6 +25,7 @@ impl DomainRegistry {
             SimAction::Production(_) => "Production",
             SimAction::Settlement(_) => "Settlement",
             SimAction::Trading(_) => "Trading",
+            SimAction::Labour(_) => "Labour",
         };
 
         if let Some(domain) = self.domains.get(domain_name) {

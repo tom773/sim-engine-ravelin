@@ -36,7 +36,9 @@ pub mod production;
 pub mod settlement;
 pub mod trading;
 pub mod validation;
+pub mod labour;
 
+pub use labour::*;
 pub use banking::*;
 pub use consumption::*;
 pub use fiscal::*;
@@ -56,6 +58,7 @@ pub enum SimAction {
     Production(ProductionAction),
     Settlement(SettlementAction),
     Trading(TradingAction),
+    Labour(LabourAction),
 }
 
 impl SimAction {
@@ -68,6 +71,7 @@ impl SimAction {
             SimAction::Production(action) => format!("Production::{}", action.name()),
             SimAction::Settlement(action) => format!("Settlement::{}", action.name()),
             SimAction::Trading(action) => format!("Trading::{}", action.name()),
+            SimAction::Labour(action) => format!("Labour::{}", action.name()),
         }
     }
 
@@ -80,6 +84,7 @@ impl SimAction {
             SimAction::Production(action) => action.agent_id(),
             SimAction::Settlement(action) => action.agent_id(),
             SimAction::Trading(action) => action.agent_id(),
+            SimAction::Labour(action) => action.agent_id(),
         }
     }
 }
