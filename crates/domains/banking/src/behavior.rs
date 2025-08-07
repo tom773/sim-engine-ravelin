@@ -36,7 +36,7 @@ impl BasicBankDecisionModel {
 
         let overnight_market_id = FinancialMarketId::SecuredOvernightFinancing;
 
-        let floor_rate_bps = fs.central_bank.policy_rate;
+        let floor_rate_bps = fs.central_bank.policy_rate * 10000.0;
         let ceiling_rate_bps = floor_rate_bps + 25.0;
         let target_rate_bps = (floor_rate_bps + ceiling_rate_bps) / 2.0;
 
@@ -77,22 +77,21 @@ impl BasicBankDecisionModel {
             }
         }
 
-        let bid_ask_spread_bps = 10.0;
         let quantity_to_quote = 5.0;
         const FACE_VALUE: f64 = 1000.0;
         let frequency = 2;
 
-        let policy_rate_decimal = fs.central_bank.policy_rate / 10000.0;
 
         for (market_id, _) in &fs.exchange.financial_markets {
             if let FinancialMarketId::Treasury { tenor } = market_id {
-                let target_yield_bps = policy_rate_decimal * 10000.0;
+                let bid_ask_spread_bps = 10.0; 
+                let target_yield_bps = fs.central_bank.policy_rate * 10000.0; // 0.043 -> 430
 
-                let bid_yield_bps = target_yield_bps + (bid_ask_spread_bps / 2.0);
-                let ask_yield_bps = target_yield_bps - (bid_ask_spread_bps / 2.0);
+                let bid_yield_bps = target_yield_bps + (bid_ask_spread_bps / 2.0); // 430 + 5 = 435
+                let ask_yield_bps = target_yield_bps - (bid_ask_spread_bps / 2.0); // 430 - 5 = 425
 
-                let bid_yield = bid_yield_bps / 10000.0;
-                let ask_yield = ask_yield_bps / 10000.0;
+                let bid_yield = bid_yield_bps / 10000.0; // 435 -> 0.0435
+                let ask_yield = ask_yield_bps / 10000.0; // 425 -> 0.0425
 
                 let coupon_rate = 0.04;
                 let years_to_maturity = tenor.to_days() as f64 / 365.25;

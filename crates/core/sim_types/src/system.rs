@@ -27,7 +27,7 @@ pub struct YieldCurve {
 impl Default for FinancialSystem {
     fn default() -> Self {
         let central_bank =
-            CentralBank { id: AgentId(uuid::Uuid::new_v4()), policy_rate: 430.0, reserve_requirement: 0.1 };
+            CentralBank { id: AgentId(uuid::Uuid::new_v4()), policy_rate: 0.043, reserve_requirement: 0.1 };
         let government = Government {
             id: AgentId(uuid::Uuid::new_v4()),
             tax_rates: TaxRates::default(),

@@ -1,164 +1,176 @@
-# Ravelin Analytics - Economic Simulation Engine
+# Economic Simulation Engine
 
-This engine simulates economic interactions between consumers, firms, and banks. It uses an Agent-Based Modelling approach, where each entity is an agent that will learn based on what happened to it the previous tick, and make a decision to improve its situation. 
+A comprehensive agent-based economic simulation system built in Rust that models the interactions between various economic actors in a virtual economy.
 
-It uses machine learning models trained on actual Consumer Expenditure Survey data from the Bureau of Labor Statistics to make realistic spending decisions. Firms will use Cobb-Douglas production functions to try and reach optimal production. 
+## Overview
 
-Banks don't really make decisions yet, but there is a complex financial system built into the simulation that models the plumbing of an economy. 
+This codebase implements a sophisticated economic simulation where autonomous agents (banks, consumers, firms, and government entities) make decisions and interact through realistic financial markets and economic mechanisms. The simulation models real-world economic concepts including banking operations, production cycles, consumption patterns, fiscal policy, and financial market dynamics.
 
-## Project Structure
+## Architecture
+
+The system follows a modular, domain-driven architecture with clear separation of concerns across multiple layers:
+
+### Core Architecture Layers
 
 ```
-crates/
-├── core/         # Core business logic (placeholder for now)
-├── engine/       # The simulation engine itself
-├── ml/           # Machine learning model training and inference
-└── shared/       # Shared types used across all crates
+┌─────────────────┐
+│     Engine      │  ← Orchestrates simulation loop
+├─────────────────┤
+│    Domains      │  ← Specialized economic sector handlers  
+├─────────────────┤
+│ Actions/Effects │  ← Command/Result pattern for state changes
+├─────────────────┤
+│   Sim Types     │  ← Core data structures and state
+└─────────────────┘
 ```
 
-### Training the ML Model
+### Key Architectural Patterns
 
-First, let's get a consumer decision model trained up!
+- **Action/Effect Pattern**: Agents declare intentions via `SimAction`s, which are validated and executed to produce `StateEffect`s
+- **Domain-Driven Design**: Economic sectors (banking, production, etc.) are encapsulated in specialized domain handlers
+- **Decision Models**: Agent behavior is defined through pluggable `DecisionModel` implementations
+- **Immutable State Transitions**: All state changes go through explicit, auditable effects
 
-1. Clone the repo:
-   ```bash
-   git clone git@github.com:tom773/sim-engine-ravelin.git
-   cd sim-engine-ravelin
-   ```
+## Core Components
 
-2. Download Consumer Expenditure data:
-   - Go to the [BLS Public Use Microdata Files](https://www.bls.gov/cex/pumd_data.htm)
-   - Find an Interview Survey ZIP file (any recent year works)
-   - Download and extract the CSV files:
-   ```bash
-   mkdir -p ./crates/ml/data
-   # Download the ZIP file and extract CSVs to ./crates/ml/data/
-   # Make sure the .csv files are directly in this folder!
-   ```
+### 1. Simulation State (`sim_types`)
+The foundation layer containing all data structures:
+- **Agents**: Banks, Consumers, Firms, Government, Central Bank
+- **Financial System**: Instruments (bonds, deposits, loans), balance sheets, markets
+- **Economic Entities**: Goods, production recipes, inventory, trade orders
+- **Time & Policy**: Fiscal policy, monetary policy, time progression
 
-3. Train the model:
-   ```bash
-   cargo run --bin ml -- train
-   ```
-   This creates `ce_trained_model.bin` in your project root.
+### 2. Actions & Effects (`sim_actions`, `sim_effects`)
+The command layer implementing the action/effect pattern:
+- **Actions**: Express agent intentions (deposit money, produce goods, trade bonds)
+- **Effects**: Represent validated state changes to be applied
+- **Validation**: Ensures actions are feasible given current state
 
-4. Test it out:
-   ```bash
-   cargo run --bin ml -- predict    # See some predictions
-   cargo run --bin ml -- validate   # Run validation tests
-   ```
+### 3. Decision Models (`sim_decisions`)
+The intelligence layer defining agent behavior:
+- **DecisionModel Trait**: Universal interface for agent AI
+- **Behavioral Models**: Basic rule-based models for each agent type
+- **ML Integration**: Framework for machine learning-based decision making
 
-### Running the Simulation
+### 4. Economic Domains (`domains/`)
+Specialized handlers for different economic sectors:
 
-Fire up the simulation API:
+#### Banking Domain
+- Processes deposits, withdrawals, transfers
+- Manages bank reserves and liquidity
+- Handles interbank lending markets
 
-```bash
-cargo run --bin cli
-```
+#### Production Domain  
+- Validates and executes production processes
+- Manages hiring and inventory consumption
+- Implements production recipes and efficiency
 
-This starts a REST API on `http://localhost:8070`. 
+#### Trading Domain
+- Handles market order placement and validation
+- Settles executed trades with asset/payment transfers
+- Manages order books across multiple markets
 
-#### API Endpoints
+#### Consumption Domain
+- Processes consumer purchases and consumption
+- Validates purchasing power and inventory
+- Models consumer spending behavior
 
-- `GET /health` - Check if the server is alive
-- `GET /state` - Get the current simulation state
-- `GET /clear` - Reset the simulation
-- `GET /make_bank` - Create some test banks with bonds
-- `GET /do_tx` - Execute a test transaction
+#### Fiscal Domain
+- Executes government taxation and spending
+- Manages debt issuance and fiscal policy
+- Handles transfer payments and public investment
 
-### Example: Watch an Economy Run
+#### Settlement Domain
+- Processes time-based financial events
+- Handles interest accrual and coupon payments
+- Manages periodic financial settlements
 
-```bash
-# Terminal 1: Start the server
-cargo run --bin cli
+### 5. Simulation Engine (`engine`)
+The orchestration layer managing the simulation lifecycle:
 
-# Terminal 2: Create some banks
-curl http://localhost:8070/make_bank
+#### Core Simulation Loop
+Each simulation "tick" performs:
+1. **Financial Updates**: Process interest, coupon payments
+2. **Decision Collection**: Query all agents for desired actions  
+3. **Action Execution**: Validate and execute actions via domains
+4. **Effect Application**: Apply validated changes to state
+5. **Market Clearing**: Match orders and generate trades
+6. **Trade Settlement**: Execute financial transfers for trades
+7. **Time Advancement**: Progress the simulation clock
 
-# Watch the state
-curl http://localhost:8070/state | jq
-```
+#### Supporting Components
+- **Domain Registry**: Routes actions to appropriate domain handlers
+- **Agent Factory**: Creates agents and initial conditions from scenarios  
+- **Scenario System**: Configures initial simulation state via TOML
+- **Remote Interface**: NATS-based API for external control
 
-## How It Works
+## Economic Features
 
-The simulation follows this flow:
+### Financial System
+- **Realistic Instruments**: Cash, demand deposits, savings, bonds, loans
+- **Balance Sheets**: Double-entry accounting for all agents
+- **Interest Mechanics**: Daily accrual, periodic payments
+- **Credit Systems**: Bank lending with reserves and liquidity constraints
 
-1. **Initialization**: Creates a financial system with a central bank, commercial banks, consumers, and firms
-2. **Consumer Decisions**: Each tick, consumers use the ML model to decide how much to spend based on their income, age, family size, etc.
-3. **Financial Transactions**: Money flows between agents through the banking system
-4. **Balance Sheet Updates**: All transactions update the relevant balance sheets in real-time
+### Market Mechanisms  
+- **Order Books**: Bid/ask matching for goods and financial instruments
+- **Price Discovery**: Market-driven pricing through order matching
+- **Multiple Markets**: Separate markets for goods, bonds, overnight lending
+- **Trade Settlement**: Automatic asset and payment transfers
 
-The ML model is trained on actual consumer spending patterns, so the simulated consumers behave somewhat realistically!
-### Roadmap
+### Agent Behaviors
+- **Banks**: Reserve management, bond trading, market making
+- **Consumers**: Income-based spending, saving decisions, consumption
+- **Firms**: Production planning, hiring, inventory management, pricing
+- **Government**: Tax collection, spending, debt issuance, fiscal policy
 
-#### 1: Deepening the Financial System
+### Time-Based Processes
+- **Interest Accrual**: Daily compound interest calculations
+- **Coupon Payments**: Periodic bond coupon distributions  
+- **Tax Collection**: Scheduled government revenue collection
+- **Production Cycles**: Multi-period manufacturing processes
 
-Your current financial system is good, but "professional" means modeling the nitty-gritty of credit, risk, and asset pricing.
+## Crate Organization
 
-1.  **A Formal Credit & Lending System:**
-    *   **Loan Applications & Credit Scoring:** Instead of firms/consumers just getting money, they must *apply* for loans. Banks should run a credit scoring model (using agent history, debt-to-income, net worth) to approve/deny or set interest rates.
-    *   **Collateral & Secured Lending:** Introduce collateral. Firms can pledge their real assets (equipment, buildings) for loans. This lowers the bank's risk and the interest rate. If they default, the bank seizes the asset.
-    *   **Loan Covenants:** Loans can come with conditions, e.g., "the firm's net worth must not fall below X." Violating these can trigger a default.
+The codebase is organized into focused, single-responsibility crates:
 
-2.  **End-to-End Asset Markets & Speculation:**
-    *   **Full Order Book Matching:** Implement the `match_orders` function in your markets. When a high bid meets a low ask, a trade occurs, a market price is set, and assets/cash are exchanged.
-    *   **Bonds & Yield Curve:** Introduce government bonds of different maturities (e.g., 2-year, 10-year, 30-year). The different interest rates on these form the **yield curve**, a critical economic indicator. Agents should be able to buy and sell these bonds.
-    *   **Asset Bubbles & Crashes:** With a real market, agents can speculate. They might buy an asset not for its fundamental value, but because they expect its price to rise. This is how bubbles form. When expectations shift, they can crash.
+### Core Crates (`core/`)
+- `sim_types`: Foundational data structures
+- `sim_actions`: Action definitions and validation
+- `sim_effects`: Effect definitions and application
+- `sim_decisions`: Decision model framework
+- `sim_prelude`: Convenience re-exports
 
-3.  **Financial Contagion & Systemic Risk:**
-    *   **Interbank Lending Network:** The SOFR market you've started is key. Model the specific network of who owes whom in the banking system.
-    *   **Default Cascades:** Now, if a major firm defaults on its loan to Bank A, Bank A might not have enough money to pay its own debts to Bank B. This is a **default cascade**. Your simulation could model this and measure systemic risk.
-    *   **Bank Runs:** If a consumer's `PersonalityArchetype` is `AnxiousAndy` and he hears a rumor that his bank is in trouble, he might start a bank run by withdrawing all his money, causing others to follow suit.
+### Domain Crates (`domains/`)
+- `banking`: Banking operations and bank AI
+- `production`: Manufacturing and firm behavior  
+- `trading`: Market operations and trade settlement
+- `consumption`: Consumer behavior and purchases
+- `fiscal`: Government operations and policy
+- `settlement`: Financial settlement processes
+- `prelude`: Domain handler re-exports
 
-#### 2: Introducing the Government Sector
+### Engine Crate (`engine/`)
+- Simulation orchestration and main loop
+- Scenario configuration and agent factory
+- Domain registry and action routing
+- CLI interface with NATS messaging
 
-A modern economy is incomplete without a government. This introduces a powerful new agent with unique abilities.
+## Design Philosophy
 
-1.  **Fiscal Policy (Taxes & Spending):**
-    *   **Taxation:** Add income taxes for consumers, corporate taxes for firms, and potentially sales taxes on goods. This removes money from the private sector.
-    *   **Government Spending:** The government uses tax revenue to spend money on things that don't have a direct market: infrastructure, defense, and social programs (which becomes income for some agents).
-    *   **Automatic Stabilizers:** Implement unemployment benefits. When an agent loses their job, the government gives them a small income. This automatically cushions the economy during a recession.
+### Modularity
+Each economic sector is encapsulated in its own domain with clear interfaces, enabling independent development and testing of different economic mechanisms.
 
-2.  **Government Debt & Monetary Policy Interaction:**
-    *   **Issuing Government Bonds:** If the government spends more than it taxes (a deficit), it funds this by issuing the government bonds mentioned in Tier 1.
-    *   **Quantitative Easing (QE):** The `CentralBank` can now do more than set rates. It can *create money* to buy government bonds (or other assets) from commercial banks, injecting massive liquidity into the system. This is a core feature of post-2008 economics.
+### Extensibility  
+The action/effect pattern and decision model framework make it straightforward to add new agent types, economic mechanisms, or behavioral models without modifying existing code.
 
-#### 3: Enhancing the Real Economy (Firms & Production)
+### Realism
+The simulation models real economic concepts like double-entry accounting, interest accrual, market clearing, and multi-agent interactions rather than simplified abstractions.
 
-Firms are the engine of the economy. Let's make them more sophisticated.
+### Auditability
+All state changes flow through explicit, typed effects, making the simulation's behavior fully traceable and debuggable.
 
-1.  **Capital Investment (CapEx) & Productivity:**
-    *   **Capital Goods:** Introduce a new category of goods: `Capital`. These are things like machines, factories, and software.
-    *   **Investment Decisions:** Firms should make long-term decisions to *invest* in capital by taking out loans. This capital increases their `productivity` over time, allowing them to produce more with fewer employees. This creates a fundamental growth dynamic.
+### Performance
+The Rust implementation provides memory safety and performance suitable for large-scale simulations with many agents and complex interactions.
 
-2.  **Multi-stage Production & Supply Chains:**
-    *   Instead of `oil -> petrol`, model a full chain: `iron ore -> steel -> car parts -> cars`.
-    *   This creates a network of firms that are customers and suppliers to each other. A shock to the steel producer now ripples through the entire car industry. This is crucial for modeling supply chain disruptions.
-
-3.  **Inventory Management & Business Cycles:**
-    *   Firms shouldn't just produce based on a simple rule. They should manage their inventory levels based on their expectations of future sales.
-    *   If they expect a boom, they build up inventory. If they expect a recession, they sell it off and cut production. This behavior (the "inventory cycle") is a major driver of short-term business cycles.
-
-#### 4: Modeling a Realistic Labor Market
-
-1.  **Endogenous Wages & Unemployment:**
-    *   **Labor Market:** Create a true "market" for labor. Wages should not be fixed but should rise and fall based on the supply (consumers looking for work) and demand (firms hiring).
-    *   **Unemployment Pool:** Create an explicit pool of unemployed agents. This allows you to track the **unemployment rate**, one of the most important outputs of any macroeconomic model.
-    *   **Job Search:** Unemployed agents must actively "search" for jobs. Firms "post" job openings.
-
-2.  **Skill Levels & Education:**
-    *   Introduce different labor types: e.g., `unskilled`, `skilled`, `highly_skilled`.
-    *   Firms' production recipes might require specific skill mixes. This can lead to skill shortages and wage differentials.
-    *   Consumers can make a long-term decision to "invest in education" (forego income now) to become skilled, increasing their future earning potential.
-
-#### 5: Expanding Agent Intelligence
-
-Your agent personalities are a great start. The next level is making them learn and adapt.
-
-1.  **Learning & Adaptive Expectations:**
-    *   Agents shouldn't have fixed parameters. They should *learn* and *update* their beliefs.
-    *   If inflation has been high for the last year, agents should start to *expect* high inflation and demand higher wages. This is a core concept in modern macroeconomics.
-    *   This can be implemented with simple adaptive rules or more advanced techniques like reinforcement learning.
-
-2.  **Network Effects & Social Influence:**
-    *   Agents don't make decisions in a vacuum. A consumer's decision to buy something could be influenced by what their "friends" in the simulation are buying. This can be modeled with a social network graph.
+This architecture creates a flexible, realistic economic simulation platform suitable for research, policy analysis, and economic modeling applications.

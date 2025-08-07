@@ -49,3 +49,5 @@ app/src/.svelte-kit/*
 /crates/api
 /crates/api/*
 /crates/api/**/* 
+ALL_README.md
+/crates/**/*.md
