@@ -1,7 +1,7 @@
 use crate::*;
 use serde::{Deserialize, Serialize};
-use serde_with::{DisplayFromStr, serde_as}; // Add serde_with
-use std::{collections::HashMap, fmt, str::FromStr}; // Add HashMap
+use serde_with::{DisplayFromStr, serde_as};
+use std::{collections::HashMap, fmt, str::FromStr};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -72,12 +72,47 @@ pub enum LabourMarketId {
     GeneralLabour,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum MarketId {
     Goods(GoodId),
     Financial(FinancialMarketId),
     Labour(LabourMarketId),
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct MarketTick {
+    pub date: chrono::NaiveDate,
+    pub last_price: Option<f64>,
+    pub last_qty: Option<f64>,
+    pub best_bid: Option<f64>,
+    pub best_ask: Option<f64>,
+    pub spread: Option<f64>,
+    pub volume: f64,
+    pub turnover: f64, // volume * price
+    pub open: Option<f64>,
+    pub high: Option<f64>,
+    pub low: Option<f64>,
+    pub close: Option<f64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct MarketView {
+    pub last: Option<f64>,
+    pub mid: Option<f64>,
+    pub spread: Option<f64>,
+    pub volume: f64,
+    pub turnover: f64,
+    pub vwap_5: Option<f64>,
+    pub ma_20: Option<f64>,
+    pub realized_vol_20: Option<f64>,
+}
+
+impl MarketView {
+    pub fn last_or_mid(&self) -> Option<f64> {
+        self.last.or(self.mid)
+    }
+}
+
 
 impl Tradable for MarketId {
     fn check_holdings(&self, agent_id: &AgentId, quantity: f64, fs: &FinancialSystem) -> Result<(), String> {
@@ -229,17 +264,24 @@ impl OrderBook {
     }
 
     pub fn best_bid(&self) -> Option<&Bid> {
-        self.bids.iter().max_by(|a, b| a.price.partial_cmp(&b.price).unwrap())
+        self.bids.iter().max_by(|a, b| a.price.partial_cmp(&b.price).unwrap_or(std::cmp::Ordering::Equal))
     }
 
     pub fn best_ask(&self) -> Option<&Ask> {
-        self.asks.iter().min_by(|a, b| a.price.partial_cmp(&b.price).unwrap())
+        self.asks.iter().min_by(|a, b| a.price.partial_cmp(&b.price).unwrap_or(std::cmp::Ordering::Equal))
+    }
+
+    pub fn spread(&self) -> Option<f64> {
+        match (self.best_bid(), self.best_ask()) {
+            (Some(bid), Some(ask)) => Some(ask.price - bid.price),
+            _ => None,
+        }
     }
 
     pub fn clear_and_match(&mut self, market_id: &MarketId) -> Vec<Trade> {
         let mut trades = Vec::new();
-        self.bids.sort_by(|a, b| b.price.partial_cmp(&a.price).unwrap());
-        self.asks.sort_by(|a, b| a.price.partial_cmp(&b.price).unwrap());
+        self.bids.sort_by(|a, b| b.price.partial_cmp(&a.price).unwrap_or(std::cmp::Ordering::Equal));
+        self.asks.sort_by(|a, b| a.price.partial_cmp(&b.price).unwrap_or(std::cmp::Ordering::Equal));
 
         let mut bid_idx = 0;
         let mut ask_idx = 0;
@@ -304,6 +346,18 @@ impl FromStr for Tenor {
     }
 }
 
+pub trait MarketSnapshotProvider {
+    fn snapshot(&self) -> MarketSnapshot;
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MarketSnapshot {
+    pub best_bid: Option<f64>,
+    pub best_ask: Option<f64>,
+    pub spread: Option<f64>,
+}
+
+
 #[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct Exchange {
@@ -346,15 +400,21 @@ impl Exchange {
         self.financial_markets.get_mut(market_id)
     }
 
-    pub fn clear_markets(&mut self) -> Vec<Trade> {
+    pub fn clear_markets(&mut self) -> (Vec<Trade>, HashMap<MarketId, MarketSnapshot>) {
         let mut all_trades = Vec::new();
+        let mut snapshots = HashMap::new();
+
         for (id, market) in self.goods_markets.iter_mut() {
-            all_trades.extend(market.order_book.clear_and_match(&MarketId::Goods(*id)));
+            let market_id = MarketId::Goods(*id);
+            snapshots.insert(market_id.clone(), market.snapshot());
+            all_trades.extend(market.order_book.clear_and_match(&market_id));
         }
         for (id, market) in self.financial_markets.iter_mut() {
-            all_trades.extend(market.order_book.clear_and_match(&MarketId::Financial(id.clone())));
+            let market_id = MarketId::Financial(id.clone());
+            snapshots.insert(market_id.clone(), market.snapshot());
+            all_trades.extend(market.order_book.clear_and_match(&market_id));
         }
-        all_trades
+        (all_trades, snapshots)
     }
     pub fn register_labour_market(&mut self, market_id: LabourMarketId) {
         let name = market_id.clone().to_string();
@@ -384,7 +444,17 @@ impl GoodsMarket {
     }
 
     pub fn best_ask(&self) -> Option<&Ask> {
-        self.order_book.asks.iter().min_by(|a, b| a.price.partial_cmp(&b.price).unwrap())
+        self.order_book.best_ask()
+    }
+}
+
+impl MarketSnapshotProvider for GoodsMarket {
+    fn snapshot(&self) -> MarketSnapshot {
+        MarketSnapshot {
+            best_bid: self.order_book.best_bid().map(|b| b.price),
+            best_ask: self.order_book.best_ask().map(|a| a.price),
+            spread: self.order_book.spread(),
+        }
     }
 }
 
@@ -398,6 +468,16 @@ pub struct FinancialMarket {
 impl FinancialMarket {
     pub fn new(market_id: FinancialMarketId, name: String) -> Self {
         Self { market_id, name, order_book: OrderBook::new() }
+    }
+}
+
+impl MarketSnapshotProvider for FinancialMarket {
+    fn snapshot(&self) -> MarketSnapshot {
+        MarketSnapshot {
+            best_bid: self.order_book.best_bid().map(|b| b.price),
+            best_ask: self.order_book.best_ask().map(|a| a.price),
+            spread: self.order_book.spread(),
+        }
     }
 }
 

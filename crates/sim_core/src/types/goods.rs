@@ -14,6 +14,7 @@ pub struct Good {
     pub name: String,
     pub unit: String,
     pub category: GoodCategory,
+    pub cpi_weight: f64, // Added field
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Copy)]
@@ -68,6 +69,7 @@ struct TomlGood {
     name: String,
     unit: String,
     category: GoodCategory,
+    cpi_weight: Option<f64>, // Added optional field for loading
 }
 
 #[derive(Debug, Deserialize)]
@@ -122,7 +124,8 @@ impl GoodsRegistry {
 
         for good_def in config.goods {
             let id = GoodId::from_slug(&good_def.slug);
-            let good = Good { id, name: good_def.name, unit: good_def.unit, category: good_def.category };
+            let cpi_weight = good_def.cpi_weight.unwrap_or(0.0);
+            let good = Good { id, name: good_def.name, unit: good_def.unit, category: good_def.category, cpi_weight };
             registry.goods.insert(id, good);
             registry.slug_to_id.insert(good_def.slug, id);
         }

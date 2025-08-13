@@ -3,12 +3,14 @@ slug = "oil"
 name = "Crude Oil"
 unit = "barrel"
 category = "RawMaterial"
+cpi_weight = 0.0
 
 [[goods]]
 slug = "petrol"
 name = "Petrol"
 unit = "gallon"
 category = "Energy"
+cpi_weight = 0.3
 
 [[recipes]]
 name = "Oil Refining"

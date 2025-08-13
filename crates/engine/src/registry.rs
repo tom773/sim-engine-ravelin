@@ -40,10 +40,10 @@ impl DomainRegistry {
         }
     }
 
-    pub fn settle_financial_trade(&self, trade: &Trade, state: &SimState) -> TradingResult {
+    pub fn settle_trade(&self, trade: &Trade, state: &SimState) -> TradingResult {
         if let Some(domain) = self.domains.get("Trading") {
             if let Some(trading_domain) = domain.as_any().downcast_ref::<TradingDomain>() {
-                return trading_domain.settle_financial_trade(trade, state);
+                return trading_domain.settle_trade(trade, state);
             }
         }
         TradingResult {

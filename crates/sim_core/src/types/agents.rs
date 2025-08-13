@@ -17,6 +17,23 @@ pub struct ConsumerPreferences {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ConsumerExpectations {
+    pub expected_inflation: f64,
+    pub expected_wage_growth: f64,
+    pub expected_job_finding_rate: f64,
+}
+
+impl Default for ConsumerExpectations {
+    fn default() -> Self {
+        Self {
+            expected_inflation: 0.02, // Initial assumption
+            expected_wage_growth: 0.03,
+            expected_job_finding_rate: 0.8,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Consumer {
     pub id: AgentId,
     pub age: u32,
@@ -24,6 +41,7 @@ pub struct Consumer {
     pub income: f64,
     pub personality: PersonalityArchetype,
     pub preferences: ConsumerPreferences,
+    pub expectations: ConsumerExpectations, // Added field
     pub employed_by: Option<AgentId>,
     pub hours_worked: f64,
 }
@@ -80,9 +98,17 @@ impl Consumer {
             personality,
 
             preferences: ConsumerPreferences { alpha_consumption: 0.5, alpha_leisure: 0.5 },
+            expectations: ConsumerExpectations::default(),
             employed_by: None,
             hours_worked: 0.0,
         }
+    }
+
+    pub fn update_expectations(&mut self, state: &SimState, alpha: f64) {
+        let inflation_view = state.cpi_view();
+        
+        self.expectations.expected_inflation = alpha * inflation_view.inflation_rate + (1.0 - alpha) * self.expectations.expected_inflation;
+        
     }
 }
 

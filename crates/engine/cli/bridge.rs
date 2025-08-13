@@ -1,29 +1,66 @@
+// bridge.rs
 use crate::{routes, AppState};
 use async_nats::connect;
-use futures::stream::StreamExt;
+use axum::{routing::get, Router};
+use futures::StreamExt;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
+use tower_http::cors::{Any, CorsLayer};
 
-pub async fn run_nats_bridge(state: Arc<AppState>) -> Result<(), Box<dyn std::error::Error>> {
-    const NATS_URL: &str = "ws://127.0.0.1:8070";
+pub async fn run_http(state: Arc<AppState>, shutdown: CancellationToken) -> anyhow::Result<()> {
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
 
+    let app = Router::new()
+        .route("/health", get(|| async { "ok" }))
+        .route("/init", get(routes::handle_init_sim))
+        .route("/agents/{agent}", get(routes::get_agents))
+        .route("/sim/control/tick", get(routes::tick))
+        .route("/sim/control/state", get(routes::query_state))
+        .route("/sim/control/markets", get(routes::query_market_snapshot))
+        .route("/sim/control/fs", get(routes::query_fs))
+        .with_state(state)
+        .layer(cors);
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:8060").await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown.cancelled_owned())
+        .await?;
+    Ok(())
+}
+
+pub async fn run_nats_bridge(state: Arc<AppState>, shutdown: CancellationToken) -> anyhow::Result<()> {
+    const NATS_URL: &str = "ws://127.0.0.1:8070"; // requires async-nats "ws" feature
     let client = connect(NATS_URL).await?;
     println!("[NATS] Connected successfully!");
 
-    let mut subscriber = client.subscribe("sim.control.>").await?;
-    println!("\n[NATS] Subscribed to 'sim.control.>'");
-    println!();
-    println!("[NATS] Available commands:\n");
-    println!(" > nats req sim.control.init - [Initialize simulation]");
-    println!(" > nats req sim.control.tick - [Advance simulation by one tick]");
-    println!(" > nats req sim.control.query.state - [Request current simulation state]");
-    println!();
+    let mut sub = client.subscribe("sim.control.>").await?;
 
-    while let Some(msg) = subscriber.next().await {
-        let client_clone = client.clone();
-        let state_clone = state.clone(); // Clone the Arc, not the state itself
-        tokio::spawn(async move {
-            routes::handle_message(msg, client_clone, state_clone).await;
-        });
+    loop {
+        tokio::select! {
+            _ = shutdown.cancelled() => {
+                println!("[NATS] shutdown signal received");
+                break;
+            }
+            maybe_msg = sub.next() => {
+                match maybe_msg {
+                    Some(msg) => {
+                        let c = client.clone();
+                        let s = state.clone();
+                        // don’t .await inside select arm without spawning if it can be slow
+                        tokio::spawn(async move {
+                            routes::handle_message(msg, c, s).await;
+                        });
+                    }
+                    None => {
+                        println!("[NATS] subscription ended");
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     Ok(())

@@ -5,6 +5,8 @@ use std::{collections::HashMap, str::FromStr};
 use uuid::Uuid;
 use crate::*;
 use domains::prelude::*;
+use domains::consumption::CESConsumerDecisionModel;
+
 const _SCENARIO_NAMESPACE: Uuid = uuid::uuid!("6E62B743-2623-404B-84C8-45F48A85189A");
 
 #[derive(Debug, Deserialize)]
@@ -110,13 +112,15 @@ impl Scenario {
         }
         state.financial_system.exchange.register_financial_market(FinancialMarketId::SecuredOvernightFinancing);
 
+        state.financial_system.exchange.register_labour_market(LabourMarketId::GeneralLabour);
+
         let mut engine = SimulationEngine::new(state);
 
         for bank_id in engine.state.agents.banks.keys() {
             engine.decision_models.insert(*bank_id, Box::new(BasicBankDecisionModel::default()));
         }
         for consumer_id in engine.state.agents.consumers.keys() {
-            engine.decision_models.insert(*consumer_id, Box::new(BasicConsumerDecisionModel::default()));
+            engine.decision_models.insert(*consumer_id, Box::new(CESConsumerDecisionModel::default()));
         }
         for firm_id in engine.state.agents.firms.keys() {
             engine.decision_models.insert(*firm_id, Box::new(BasicFirmDecisionModel::default()));

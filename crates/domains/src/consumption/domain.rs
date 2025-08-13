@@ -1,9 +1,12 @@
 use serde::{Deserialize, Serialize};
 use sim_core::*;
 use sim_macros::SimDomain;
+use crate::banking::BankingDomain;
 
 #[derive(Clone, Debug, Serialize, Deserialize, SimDomain)]
-pub struct ConsumptionDomain {}
+pub struct ConsumptionDomain {
+    payment_router: BankingDomain,
+}
 
 #[derive(Debug, Clone)]
 pub struct ConsumptionResult {
@@ -14,11 +17,13 @@ pub struct ConsumptionResult {
 
 impl ConsumptionDomain {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            payment_router: BankingDomain::new(),
+        }
     }
 
     pub fn can_handle(&self, action: &ConsumptionAction) -> bool {
-        matches!(action, ConsumptionAction::Purchase { .. } | ConsumptionAction::Consume { .. })
+        matches!(action, ConsumptionAction::Purchase { .. } | ConsumptionAction::Consume { .. } | ConsumptionAction::PurchaseAtBest { .. })
     }
 
     pub fn validate(&self, action: &ConsumptionAction, state: &SimState) -> Result<(), String> {
@@ -26,6 +31,9 @@ impl ConsumptionDomain {
             ConsumptionAction::Purchase { agent_id, seller, good_id, amount } => {
                 self.validate_purchase(*agent_id, *seller, *good_id, *amount, state)
             }
+            ConsumptionAction::PurchaseAtBest { agent_id, good_id, max_notional } => {
+                self.validate_purchase_at_best(*agent_id, *good_id, *max_notional, state)
+           }
             ConsumptionAction::Consume { agent_id, good_id, amount } => {
                 self.validate_consume(*agent_id, *good_id, *amount, state)
             }
@@ -71,6 +79,24 @@ impl ConsumptionDomain {
         Ok(())
     }
 
+    fn validate_purchase_at_best(
+        &self,
+        buyer: AgentId,
+        _good_id: GoodId,
+        max_notional: f64,
+        state: &SimState,
+    ) -> Result<(), String> {
+        Validator::positive_amount(max_notional)?;
+        if !state.financial_system.balance_sheets.contains_key(&buyer) {
+            return Err(format!("Buyer {:?} not found", buyer));
+        }
+        let available_funds = state.financial_system.get_liquid_assets(&buyer);
+        if available_funds < max_notional {
+             return Err(format!("Buyer has insufficient funds for max notional: needs ${:.2}, has ${:.2}", max_notional, available_funds));
+        }
+        Ok(())
+    }
+
     fn validate_consume(&self, agent_id: AgentId, good_id: GoodId, amount: f64, state: &SimState) -> Result<(), String> {
         Validator::positive_amount(amount)?;
 
@@ -93,6 +119,9 @@ impl ConsumptionDomain {
             ConsumptionAction::Purchase { agent_id, seller, good_id, amount } => {
                 self.execute_purchase(*agent_id, *seller, *good_id, *amount, state)
             }
+            ConsumptionAction::PurchaseAtBest { agent_id, good_id, max_notional } => {
+                self.execute_purchase_at_best(*agent_id, *good_id, *max_notional, state)
+            }
             ConsumptionAction::Consume { agent_id, good_id, amount } => self.execute_consume(*agent_id, *good_id, *amount),
             ConsumptionAction::NoAction { agent_id: _ } => {
                 ConsumptionResult { success: true, effects: vec![], errors: vec![] }
@@ -114,24 +143,17 @@ impl ConsumptionDomain {
 
         let total_cost = amount * price;
 
-        if let Some((cash_id, cash)) = state
-            .financial_system
-            .get_bs_by_id(&buyer)
-            .and_then(|bs| bs.assets.iter().find(|(_, inst)| inst.details.as_any().is::<CashDetails>()))
-        {
-            effects.push(StateEffect::Financial(FinancialEffect::UpdateInstrument {
-                id: *cash_id,
-                new_principal: cash.principal - total_cost,
-            }));
-            let seller_cash = cash!(seller, total_cost, state.financial_system.central_bank.id, state.current_date);
-            effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(seller_cash)));
-        } else {
+        let payment_result = self.payment_router.execute_transfer(buyer, seller, total_cost, state);
+
+        if !payment_result.success {
             return ConsumptionResult {
                 success: false,
                 effects: vec![],
-                errors: vec!["Buyer has no cash instrument".to_string()],
+                errors: vec![format!("Payment failed during direct purchase: {:?}", payment_result.errors)],
             };
         }
+
+        effects.extend(payment_result.effects);
 
         effects.push(StateEffect::Inventory(InventoryEffect::RemoveInventory {
             owner: seller,
@@ -147,6 +169,56 @@ impl ConsumptionDomain {
 
         ConsumptionResult { success: true, effects, errors: vec![] }
     }
+
+    pub fn execute_purchase_at_best(
+        &self,
+        buyer: AgentId,
+        good_id: GoodId,
+        max_notional: f64,
+        state: &SimState,
+    ) -> ConsumptionResult {
+         let market = match state.financial_system.exchange.goods_market(&good_id) {
+            Some(m) => m,
+            None => return ConsumptionResult { success: true, effects: vec![], errors: vec![] }, // Market doesn't exist
+        };
+
+        let mut remaining_notional = max_notional;
+        let mut effects = vec![];
+
+        let mut asks = market.order_book.asks.clone();
+        asks.sort_by(|a, b| a.price.partial_cmp(&b.price).unwrap_or(std::cmp::Ordering::Equal));
+
+        for ask in asks {
+            if remaining_notional <= 1e-6 {
+                break;
+            }
+
+            let cost_at_ask_price = ask.quantity * ask.price;
+            let bid_quantity;
+
+            if cost_at_ask_price <= remaining_notional {
+                bid_quantity = ask.quantity;
+                remaining_notional -= cost_at_ask_price;
+            } else {
+                bid_quantity = remaining_notional / ask.price;
+                remaining_notional = 0.0;
+            }
+
+            if bid_quantity > 1e-6 {
+                effects.push(StateEffect::Market(MarketEffect::PlaceOrderInBook {
+                    market_id: MarketId::Goods(good_id),
+                    order: Order::Bid(Bid {
+                        agent_id: buyer,
+                        quantity: bid_quantity,
+                        price: ask.price,
+                    }),
+                }));
+            }
+        }
+
+        ConsumptionResult { success: true, effects, errors: vec![] }
+    }
+
 
     pub fn execute_consume(&self, agent_id: AgentId, good_id: GoodId, amount: f64) -> ConsumptionResult {
         let effects =
