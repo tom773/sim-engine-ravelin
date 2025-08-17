@@ -1,12 +1,9 @@
 use serde::{Deserialize, Serialize};
 use sim_core::*;
 use sim_macros::SimDomain;
-use crate::banking::BankingDomain;
 
 #[derive(Clone, Debug, Serialize, Deserialize, SimDomain)]
-pub struct TradingDomain {
-    payment_router: BankingDomain,
-}
+pub struct TradingDomain {}
 
 #[derive(Debug, Clone)]
 pub struct TradingResult {
@@ -17,9 +14,7 @@ pub struct TradingResult {
 
 impl TradingDomain {
     pub fn new() -> Self {
-        Self {
-            payment_router: BankingDomain::new(),
-        }
+        Self {}
     }
 
     pub fn can_handle(&self, action: &TradingAction) -> bool {
@@ -134,6 +129,7 @@ impl TradingDomain {
             }
         }
     }
+
     pub fn execute_post_bid(&self, agent_id: AgentId, market_id: MarketId, quantity: f64, price: f64) -> TradingResult {
         let effects = vec![StateEffect::Market(MarketEffect::PlaceOrderInBook {
             market_id,
@@ -151,100 +147,6 @@ impl TradingDomain {
 
         TradingResult { success: true, effects, errors: vec![] }
     }
-
-    pub fn settle_trade(&self, trade: &Trade, state: &SimState) -> TradingResult {
-        match &trade.market_id {
-            MarketId::Financial(_) => self.settle_financial_trade(trade, state),
-            MarketId::Goods(_) => self.settle_goods_trade(trade, state),
-            MarketId::Labour(_) => TradingResult { success: false, effects: vec![], errors: vec!["Labour trade settlement not handled here".to_string()] },
-        }
-    }
-
-    pub fn settle_goods_trade(&self, trade: &Trade, state: &SimState) -> TradingResult {
-        let mut effects = vec![];
-        let total_payment = trade.price * trade.quantity;
-
-        let payment_result = self.payment_router.execute_transfer(trade.buyer, trade.seller, total_payment, state);
-
-        if !payment_result.success {
-            return TradingResult {
-                success: false,
-                effects: vec![],
-                errors: vec![format!("Goods trade settlement failed during payment: {:?}", payment_result.errors)],
-            };
-        }
-        effects.extend(payment_result.effects);
-
-        let good_id = match trade.market_id {
-            MarketId::Goods(id) => id,
-            _ => return TradingResult { success: false, effects: vec![], errors: vec!["Invalid MarketId for goods trade".to_string()] },
-        };
-
-        effects.push(StateEffect::Inventory(InventoryEffect::RemoveInventory {
-            owner: trade.seller,
-            good_id,
-            quantity: trade.quantity,
-        }));
-        effects.push(StateEffect::Inventory(InventoryEffect::AddInventory {
-            owner: trade.buyer,
-            good_id,
-            quantity: trade.quantity,
-            unit_cost: trade.price,
-        }));
-
-        TradingResult { success: true, effects, errors: vec![] }
-    }
-
-    pub fn settle_financial_trade(&self, trade: &Trade, state: &SimState) -> TradingResult {
-        let mut effects = vec![];
-
-        match &trade.market_id {
-            MarketId::Financial(FinancialMarketId::Treasury { tenor }) => {
-                if let Some(seller_bs) = state.financial_system.get_bs_by_id(&trade.seller) {
-                    let mut instrument_found = false;
-                    for (inst_id, inst) in &seller_bs.assets {
-                        if let Some(bond_details) = inst.details.as_any().downcast_ref::<BondDetails>() {
-                            if bond_details.bond_type == BondType::Government
-                                && bond_details.tenor == *tenor
-                                && bond_details.quantity >= trade.quantity as u64
-                            {
-                                effects.push(StateEffect::Financial(FinancialEffect::SplitAndTransferInstrument {
-                                    id: *inst_id,
-                                    buyer: trade.buyer,
-                                    quantity: trade.quantity as u64,
-                                }));
-
-                                let total_payment = trade.price * trade.quantity;
-                                let payment_result = self.payment_router.execute_transfer(trade.buyer, trade.seller, total_payment, state);
-
-                                if !payment_result.success {
-                                     return TradingResult {
-                                        success: false,
-                                        effects: vec![],
-                                        errors: vec![format!("Financial trade settlement failed during payment: {:?}", payment_result.errors)],
-                                    };
-                                }
-                                effects.extend(payment_result.effects);
-
-                                instrument_found = true;
-                                break;
-                            }
-                        }
-                    }
-                    if !instrument_found {
-                         return TradingResult { success: false, effects: vec![], errors: vec!["Seller does not possess the required financial instrument".to_string()] };
-                    }
-                }
-            }
-             MarketId::Financial(FinancialMarketId::SecuredOvernightFinancing) => {
-                println!("[INFO] SOFR Trade executed (Settlement logic TBD)");
-            }
-            _ => {}
-        }
-
-        TradingResult { success: !effects.is_empty(), effects, errors: vec![] }
-    }
-    
 }
 
 impl Default for TradingDomain {

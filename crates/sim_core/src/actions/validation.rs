@@ -1,9 +1,3 @@
-use crate::SimAction;
-
-pub trait ActionValidator {
-    fn validate(&self, action: &SimAction) -> Result<(), String>;
-}
-
 pub struct Validator;
 
 impl Validator {

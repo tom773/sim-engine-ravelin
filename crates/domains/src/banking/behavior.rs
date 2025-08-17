@@ -155,21 +155,8 @@ impl BasicBankDecisionModel {
 
         price
     }
-    fn _calculate_cash_flows(
-        &self, face_value: f64, coupon_rate: f64, ytm: f64, years_to_maturity: f64, frequency: usize,
-    ) -> Vec<f64> {
-        let k = frequency as f64;
-        let n = (years_to_maturity * k).round() as usize;
-        let c = coupon_rate * face_value / k;
-
-        let mut cash_flows = Vec::new();
-        for t in 1..=n {
-            cash_flows.push(c / (1.0 + ytm / k).powf(t as f64));
-        }
-        cash_flows.push(face_value / (1.0 + ytm / k).powf(n as f64));
-        cash_flows
-    }
 }
+
 #[cfg(test)]
 mod banking_tests {
     use super::*;
@@ -183,7 +170,7 @@ mod banking_tests {
         let price = 1.0 / (1.0 + daily_rate);
         println!("Price: {}", price);
         println!("Daily Rate: {}", daily_rate*10000.0);
-        // Expected: daily_rate = 442.5/10000/360 = 0.00012291666..., price = 1/(1+0.00012291666) ≈ 0.9998771\n        assert!((price - 0.9998771).abs() < 1e-6, "Price calculation is incorrect");
+        // Expected: daily_rate = 442.5/10000/360 = 0.00012291666..., price = 1/(1+0.00012291666) ≈ 0.9998771
         assert!(daily_rate > 0.0, "Daily rate should be positive"); 
     }
 

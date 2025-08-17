@@ -46,7 +46,6 @@ pub async fn init_sim(State(state): State<Arc<AppState>>)
     (StatusCode::OK, headers, Json(InitResponse { epoch: state.epoch.to_string() }))
 }
 
-// Example "needs sim" wrapper to use in your existing HTTP routes:
 pub async fn _require_sim<F, R>(
     State(state): State<Arc<AppState>>,
     handler: F,
@@ -64,7 +63,6 @@ where
     (StatusCode::CONFLICT, headers, Json(serde_json::json!({ "error": err })))
 }
 
-// Wire into your HTTP server (in run_http)
 pub fn http_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
