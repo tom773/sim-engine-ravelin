@@ -58,7 +58,6 @@ impl SimulationEngine {
         self.update_market_history(&trades, &snapshots);
         self.state.financial_system.update_yield_curve(self.state.current_date);
         
-        // Centralized settlement processing
         let settlement_effects = self.settle_trades(&trades);
         if let Err(e) = self.state.apply_effects(&settlement_effects) {
             println!("[ERROR] applying settlement effects: {}", e);
@@ -161,7 +160,6 @@ impl SimulationEngine {
     fn settle_trades(&self, trades: &[Trade]) -> Vec<StateEffect> {
         let mut all_effects = Vec::new();
         for trade in trades {
-            // Generate settlement effects directly here instead of using domain
             let settlement_effects = self.create_settlement_effects(trade);
             all_effects.extend(settlement_effects);
             all_effects.push(StateEffect::Market(MarketEffect::ExecuteTrade(trade.clone())));
@@ -176,10 +174,8 @@ impl SimulationEngine {
             MarketId::Goods(good_id) => {
                 let total_payment = trade.price * trade.quantity;
                 
-                // Create payment transfer effects directly
                 effects.extend(self.create_payment_transfer_effects(trade.buyer, trade.seller, total_payment));
                 
-                // Transfer inventory
                 effects.push(StateEffect::Inventory(InventoryEffect::RemoveInventory {
                     owner: trade.seller,
                     good_id: *good_id,
@@ -193,7 +189,6 @@ impl SimulationEngine {
                 }));
             }
             MarketId::Financial(FinancialMarketId::Treasury { tenor }) => {
-                // Handle Treasury bond transfers
                 if let Some(seller_bs) = self.state.financial_system.get_bs_by_id(&trade.seller) {
                     for (inst_id, inst) in &seller_bs.assets {
                         if let Some(bond_details) = inst.details.as_any().downcast_ref::<BondDetails>() {
@@ -250,9 +245,7 @@ impl SimulationEngine {
                 } else {
                     effects.push(StateEffect::Financial(FinancialEffect::UpdateInstrument { id, new_principal }));
                 }
-                // Cash transfer:
                 if self.state.agents.banks.contains_key(&to) {
-                    // Paying a BANK with cash increases its reserves, not cash-on-hand.
                     effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(reserves!(
                         to,
                         cb_id,
@@ -260,7 +253,6 @@ impl SimulationEngine {
                         self.state.current_date
                     ))));
                 } else {
-                    // Paying a non-bank with cash -> they receive cash.
                     effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(cash!(
                         to,
                         amount_from_cash,
@@ -287,7 +279,6 @@ impl SimulationEngine {
                     }));
                 }
 
-                // 1) Reserves move: payer bank -> payee bank
                 if let Some((res_id, res_inst)) = self.state.financial_system.get_bs_by_id(&payer_bank_id).and_then(|bs| {
                     bs.assets.iter().find(|(_, i)| i.details.as_any().is::<CentralBankReservesDetails>())
                 }) {
@@ -302,7 +293,6 @@ impl SimulationEngine {
                     }
                 }
                 
-                // Credit payee bank reserves by same amount.
                 let payee_bank_id = if self.state.agents.banks.contains_key(&to) {
                     to
                 } else if let Some(c) = self.state.agents.get_consumer(&to) {
@@ -310,7 +300,6 @@ impl SimulationEngine {
                 } else if let Some(f) = self.state.agents.get_firm(&to) {
                     f.bank_id
                 } else {
-                    // Fallback: if unknown, treat as cash
                     AgentId::default()
                 };
                 
@@ -323,7 +312,6 @@ impl SimulationEngine {
                     ))));
                 }
                 
-                // 2) Credit a DEPOSIT to the payee only if the payee is NOT a bank
                 if !self.state.agents.banks.contains_key(&to) && payee_bank_id != AgentId::default() {
                     let bank_spread_bps = self.state.agents.get_bank(&payee_bank_id).map(|b| b.deposit_spread_bps).unwrap_or(-50.0);
                     let policy_rate_bps = self.state.financial_system.central_bank.policy_rate_bps;
@@ -336,7 +324,6 @@ impl SimulationEngine {
                         self.state.current_date
                     ))));
                 } else if payee_bank_id == AgentId::default() {
-                    // Could not resolve a bank – fallback to cash
                     effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(cash!(
                         to,
                         amount_remaining_for_deposit,

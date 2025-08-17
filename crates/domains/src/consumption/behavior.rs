@@ -16,7 +16,8 @@ impl Default for CESConsumerDecisionModel {
     fn default() -> Self {
         let mut weights = HashMap::new();
         if let Some(petrol_id) = goods::CATALOGUE.get_good_id_by_slug("petrol") {
-            weights.insert(petrol_id, 1.0);
+            weights.insert(petrol_id, 0.2);
+            weights.insert(goods::CATALOGUE.get_good_id_by_slug("bread").unwrap(), 0.5);
         }
 
         Self {
@@ -99,9 +100,9 @@ impl DecisionModel for CESConsumerDecisionModel {
                 }));
             }
         }
-
+        let bread_id = goods::CATALOGUE.get_good_id_by_slug("bread").unwrap();
         self.handle_savings(consumer, save_amount, &mut actions);
-
+        self.handle_purchase(consumer, bread_id, 1.0, &mut actions); // TODO actually consume bread
         actions
     }
 }
@@ -135,6 +136,24 @@ impl CESConsumerDecisionModel {
             actions.push(SimAction::Labour(LabourAction::ApplyForJob {
                 market_id: LabourMarketId::GeneralLabour,
                 application,
+            }));
+        }
+    }
+
+    fn handle_purchase(
+        &self,
+        consumer: &Consumer,
+        good_id: GoodId,
+        amount: f64,
+        actions: &mut Vec<SimAction>,
+    ) {
+        println!("Consumer {} attempting to purchase {} units of good {}", consumer.id, amount, good_id);
+        if amount > 0.0 {
+            actions.push(SimAction::Consumption(ConsumptionAction::Purchase {
+                agent_id: consumer.id,
+                seller: consumer.id, // Assuming self-purchase for simplicity
+                good_id,
+                amount,
             }));
         }
     }

@@ -309,20 +309,20 @@ impl InstrumentManager for FinancialSystem {
 }
 impl FinancialStatistics for FinancialSystem {
     fn m0(&self) -> f64 {
-        self.balance_sheets
+        let r = self.balance_sheets
             .values()
             .map(|bs| {
                 bs.assets
                     .values()
-                    .filter(|inst| {
-                        inst.details.as_any().is::<CashDetails>() || inst.details.as_any().is::<DemandDepositDetails>()
-                    })
+                    .filter(|inst| { inst.details.as_any().is::<CentralBankReservesDetails>()})
                     .map(|inst| inst.principal)
                     .sum::<f64>()
             })
-            .sum()
+            .sum();
+        r // TODO Vault Cash should technically be included here, but we don't track it separately yet
     }
     fn m1(&self, bank_ids: &HashSet<AgentId>) -> f64 {
+            // M1 - cash + demand deposits
         self.balance_sheets
             .values()
             .filter(|bs| !bank_ids.contains(&bs.agent_id) && bs.agent_id != self.central_bank.id)
@@ -339,6 +339,7 @@ impl FinancialStatistics for FinancialSystem {
     }
 
     fn m2(&self, bank_ids: &HashSet<AgentId>) -> f64 {
+        // M2 - M1 + savings deposits
         let m1 = self.m1(bank_ids); // <-- Pass the hashset through
 
         let savings_deposits: f64 = self
