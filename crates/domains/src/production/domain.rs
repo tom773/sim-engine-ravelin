@@ -132,13 +132,29 @@ impl ProductionDomain {
             }));
         }
 
+        // Compute total input cost using current moving-average costs from inventory, then convert to per-unit output.
+        let bs = state.financial_system.get_bs_by_id(&firm_id).ok_or("Firm has no balance sheet").unwrap();
+        let inv = bs.get_inventory().ok_or("Firm has no inventory").unwrap();
+
         let (output_good, output_qty) = &recipe.output;
         let total_output = output_qty * total_batches * recipe.efficiency;
+
+        let total_input_cost: f64 = recipe
+            .inputs
+            .iter()
+            .map(|(gid, req)| {
+                let unit = inv.get(gid).map(|it| it.unit_cost).unwrap_or(0.0);
+                unit * (*req) * total_batches
+            })
+            .sum();
+
+        let unit_cost = if total_output > 0.0 { total_input_cost / total_output } else { 0.0 };
+
         effects.push(StateEffect::Inventory(InventoryEffect::AddInventory {
             owner: firm_id,
             good_id: *output_good,
             quantity: total_output,
-            unit_cost: 0.0,
+            unit_cost,
         }));
 
         ProductionResult { success: true, effects, errors: vec![] }

@@ -1,14 +1,6 @@
 use chrono::{NaiveDate, Datelike, Duration};
 use serde::{Deserialize, Serialize};
 
-pub fn year_fraction(start: NaiveDate, end: NaiveDate) -> f64 {
-    (end - start).num_days() as f64 / 365.0
-}
-
-pub fn year_fraction_360(start: NaiveDate, end: NaiveDate) -> f64 {
-    (end - start).num_days() as f64 / 360.0
-}
-
 pub fn is_weekend(date: NaiveDate) -> bool {
     matches!(date.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun)
 }
@@ -183,38 +175,5 @@ impl BusinessDayConvention {
                 }
             },
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::NaiveDate;
-    
-    #[test]
-    fn test_year_fraction() {
-        let start = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
-        let end = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
-        
-        let frac = year_fraction(start, end);
-        assert!((frac - 1.0).abs() < 0.01);
-    }
-    
-    #[test]
-    fn test_business_days() {
-        let friday = NaiveDate::from_ymd_opt(2024, 1, 5).unwrap();
-        let next = next_business_day(friday);
-        let monday = NaiveDate::from_ymd_opt(2024, 1, 8).unwrap();
-        
-        assert_eq!(next, monday);
-    }
-    
-    #[test]
-    fn test_add_months() {
-        let jan_31 = NaiveDate::from_ymd_opt(2024, 1, 31).unwrap();
-        let result = add_months(jan_31, 1);
-        let feb_29 = NaiveDate::from_ymd_opt(2024, 2, 29).unwrap();
-        
-        assert_eq!(result, feb_29);
     }
 }

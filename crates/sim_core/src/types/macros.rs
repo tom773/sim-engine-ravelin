@@ -34,20 +34,48 @@ macro_rules! cash {
 
 #[macro_export]
 macro_rules! deposit {
-    ($depositor:expr, $bank:expr, $amount:expr, $rate:expr, $originated:expr) => {
+    // Updated signature: rate_bps instead of rate
+    ($depositor:expr, $bank:expr, $amount:expr, $rate_bps:expr, $originated:expr) => {
         $crate::FinancialInstrument {
             id: $crate::InstrumentId(uuid::Uuid::new_v4()),
             creditor: $depositor,
             debtor: $bank,
             principal: $amount,
-            details: Box::new($crate::DemandDepositDetails { interest_rate: $rate }),
+            details: Box::new($crate::DemandDepositDetails {
+                interest_rate_bps: $rate_bps,
+                day_count: $crate::DayCount::Act365F, // Default for deposits
+            }),
             originated_date: $originated,
             accrued_interest: 0.0,
             last_accrual_date: $originated,
         }
     };
 }
-
+#[macro_export]
+macro_rules! bond {
+    ($investor:expr, $issuer:expr, $principal:expr, $coupon_rate_bps:expr, $maturity_date:expr, $face_value:expr, $bond_type:expr, $frequency:expr, $tenor:expr, $originated:expr) => {
+        $crate::FinancialInstrument {
+            id: $crate::InstrumentId(uuid::Uuid::new_v4()),
+            creditor: $investor,
+            debtor: $issuer,
+            principal: $principal,
+            details: Box::new($crate::BondDetails {
+                bond_type: $bond_type,
+                coupon_rate_bps: $coupon_rate_bps,
+                face_value: $face_value,
+                maturity_date: $maturity_date,
+                frequency: $frequency,
+                tenor: $tenor,
+                // Calculate quantity based on principal/face value
+                quantity: ((($principal / $face_value) as f64).round() as u64).max(1),
+                day_count: $crate::DayCount::ActAct, // Default for Treasuries
+            }),
+            originated_date: $originated,
+            accrued_interest: 0.0,
+            last_accrual_date: $originated,
+        }
+    };
+}
 #[macro_export]
 macro_rules! reserves {
     ($bank:expr, $cb_id:expr, $amount:expr, $originated:expr) => {
@@ -57,30 +85,6 @@ macro_rules! reserves {
             debtor: $cb_id,
             principal: $amount,
             details: Box::new($crate::CentralBankReservesDetails),
-            originated_date: $originated,
-            accrued_interest: 0.0,
-            last_accrual_date: $originated,
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! bond {
-    ($investor:expr, $issuer:expr, $principal:expr, $coupon_rate:expr, $maturity_date:expr, $face_value:expr, $bond_type:expr, $frequency:expr, $tenor:expr, $originated:expr) => {
-        $crate::FinancialInstrument {
-            id: $crate::InstrumentId(uuid::Uuid::new_v4()),
-            creditor: $investor,
-            debtor: $issuer,
-            principal: $principal,
-            details: Box::new($crate::BondDetails {
-                bond_type: $bond_type,
-                coupon_rate: $coupon_rate,
-                face_value: $face_value,
-                maturity_date: $maturity_date,
-                frequency: $frequency,
-                tenor: $tenor, // Pass tenor
-                quantity: 1,
-            }),
             originated_date: $originated,
             accrued_interest: 0.0,
             last_accrual_date: $originated,

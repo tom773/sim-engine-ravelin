@@ -86,7 +86,8 @@ impl DecisionModel for CESConsumerDecisionModel {
 
         self.handle_employment(consumer, state, &mut actions);
 
-        let nominal_rate = state.financial_system.central_bank.policy_rate;
+        let nominal_rate_bps = state.financial_system.central_bank.policy_rate_bps;
+        let nominal_rate = bps_to_decimal(nominal_rate_bps);
         let expected_inflation = consumer.expectations.expected_inflation;
         let real_rate = nominal_rate - expected_inflation;
 

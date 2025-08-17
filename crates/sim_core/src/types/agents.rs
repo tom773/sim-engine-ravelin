@@ -6,8 +6,8 @@ use std::collections::HashMap;
 pub struct Bank {
     pub id: AgentId,
     pub name: String,
-    pub lending_spread: f64,
-    pub deposit_spread: f64,
+    pub lending_spread_bps: BasisPoints,
+    pub deposit_spread_bps: BasisPoints,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -77,12 +77,12 @@ pub struct Government {
 }
 
 impl Bank {
-    pub fn new(name: String, lending_spread: f64, deposit_spread: f64) -> Self {
+    pub fn new(name: String, lending_spread_bps: f64, deposit_spread_bps: f64) -> Self {
         Self { 
             id: AgentId(uuid::Uuid::new_v4()), 
             name, 
-            lending_spread, 
-            deposit_spread, 
+            lending_spread_bps, 
+            deposit_spread_bps, 
         }
     }
 }
@@ -155,7 +155,7 @@ pub struct FirmProfits {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CentralBank {
     pub id: AgentId,
-    pub policy_rate: f64,
+    pub policy_rate_bps: BasisPoints,
     pub reserve_requirement: f64,
 }
 

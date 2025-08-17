@@ -1,6 +1,8 @@
 use crate::bridge::{run_http, run_nats_bridge};
 use engine::{Scenario, SimulationEngine};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use uuid::Uuid;
 use tokio_util::sync::CancellationToken;
 
 mod bridge;
@@ -9,7 +11,8 @@ mod routes;
 pub const SCENARIO_TOML: &str = include_str!("../../../config/config.toml");
 
 pub struct AppState {
-    sim_engine: Mutex<Option<SimulationEngine>>,
+    epoch: Uuid,
+    sim_engine: RwLock<Option<SimulationEngine>>,
     scenario: Scenario,
 }
 
@@ -17,7 +20,11 @@ pub struct AppState {
 async fn main() -> anyhow::Result<()> {
     let scenario = Scenario::from_toml_str(SCENARIO_TOML).expect("Failed to parse scenario TOML");
 
-    let state = Arc::new(AppState { sim_engine: Mutex::new(None), scenario });
+    let state = Arc::new(AppState {
+        epoch: Uuid::new_v4(),
+        sim_engine: RwLock::new(None),
+        scenario,
+    });
 
     let shutdown = CancellationToken::new();
 

@@ -1,176 +1,149 @@
-# Economic Simulation Engine
+# Economics Simulation — Architecture & Internals
 
-A comprehensive agent-based economic simulation system built in Rust that models the interactions between various economic actors in a virtual economy.
+This project is a domain-driven agent-based macro/markets simulator. Agents (banks, firms, consumers, government) run decision models that emit **actions**. Domain handlers validate and translate actions into **effects**, and the engine applies those effects to mutate the global **state**.
 
-## Overview
-
-This codebase implements a sophisticated economic simulation where autonomous agents (banks, consumers, firms, and government entities) make decisions and interact through realistic financial markets and economic mechanisms. The simulation models real-world economic concepts including banking operations, production cycles, consumption patterns, fiscal policy, and financial market dynamics.
-
-## Architecture
-
-The system follows a modular, domain-driven architecture with clear separation of concerns across multiple layers:
-
-### Core Architecture Layers
+## Workspace layout
 
 ```
-┌─────────────────┐
-│     Engine      │  ← Orchestrates simulation loop
-├─────────────────┤
-│    Domains      │  ← Specialized economic sector handlers  
-├─────────────────┤
-│ Actions/Effects │  ← Command/Result pattern for state changes
-├─────────────────┤
-│   Sim Types     │  ← Core data structures and state
-└─────────────────┘
+.
+├─ config/                 # Scenario + goods/recipes definitions
+├─ crates/
+│  ├─ sim_core/            # Actions, effects, types, state, utils
+│  ├─ domains/             # Domain logic (banking, consumption, etc.)
+│  ├─ engine/              # Orchestration + CLI
+│  ├─ sim_macros/          # Proc macros (e.g., derive SimDomain)
+│  └─ ml/                  # Offline analysis / training helpers
+├─ Cargo.toml              # Workspace members & shared deps
+└─ .rustfmt.toml
 ```
 
-### Key Architectural Patterns
+Workspace members are declared in the root `Cargo.toml` (engine, sim\_core, domains, sim\_macros, ml).&#x20;
 
-- **Action/Effect Pattern**: Agents declare intentions via `SimAction`s, which are validated and executed to produce `StateEffect`s
-- **Domain-Driven Design**: Economic sectors (banking, production, etc.) are encapsulated in specialized domain handlers
-- **Decision Models**: Agent behavior is defined through pluggable `DecisionModel` implementations
-- **Immutable State Transitions**: All state changes go through explicit, auditable effects
+### Configs
 
-## Core Components
+* `config/config.toml` defines a named scenario, number of iterations, treasury tenors, initial banks/firms/consumers, and starting positions (reserves, bonds, cash, income).  &#x20;
+* `config/goods.toml` declares tradable goods, CPI weights, and production recipes (e.g., “Oil Refining” produces petrol from oil with specified efficiency, labour, and capital).  &#x20;
 
-### 1. Simulation State (`sim_types`)
-The foundation layer containing all data structures:
-- **Agents**: Banks, Consumers, Firms, Government, Central Bank
-- **Financial System**: Instruments (bonds, deposits, loans), balance sheets, markets
-- **Economic Entities**: Goods, production recipes, inventory, trade orders
-- **Time & Policy**: Fiscal policy, monetary policy, time progression
+## Core concepts (`crates/sim_core`)
 
-### 2. Actions & Effects (`sim_actions`, `sim_effects`)
-The command layer implementing the action/effect pattern:
-- **Actions**: Express agent intentions (deposit money, produce goods, trade bonds)
-- **Effects**: Represent validated state changes to be applied
-- **Validation**: Ensures actions are feasible given current state
+* **Actions**: typed intents emitted by agents and domains. Modules exist for banking, consumption, fiscal, labour, production, settlement, trading, plus validation helpers.&#x20;
+* **Effects**: concrete state transitions grouped by concern (agent/equipment, financial instruments, inventory, market, application).&#x20;
+* **Types**: agents, balance sheets, instruments (cash/deposits/bonds/reserves…), goods/markets/time/policy, and shared traits/macros.&#x20;
 
-### 3. Decision Models (`sim_decisions`)
-The intelligence layer defining agent behavior:
-- **DecisionModel Trait**: Universal interface for agent AI
-- **Behavioral Models**: Basic rule-based models for each agent type
-- **ML Integration**: Framework for machine learning-based decision making
+> ⚙️ Effects are later applied to the `SimState` via `state.apply_effects(&effects)`, as seen in domain unit tests.&#x20;
 
-### 4. Economic Domains (`domains/`)
-Specialized handlers for different economic sectors:
+## Domain pattern (`crates/domains`)
 
-#### Banking Domain
-- Processes deposits, withdrawals, transfers
-- Manages bank reserves and liquidity
-- Handles interbank lending markets
+Each domain cleanly separates:
 
-#### Production Domain  
-- Validates and executes production processes
-- Manages hiring and inventory consumption
-- Implements production recipes and efficiency
+* **Behavior** (“decision models”) → *what an agent decides to do this tick*.
+* **Domain execution** → *how an action is validated and translated into effects*.
 
-#### Trading Domain
-- Handles market order placement and validation
-- Settles executed trades with asset/payment transfers
-- Manages order books across multiple markets
+This separation is documented directly in each `mod.rs` (e.g., Banking and Consumption). &#x20;
 
-#### Consumption Domain
-- Processes consumer purchases and consumption
-- Validates purchasing power and inventory
-- Models consumer spending behavior
+Domains use a `#[derive(SimDomain)]` macro to generate boilerplate impls. For example, `BankingDomain` derives `SimDomain`.&#x20;
 
-#### Fiscal Domain
-- Executes government taxation and spending
-- Manages debt issuance and fiscal policy
-- Handles transfer payments and public investment
+### Banking domain
 
-#### Settlement Domain
-- Processes time-based financial events
-- Handles interest accrual and coupon payments
-- Manages periodic financial settlements
+**Behavior**: `BasicBankDecisionModel` runs two strategies each tick:
 
-### 5. Simulation Engine (`engine`)
-The orchestration layer managing the simulation lifecycle:
+1. **Reserve management**: computes required reserves from deposits and a buffer; posts bids/asks in the secured overnight market around a target (floor/ceiling) policy rate translated into a daily price. &#x20;
+2. **Treasury market making**: scans existing government bond holdings, computes bid/ask yields (policy rate ± spread + term premium), converts to prices, and posts quotes by tenor.   &#x20;
 
-#### Core Simulation Loop
-Each simulation "tick" performs:
-1. **Financial Updates**: Process interest, coupon payments
-2. **Decision Collection**: Query all agents for desired actions  
-3. **Action Execution**: Validate and execute actions via domains
-4. **Effect Application**: Apply validated changes to state
-5. **Market Clearing**: Match orders and generate trades
-6. **Trade Settlement**: Execute financial transfers for trades
-7. **Time Advancement**: Progress the simulation clock
+**Execution**: `BankingDomain::execute` routes to validated handlers for `Deposit`, `Withdraw`, `Transfer`, `PayWages`, `UpdateReserves` (stub), or `InjectLiquidity`. &#x20;
 
-#### Supporting Components
-- **Domain Registry**: Routes actions to appropriate domain handlers
-- **Agent Factory**: Creates agents and initial conditions from scenarios  
-- **Scenario System**: Configures initial simulation state via TOML
-- **Remote Interface**: NATS-based API for external control
+Key flows:
 
-## Economic Features
+* **Deposit**: creates a demand deposit (rate derived from policy + bank spread), debits depositor cash, credits the bank’s reserves at the central bank. Effects are emitted as instrumental creations/updates/removals.  &#x20;
+* **Withdraw/Transfer**: composite logic spends cash first, then deposits; moves reserves from payer-bank to payee-bank, credits payee with cash or a new deposit depending on counterparty type.     &#x20;
+* **InjectLiquidity**: a fiscal-style cash drop to consumers (creates cash instruments).&#x20;
 
-### Financial System
-- **Realistic Instruments**: Cash, demand deposits, savings, bonds, loans
-- **Balance Sheets**: Double-entry accounting for all agents
-- **Interest Mechanics**: Daily accrual, periodic payments
-- **Credit Systems**: Bank lending with reserves and liquidity constraints
+Unit tests demonstrate the engine side applying effects to state:
 
-### Market Mechanisms  
-- **Order Books**: Bid/ask matching for goods and financial instruments
-- **Price Discovery**: Market-driven pricing through order matching
-- **Multiple Markets**: Separate markets for goods, bonds, overnight lending
-- **Trade Settlement**: Automatic asset and payment transfers
+* Uses cash first if sufficient; deposits untouched.&#x20;
+* Composite cash+deposit transfer and reserve movement across banks.&#x20;
 
-### Agent Behaviors
-- **Banks**: Reserve management, bond trading, market making
-- **Consumers**: Income-based spending, saving decisions, consumption
-- **Firms**: Production planning, hiring, inventory management, pricing
-- **Government**: Tax collection, spending, debt issuance, fiscal policy
+### Consumption domain
 
-### Time-Based Processes
-- **Interest Accrual**: Daily compound interest calculations
-- **Coupon Payments**: Periodic bond coupon distributions  
-- **Tax Collection**: Scheduled government revenue collection
-- **Production Cycles**: Multi-period manufacturing processes
+**Behavior**:
 
-## Crate Organization
+* `BasicConsumerDecisionModel`: sets a propensity to consume vs. save from income+liquid assets; buys petrol at best and deposits the remainder.  &#x20;
+* `CESConsumerDecisionModel`: macro-CES shares across goods using current market prices; MPC adjusts with real rate (policy minus expected inflation); handles job applications if unemployed; saves remainder.     &#x20;
 
-The codebase is organized into focused, single-responsibility crates:
+**Execution**:
 
-### Core Crates (`core/`)
-- `sim_types`: Foundational data structures
-- `sim_actions`: Action definitions and validation
-- `sim_effects`: Effect definitions and application
-- `sim_decisions`: Decision model framework
-- `sim_prelude`: Convenience re-exports
+* `Purchase`: validates funds and seller inventory; routes payment via `BankingDomain::execute_transfer`; then removes seller inventory and credits buyer inventory at the transacted price.   &#x20;
+* `PurchaseAtBest`: scans/partitions asks (lowest first), places bids sized by remaining notional, and leaves order placement to the market.  &#x20;
+* `Consume`: removes inventory only.&#x20;
 
-### Domain Crates (`domains/`)
-- `banking`: Banking operations and bank AI
-- `production`: Manufacturing and firm behavior  
-- `trading`: Market operations and trade settlement
-- `consumption`: Consumer behavior and purchases
-- `fiscal`: Government operations and policy
-- `settlement`: Financial settlement processes
-- `prelude`: Domain handler re-exports
+> The domain’s “can handle”, “validate”, and “execute” phases are explicit and mirror the Banking domain’s structure.  &#x20;
 
-### Engine Crate (`engine/`)
-- Simulation orchestration and main loop
-- Scenario configuration and agent factory
-- Domain registry and action routing
-- CLI interface with NATS messaging
+### Other domains
 
-## Design Philosophy
+The file list shows additional domain areas—fiscal, labour, production, settlement, trading—implemented under `crates/domains/src/...`. (See specific files such as `fiscal/behaviour.rs`, `labor/domain.rs`, etc.)&#x20;
 
-### Modularity
-Each economic sector is encapsulated in its own domain with clear interfaces, enabling independent development and testing of different economic mechanisms.
+## The Action → Effect → State pipeline
 
-### Extensibility  
-The action/effect pattern and decision model framework make it straightforward to add new agent types, economic mechanisms, or behavioral models without modifying existing code.
+1. **Decision phase** (agent AI): Agents implement `DecisionModel::decide(&dyn Any, &SimState, &mut Rng)` and return a `Vec<SimAction>`. Examples include banks posting bids/asks or consumers purchasing/saving. &#x20;
 
-### Realism
-The simulation models real economic concepts like double-entry accounting, interest accrual, market clearing, and multi-agent interactions rather than simplified abstractions.
+2. **Validation & execution** (domain services): Each domain’s `execute` first runs `validate(...)` and, if successful, produces a list of `StateEffect`s describing financial, inventory, and market changes. (See Banking and Consumption domains.)   &#x20;
 
-### Auditability
-All state changes flow through explicit, typed effects, making the simulation's behavior fully traceable and debuggable.
+3. **Application** (state mutation): The engine (or tests) calls `state.apply_effects(&effects)`; effects like `CreateInstrument`, `UpdateInstrument`, `RemoveInstrument`, `AddInventory`, `RemoveInventory`, and `Market::PlaceOrderInBook` are applied to balance sheets, inventories, markets, and ledgers.    &#x20;
 
-### Performance
-The Rust implementation provides memory safety and performance suitable for large-scale simulations with many agents and complex interactions.
+## Engine & CLI (`crates/engine`)
 
-This architecture creates a flexible, realistic economic simulation platform suitable for research, policy analysis, and economic modeling applications.
+The engine crate exposes a CLI and modules named `executor.rs`, `factory.rs`, `registry.rs`, and `scenario.rs`, plus HTTP routes for a bridge. This crate is responsible for wiring scenarios, domains, and the simulation loop. (See file list.)&#x20;
+
+## Macros (`crates/sim_macros`)
+
+Derive macros are provided here and are used by domains (e.g., `#[derive(SimDomain)]` on `BankingDomain`). &#x20;
+
+## ML & analysis (`crates/ml`)
+
+An auxiliary crate for data processing and model training pipelines (e.g., `process.rs`, `train.rs`, with `polars`, `linfa`, `lightgbm3` in workspace deps). (See file list and workspace deps.) &#x20;
+
+## Coding patterns & conventions
+
+* **Domain separation**: behavior vs. execution/validation (clear cross-domain pattern). &#x20;
+* **Effect-first state changes**: domains never mutate the state directly; they return `StateEffect`s. Tests then `apply_effects`.&#x20;
+* **Financial plumbing**: cash/deposits/reserves are instrumented; transfers split across cash then deposits; reserve settlement moves payer-bank → payee-bank reserves. &#x20;
+* **Market microstructure**: order book participation via explicit `MarketEffect::PlaceOrderInBook` with price/quantity logic.&#x20;
+
+## File-by-file purpose (selected)
+
+* `crates/sim_core/src/actions/*`: Action enums and validators by domain.&#x20;
+* `crates/sim_core/src/effects/*`: Effect enums (financial/inventory/market/etc.).&#x20;
+* `crates/sim_core/src/types/*`: Agent structs, balance-sheet/instrument types, goods/markets/time/policy, traits.&#x20;
+* `crates/domains/src/banking/behavior.rs`: Bank decision model (reserves, treasuries).  &#x20;
+* `crates/domains/src/banking/domain.rs`: Validates/executes deposits, withdrawals, transfers, liquidity injections.&#x20;
+* `crates/domains/src/consumption/behavior.rs`: Consumer decision models (Basic, CES, Parametric MPC).  &#x20;
+* `crates/domains/src/consumption/domain.rs`: Validates/executes purchases (direct/best) and consumption; routes payments via banking. &#x20;
+* `crates/engine/cli/*`: CLI entrypoints and routes; `engine/src/*`: (executor/factory/registry/scenario).&#x20;
+* `config/*.toml`: scenario setup and goods/recipes. &#x20;
+
+## How actions become state mutations (worked examples)
+
+* **Consumer buys petrol**
+
+  1. Behavior: `BasicConsumerDecisionModel` computes spend/save and emits `ConsumptionAction::PurchaseAtBest { max_notional }`. &#x20;
+  2. Domain: `execute_purchase_at_best` sorts asks, places `Bid` effects with prices/quantities sized to remaining notional.  &#x20;
+  3. Engine: applies `MarketEffect` to order book; later matches determine cash/inventory effects (via market/settlement domains).
+
+* **Direct purchase (buyer ↔ seller)**
+
+  1. Domain validates seller inventory and buyer liquidity, then routes payment through Banking, then emits inventory transfer effects.   &#x20;
+
+* **Bank transfer (`create_transfer_effects`)**
+  Splits payment into **cash** (debit payer cash; credit payee cash or payee-bank reserves if paying a bank) and then **deposits** (debit payer deposit, move payer-bank reserves to payee-bank, and credit payee deposit if payee is non-bank). Each step is a `FinancialEffect`.    &#x20;
+
+## Extending the sim
+
+* Add a domain: create `{domain}/behavior.rs` + `{domain}/domain.rs`, derive `SimDomain`, and implement `can_handle/validate/execute`. (See Banking/Consumption patterns.) &#x20;
+* Add a decision model: implement `DecisionModel::decide` for your agent type and register it in agent construction. (See `BasicBankDecisionModel` / CES model.) &#x20;
+
+## Notes
+
+* Formatting is standardized via `.rustfmt.toml` (compressed fn params, max width 120, etc.).&#x20;
+* The workspace pins common crates for reproducibility across `domains`, `engine`, `sim_core`, `sim_macros`, and `ml`.&#x20;
+
+---

@@ -134,15 +134,37 @@ impl BankingDomain {
     }
     pub fn execute_deposit(&self, depositor: AgentId, bank: AgentId, amount: f64, state: &SimState) -> BankingResult {
         let mut effects = vec![];
+        let cb_id = state.financial_system.central_bank.id;
 
-        let deposit_rate = state.financial_system.central_bank.policy_rate - 0.02;
-        let deposit = deposit!(depositor, bank, amount, deposit_rate, state.current_date);
+        // 1) Create the deposit liability for the bank (asset for depositor).
+        let bank_spread_bps = state.agents.get_bank(&bank).map(|b| b.deposit_spread_bps).unwrap_or(-50.0);
+        let policy_rate_bps = state.financial_system.central_bank.policy_rate_bps;
+        let deposit_rate_bps = (policy_rate_bps + bank_spread_bps).max(0.0);
+        let deposit = deposit!(depositor, bank, amount, deposit_rate_bps, state.current_date);
         effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(deposit)));
 
-        let transfer_effects = self.create_transfer_effects(depositor, bank, amount, state);
-        effects.extend(transfer_effects);
+        // 2) Debit depositor CASH and credit the bank's RESERVES (no generic transfer).
+        if let Some(from_bs) = state.financial_system.get_bs_by_id(&depositor) {
+            if let Some((cash_id, cash_inst)) =
+                from_bs.assets.iter().find(|(_, i)| i.details.as_any().is::<CashDetails>()).map(|(id, i)| (*id, i))
+            {
+                let new_cash = (cash_inst.principal - amount).max(0.0);
+                if new_cash < 1e-6 {
+                    effects.push(StateEffect::Financial(FinancialEffect::RemoveInstrument(cash_id)));
+                } else {
+                    effects.push(StateEffect::Financial(FinancialEffect::UpdateInstrument { id: cash_id, new_principal: new_cash }));
+                }
+            }
+        }
+        // Bank gets reserves (will consolidate if already present).
+        effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(reserves!(
+            bank,
+            cb_id,
+            amount,
+            state.current_date
+        ))));
 
-        BankingResult { success: !effects.is_empty(), effects, errors: vec![] }
+        BankingResult { success: true, effects, errors: vec![] }
     }
 
     pub fn execute_withdraw(
@@ -221,12 +243,24 @@ impl BankingDomain {
                 } else {
                     effects.push(StateEffect::Financial(FinancialEffect::UpdateInstrument { id, new_principal }));
                 }
-                effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(cash!(
-                    to,
-                    amount_from_cash,
-                    cb_id,
-                    state.current_date
-                ))));
+                // Cash transfer:
+                if state.agents.banks.contains_key(&to) {
+                    // Paying a BANK with cash increases its reserves, not cash-on-hand.
+                    effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(reserves!(
+                        to,
+                        cb_id,
+                        amount_from_cash,
+                        state.current_date
+                    ))));
+                } else {
+                    // Paying a non-bank with cash -> they receive cash.
+                    effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(cash!(
+                        to,
+                        amount_from_cash,
+                        cb_id,
+                        state.current_date
+                    ))));
+                }
             }
         }
 
@@ -246,6 +280,7 @@ impl BankingDomain {
                     }));
                 }
 
+                // 1) Reserves move: payer bank -> payee bank
                 if let Some((res_id, res_inst)) = state.financial_system.get_bs_by_id(&payer_bank_id).and_then(|bs| {
                     bs.assets.iter().find(|(_, i)| i.details.as_any().is::<CentralBankReservesDetails>())
                 }) {
@@ -259,12 +294,47 @@ impl BankingDomain {
                         }));
                     }
                 }
-                effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(cash!(
-                    to,
-                    amount_remaining_for_deposit,
-                    cb_id,
-                    state.current_date
-                ))));
+                // Credit payee bank reserves by same amount.
+                // Determine the payee's bank: if `to` is a bank, it's itself; if consumer/firm, use their bank_id.
+                let payee_bank_id = if state.agents.banks.contains_key(&to) {
+                    to
+                } else if let Some(c) = state.agents.get_consumer(&to) {
+                    c.bank_id
+                } else if let Some(f) = state.agents.get_firm(&to) {
+                    f.bank_id
+                } else {
+                    // Fallback: if unknown, treat as cash
+                    AgentId::default()
+                };
+                if payee_bank_id != AgentId::default() {
+                    effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(reserves!(
+                        payee_bank_id,
+                        cb_id,
+                        amount_remaining_for_deposit,
+                        state.current_date
+                    ))));
+                }
+                // 2) Credit a DEPOSIT to the payee only if the payee is NOT a bank (banks shouldn't hold demand deposits on themselves).
+                if !state.agents.banks.contains_key(&to) && payee_bank_id != AgentId::default() {
+                    let bank_spread_bps = state.agents.get_bank(&payee_bank_id).map(|b| b.deposit_spread_bps).unwrap_or(-50.0);
+                    let policy_rate_bps = state.financial_system.central_bank.policy_rate_bps;
+                    let dep_rate_bps = (policy_rate_bps + bank_spread_bps).max(0.0);
+                    effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(deposit!(
+                        to,
+                        payee_bank_id,
+                        amount_remaining_for_deposit,
+                        dep_rate_bps,
+                        state.current_date
+                    ))));
+                } else if payee_bank_id == AgentId::default() {
+                    // Could not resolve a bank — fallback to cash
+                    effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(cash!(
+                        to,
+                        amount_remaining_for_deposit,
+                        cb_id,
+                        state.current_date
+                    ))));
+                }
             }
         }
         effects

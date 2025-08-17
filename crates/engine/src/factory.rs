@@ -25,12 +25,12 @@ impl<'a> AgentFactory<'a> {
         self.state.financial_system.create_instrument(cash).unwrap();
 
         let government_id = self.state.financial_system.government.id;
-        let policy_rate = self.state.financial_system.central_bank.policy_rate;
+        let policy_rate_bps = self.state.financial_system.central_bank.policy_rate_bps;
 
         for bond_conf in &config.initial_bonds {
             let tenor = Tenor::from_str(&bond_conf.tenor).unwrap();
             let maturity_date = tenor.add_to_date(self.state.current_date);
-            let coupon_rate = policy_rate;
+            let coupon_rate_bps = policy_rate_bps;
             let quantity = bond_conf.quantity as u64;
 
             let bond_instrument = FinancialInstrument {
@@ -41,12 +41,13 @@ impl<'a> AgentFactory<'a> {
                 principal: STANDARD_BOND_FACE_VALUE * quantity as f64,
                 details: Box::new(BondDetails {
                     bond_type: BondType::Government,
-                    coupon_rate,
+                    coupon_rate_bps,
                     face_value: STANDARD_BOND_FACE_VALUE,
                     maturity_date,
                     frequency: 2,
                     tenor,
                     quantity,
+                    day_count: DayCount::ActAct,
                 }),
                 originated_date: self.state.current_date,
                 accrued_interest: 0.0,

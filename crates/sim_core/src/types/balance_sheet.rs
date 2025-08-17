@@ -36,7 +36,9 @@ impl BalanceSheet {
         self.assets
             .values()
             .filter(|inst| {
-                inst.details.as_any().is::<CashDetails>() || inst.details.as_any().is::<DemandDepositDetails>()
+                inst.details.as_any().is::<CashDetails>() || 
+                inst.details.as_any().is::<DemandDepositDetails>() ||
+                inst.details.as_any().is::<CentralBankReservesDetails>()
             })
             .map(|inst| inst.principal)
             .sum()
@@ -76,7 +78,6 @@ impl BalanceSheet {
     }
 }
 
-// Trait Definition: Defines the interface for querying balance sheet data
 pub trait BalanceSheetQuery {
     fn get_bs_by_id(&self, agent_id: &AgentId) -> Option<&BalanceSheet>;
     fn get_bs_mut_by_id(&mut self, agent_id: &AgentId) -> Option<&mut BalanceSheet>;
@@ -90,7 +91,6 @@ pub trait BalanceSheetQuery {
     fn get_bank_reserves(&self, agent_id: &AgentId) -> Option<f64>;
 }
 
-// Trait Definition: Defines the interface for inventory management
 pub trait InventoryQuery {
     fn update_inventory_market_value(&mut self);
     fn get_or_create_inventory_mut(&mut self) -> &mut HashMap<GoodId, InventoryItem>;
@@ -99,7 +99,6 @@ pub trait InventoryQuery {
     fn remove_from_inventory(&mut self, good_id: &GoodId, quantity: f64) -> Result<(), String>;
 }
 
-// Implementation for the local BalanceSheet struct
 impl InventoryQuery for BalanceSheet {
     fn update_inventory_market_value(&mut self) {
         let mut inventory_value = 0.0;

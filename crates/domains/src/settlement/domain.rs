@@ -67,7 +67,8 @@ impl SettlementDomain {
 
     fn get_coupon_payment_amount(&self, instrument: &FinancialInstrument) -> Option<f64> {
         if let Some(bond) = instrument.details.as_any().downcast_ref::<BondDetails>() {
-            let payment = (instrument.principal * bond.coupon_rate) / bond.frequency as f64;
+            let annual_coupon_rate = bps_to_decimal(bond.coupon_rate_bps);
+            let payment = (instrument.principal * annual_coupon_rate) / bond.frequency as f64;
             Some(payment)
         } else {
             None
@@ -135,21 +136,26 @@ impl SettlementDomain {
     fn calculate_daily_interest_accrual(
         &self, instrument: &FinancialInstrument, current_date: chrono::NaiveDate,
     ) -> f64 {
-        let days_since_last_accrual = (current_date - instrument.last_accrual_date).num_days();
-        if days_since_last_accrual <= 0 {
+        if current_date <= instrument.last_accrual_date {
             return 0.0;
         }
 
-        let annual_rate = if let Some(deposit) = instrument.details.as_any().downcast_ref::<DemandDepositDetails>() {
-            deposit.interest_rate
+        let (annual_rate_bps, day_count) = if let Some(deposit) = instrument.details.as_any().downcast_ref::<DemandDepositDetails>() {
+            (deposit.interest_rate_bps, deposit.day_count)
+        } else if let Some(deposit) = instrument.details.as_any().downcast_ref::<SavingsDepositDetails>() {
+             (deposit.interest_rate_bps, deposit.day_count)
         } else if let Some(bond) = instrument.details.as_any().downcast_ref::<BondDetails>() {
-            bond.coupon_rate
+            (bond.coupon_rate_bps, bond.day_count)
         } else {
             return 0.0;
         };
 
-        let daily_rate = annual_rate / 365.0;
-        instrument.principal * daily_rate * days_since_last_accrual as f64
+        day_count.calculate_accrued_interest(
+            instrument.principal,
+            annual_rate_bps,
+            instrument.last_accrual_date,
+            current_date
+        )
     }
 
     fn execute_accrue_interest(&self, instrument_id: &InstrumentId, state: &SimState) -> SettlementResult {

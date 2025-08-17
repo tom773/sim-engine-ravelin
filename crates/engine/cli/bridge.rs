@@ -1,7 +1,7 @@
 // bridge.rs
 use crate::{routes, AppState};
 use async_nats::connect;
-use axum::{routing::get, Router};
+use axum::routing::get;
 use futures::StreamExt;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -13,15 +13,8 @@ pub async fn run_http(state: Arc<AppState>, shutdown: CancellationToken) -> anyh
         .allow_methods(Any)
         .allow_headers(Any);
 
-    let app = Router::new()
+    let app = routes::http_router(state)
         .route("/health", get(|| async { "ok" }))
-        .route("/init", get(routes::handle_init_sim))
-        .route("/agents/{agent}", get(routes::get_agents))
-        .route("/sim/control/tick", get(routes::tick))
-        .route("/sim/control/state", get(routes::query_state))
-        .route("/sim/control/markets", get(routes::query_market_snapshot))
-        .route("/sim/control/fs", get(routes::query_fs))
-        .with_state(state)
         .layer(cors);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8060").await?;

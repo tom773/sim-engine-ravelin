@@ -43,7 +43,8 @@ impl InstrumentDetails for CashDetails {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DemandDepositDetails {
-    pub interest_rate: f64,
+    pub interest_rate_bps: BasisPoints,
+    pub day_count: DayCount,
 }
 #[typetag::serde]
 impl InstrumentDetails for DemandDepositDetails {
@@ -57,7 +58,8 @@ impl InstrumentDetails for DemandDepositDetails {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SavingsDepositDetails {
-    pub interest_rate: f64,
+    pub interest_rate_bps: BasisPoints,
+    pub day_count: DayCount,
 }
 #[typetag::serde]
 impl InstrumentDetails for SavingsDepositDetails {
@@ -84,12 +86,13 @@ impl InstrumentDetails for CentralBankReservesDetails {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BondDetails {
     pub bond_type: BondType,
-    pub coupon_rate: f64,
+    pub coupon_rate_bps: BasisPoints,
     pub face_value: f64,
     pub maturity_date: NaiveDate,
     pub frequency: usize,
     pub tenor: Tenor,
     pub quantity: u64,
+    pub day_count: DayCount,
 }
 #[typetag::serde]
 impl InstrumentDetails for BondDetails {
@@ -104,7 +107,7 @@ impl InstrumentDetails for BondDetails {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LoanDetails {
     pub loan_type: LoanType,
-    pub interest_rate: f64,
+    pub interest_rate_bps: BasisPoints,
     pub maturity_date: NaiveDate,
     pub collateral: Option<CollateralInfo>,
 }
@@ -208,7 +211,6 @@ pub struct ConsolidationKey {
 pub trait Consolidatable {
     fn consolidation_key(&self) -> Option<ConsolidationKey>;
 }
-
 impl Consolidatable for FinancialInstrument {
     fn consolidation_key(&self) -> Option<ConsolidationKey> {
         if self.details.as_any().is::<CashDetails>() {
@@ -232,7 +234,7 @@ impl Consolidatable for FinancialInstrument {
                 creditor: self.creditor,
                 debtor: self.debtor,
                 instrument_type: "DemandDeposit".to_string(),
-                subtype: Some(format!("rate_{}", (details.interest_rate * 10000.0) as i32)),
+                subtype: Some(format!("rate_{}", (details.interest_rate_bps) as i32)),
             });
         }
         if let Some(details) = self.details.as_any().downcast_ref::<BondDetails>() {
@@ -240,7 +242,7 @@ impl Consolidatable for FinancialInstrument {
                 creditor: self.creditor,
                 debtor: self.debtor,
                 instrument_type: "Bond".to_string(),
-                subtype: Some(format!("{:?}_{}", details.tenor, (details.coupon_rate * 10000.0) as i32,)),
+                subtype: Some(format!("{:?}_{}", details.tenor, (details.coupon_rate_bps) as i32,)),
             });
         }
         None

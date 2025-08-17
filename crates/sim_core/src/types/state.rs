@@ -137,7 +137,6 @@ impl SimState {
         let mut views = HashMap::new();
         for (market_id, _) in &self.history.market_ticks {
             if let Some(market_view) = self.market_view(market_id) {
-                // Convert the MarketId key to a String before insertion
                 views.insert(market_id.to_string(), market_view);
             }
         }
@@ -280,5 +279,144 @@ impl std::str::FromStr for MarketId {
             return Ok(MarketId::Labour(id));
         }
         Err(ParseMarketIdError::InvalidFormat(s.to_string()))
+    }
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Default)]
+pub struct MacroStats {
+    pub as_of: chrono::NaiveDate,
+
+    pub nominal_gdp_proxy: f64,
+    pub nominal_gdp_note: &'static str,
+
+    pub consumer_spending_daily: f64,
+    pub consumer_spending_note: &'static str,
+
+    pub cpi: f64,
+    pub inflation_rate: f64,
+
+    pub employment: usize,
+    pub unemployment: usize,
+    pub labour_force: usize,
+    pub unemployment_rate: f64,
+    pub avg_wage_rate: f64,     // simple average across contracts
+    pub payroll_proxy: f64,     // sum of (wage_rate * hours) across contracts
+
+    pub business_investment: f64,
+    pub business_investment_note: &'static str,
+
+    pub government_spending: f64,
+    pub government_spending_note: &'static str,
+
+    pub net_exports: f64,
+    pub net_exports_note: &'static str,
+    pub m0: f64, // base money supply
+    pub m2: f64, // broad money supply
+    pub m1: f64, // cash + demand deposits held by non-banks
+    pub velocity: f64,
+    pub velocity_note: &'static str,
+}
+
+impl SimState {
+    pub fn macro_stats(&self) -> MacroStats {
+        use chrono::Duration;
+
+        let mut employee_ids = std::collections::HashSet::new();
+        let mut avg_wage_sum = 0.0;
+        let mut avg_wage_n = 0usize;
+        let mut payroll_sum = 0.0;
+
+        for (_fid, firm) in &self.agents.firms {
+            for (_emp_id, contract) in &firm.employees {
+                employee_ids.insert(contract.employee_id);
+                avg_wage_sum += contract.wage_rate;
+                avg_wage_n += 1;
+                payroll_sum += contract.wage_rate * contract.hours;
+            }
+        }
+
+        let labour_force = self.agents.consumers.len();
+        let employment = employee_ids.len();
+        let unemployment = labour_force.saturating_sub(employment);
+        let unemployment_rate = if labour_force > 0 {
+            unemployment as f64 / labour_force as f64
+        } else {
+            0.0
+        };
+        let avg_wage_rate = if avg_wage_n > 0 { avg_wage_sum / avg_wage_n as f64 } else { 0.0 };
+
+        let infl = self.cpi_view();
+        let cpi = infl.cpi;
+        let inflation_rate = infl.inflation_rate;
+
+        let start_date = self.current_date - Duration::days(1);
+        let mut consumer_spending_daily = 0.0;
+
+        for (good_id, good) in &self.financial_system.goods.goods {
+            if good.cpi_weight > 0.0 {
+                let mkt_id = MarketId::Goods(*good_id);
+                if let Some(ticks) = self.history.market_ticks.get(&mkt_id) {
+                    for tick in ticks.iter().rev() {
+                        if tick.date < start_date { break; }
+                        consumer_spending_daily += tick.turnover;
+                    }
+                }
+            }
+        }
+
+        let st = &self.financial_system.government.spending_targets;
+        let government_spending_proxy = st.transfers + st.purchases + st.investment + st.debt_service;
+
+        let business_investment_dummy = 0.0;
+
+        let net_exports_dummy = 0.0;
+
+        let nominal_gdp_proxy = consumer_spending_daily + business_investment_dummy + government_spending_proxy + net_exports_dummy;
+
+        let banks_map = HashSet::from_iter(self.agents.banks.keys().cloned());
+        let m0 = &self.financial_system.m0();
+        let m1 = &self.financial_system.m1(&banks_map);
+        let m2 = &self.financial_system.m2(&banks_map);
+
+        let (velocity, velocity_note) = if *m1 > 1e-9 {
+            (consumer_spending_daily / m1, "proxy: daily nominal spending divided by M1 (cash+DDs, non-banks)")
+        } else {
+            (0.0, "proxy: velocity undefined with zero M1; returning 0.0")
+        };
+
+        MacroStats {
+            as_of: self.current_date,
+
+            nominal_gdp_proxy,
+            nominal_gdp_note: "proxy: C (daily) + I(dummy) + G(proxy) + NX(dummy)",
+
+            consumer_spending_daily,
+            consumer_spending_note: "proxy: sum of turnover over CPI-weighted goods for the last simulated day",
+
+            cpi,
+            inflation_rate,
+
+            employment,
+            unemployment,
+            labour_force,
+            unemployment_rate,
+            avg_wage_rate,
+            payroll_proxy: payroll_sum,
+
+            business_investment: business_investment_dummy,
+            business_investment_note: "dummy: capital formation flows not implemented yet",
+
+            government_spending: government_spending_proxy,
+            government_spending_note: "proxy: uses current SpendingTargets (not realized fiscal outlays)",
+
+            net_exports: net_exports_dummy,
+            net_exports_note: "dummy: trade not modeled (closed economy)",
+
+            m0: *m0,
+            m1: *m1,
+            m2: *m2,
+            velocity,
+            velocity_note,
+        }
     }
 }

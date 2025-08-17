@@ -27,7 +27,7 @@ pub struct YieldCurve {
 impl Default for FinancialSystem {
     fn default() -> Self {
         let central_bank =
-            CentralBank { id: AgentId(uuid::Uuid::new_v4()), policy_rate: 0.043, reserve_requirement: 0.1 };
+            CentralBank { id: AgentId(uuid::Uuid::new_v4()), policy_rate_bps: 430.0, reserve_requirement: 0.1 };
         let government = Government {
             id: AgentId(uuid::Uuid::new_v4()),
             tax_rates: TaxRates::default(),
@@ -292,7 +292,7 @@ impl InstrumentManager for FinancialSystem {
         let bond_details =
             instrument.details.as_any_mut().downcast_mut::<BondDetails>().ok_or("Instrument is not a bond")?;
 
-        let interest_payment = bond_details.coupon_rate * instrument.principal / 100.0;
+        let interest_payment = bond_details.coupon_rate_bps * instrument.principal / 10000.0;
 
         instrument.accrued_interest += interest_payment;
 

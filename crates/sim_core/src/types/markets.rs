@@ -1,4 +1,5 @@
 use crate::*;
+use crate::utils::{BasisPoints, decimal_to_bps, bps_to_decimal};
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use std::{collections::HashMap, fmt, str::FromStr};
@@ -143,6 +144,16 @@ impl Tenor {
     pub fn add_to_date(&self, date: chrono::NaiveDate) -> chrono::NaiveDate {
         date + chrono::Duration::days(self.to_days() as i64)
     }
+    
+    pub fn periods(&self, frequency: usize) -> usize {
+        let years = match self {
+            Tenor::T2Y => 2,
+            Tenor::T5Y => 5,
+            Tenor::T10Y => 10,
+            Tenor::T30Y => 30,
+        };
+        years * frequency
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FinancialMarketId {
@@ -192,22 +203,36 @@ impl FromStr for FinancialMarketId {
 
 pub trait RatesMarket {
     fn price_to_daily_rate(&self, price: f64) -> f64;
-    fn daily_rate_to_annual_bps(&self, daily_rate: f64) -> f64;
-    fn annual_bps_to_daily_rate(&self, annual_bps: f64) -> f64;
+    fn daily_rate_to_annual_bps(&self, daily_rate: f64) -> BasisPoints;
+    fn annual_bps_to_daily_rate(&self, annual_bps: BasisPoints) -> f64;
 }
 
 impl RatesMarket for FinancialMarketId {
     fn price_to_daily_rate(&self, price: f64) -> f64 {
-        if price <= 0.0 {
-            return f64::INFINITY;
+        if matches!(self, FinancialMarketId::SecuredOvernightFinancing) {
+            if price <= 0.0 {
+                return f64::INFINITY;
+            }
+            (1.0 / price) - 1.0
+        } else {
+            0.0
         }
-        (1.0 / price) - 1.0
     }
-    fn daily_rate_to_annual_bps(&self, daily_rate: f64) -> f64 {
-        daily_rate * 360.0 * 10000.0
+    
+    fn daily_rate_to_annual_bps(&self, daily_rate: f64) -> BasisPoints {
+        if matches!(self, FinancialMarketId::SecuredOvernightFinancing) {
+             decimal_to_bps(daily_rate * 360.0)
+        } else {
+            0.0
+        }
     }
-    fn annual_bps_to_daily_rate(&self, annual_bps: f64) -> f64 {
-        annual_bps / 10000.0 / 360.0
+    
+    fn annual_bps_to_daily_rate(&self, annual_bps: BasisPoints) -> f64 {
+        if matches!(self, FinancialMarketId::SecuredOvernightFinancing) {
+            bps_to_decimal(annual_bps) / 360.0
+        } else {
+            0.0
+        }
     }
 }
 
