@@ -374,4 +374,7 @@ impl FinancialSystem {
         }
         self.yield_curve = YieldCurve { date, yields };
     }
+    pub fn get_good_by_id(&self, good_id: &GoodId) -> Option<&Good> {
+        self.goods.get_good_by_id(good_id)
+    }
 }

@@ -63,7 +63,7 @@ impl Tradable for FinancialMarketId {
                     Ok(())
                 }
             }
-            FinancialMarketId::CorporateBond { .. } => Ok(()), // Placeholder
+            FinancialMarketId::CorporateBond { .. } => Ok(()),
         }
     }
 }
@@ -89,7 +89,7 @@ pub struct MarketTick {
     pub best_ask: Option<f64>,
     pub spread: Option<f64>,
     pub volume: f64,
-    pub turnover: f64, // volume * price
+    pub turnover: f64,
     pub open: Option<f64>,
     pub high: Option<f64>,
     pub low: Option<f64>,
@@ -114,7 +114,6 @@ impl MarketView {
     }
 }
 
-
 impl Tradable for MarketId {
     fn check_holdings(&self, agent_id: &AgentId, quantity: f64, fs: &FinancialSystem) -> Result<(), String> {
         match self {
@@ -132,6 +131,7 @@ pub enum Tenor {
     T10Y,
     T30Y,
 }
+
 impl Tenor {
     pub fn to_days(&self) -> u32 {
         match self {
@@ -141,6 +141,16 @@ impl Tenor {
             Tenor::T30Y => 10950,
         }
     }
+    
+    pub fn to_years(&self) -> f64 {
+        match self {
+            Tenor::T2Y => 2.0,
+            Tenor::T5Y => 5.0,
+            Tenor::T10Y => 10.0,
+            Tenor::T30Y => 30.0,
+        }
+    }
+    
     pub fn add_to_date(&self, date: chrono::NaiveDate) -> chrono::NaiveDate {
         date + chrono::Duration::days(self.to_days() as i64)
     }
@@ -155,6 +165,7 @@ impl Tenor {
         years * frequency
     }
 }
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FinancialMarketId {
     SecuredOvernightFinancing,
@@ -302,6 +313,19 @@ impl OrderBook {
             _ => None,
         }
     }
+    
+    pub fn mid_price(&self) -> Option<f64> {
+        match (self.best_bid(), self.best_ask()) {
+            (Some(bid), Some(ask)) => Some((bid.price + ask.price) / 2.0),
+            _ => None,
+        }
+    }
+    
+    pub fn representative_price(&self) -> Option<f64> {
+        self.mid_price()
+            .or_else(|| self.best_bid().map(|b| b.price))
+            .or_else(|| self.best_ask().map(|a| a.price))
+    }
 
     pub fn clear_and_match(&mut self, market_id: &MarketId) -> Vec<Trade> {
         let mut trades = Vec::new();
@@ -382,7 +406,6 @@ pub struct MarketSnapshot {
     pub spread: Option<f64>,
 }
 
-
 #[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct Exchange {
@@ -441,6 +464,7 @@ impl Exchange {
         }
         (all_trades, snapshots)
     }
+    
     pub fn register_labour_market(&mut self, market_id: LabourMarketId) {
         let name = market_id.clone().to_string();
         self.labour_markets.entry(market_id.clone()).or_insert_with(|| LabourMarket {
@@ -453,6 +477,17 @@ impl Exchange {
 
     pub fn labour_market_mut(&mut self, market_id: &LabourMarketId) -> Option<&mut LabourMarket> {
         self.labour_markets.get_mut(market_id)
+    }
+    
+    pub fn get_treasury_bond_details(&self, fs: &FinancialSystem, tenor: &Tenor) -> Option<BondDetails> {
+        for instrument in fs.instruments.values() {
+            if let Some(bond_details) = instrument.details.as_any().downcast_ref::<BondDetails>() {
+                if bond_details.bond_type == BondType::Government && &bond_details.tenor == tenor {
+                    return Some(bond_details.clone());
+                }
+            }
+        }
+        None
     }
 }
 
@@ -470,6 +505,10 @@ impl GoodsMarket {
 
     pub fn best_ask(&self) -> Option<&Ask> {
         self.order_book.best_ask()
+    }
+    
+    pub fn current_price(&self) -> Option<f64> {
+        self.order_book.representative_price()
     }
 }
 
@@ -493,6 +532,57 @@ pub struct FinancialMarket {
 impl FinancialMarket {
     pub fn new(market_id: FinancialMarketId, name: String) -> Self {
         Self { market_id, name, order_book: OrderBook::new() }
+    }
+    
+    pub fn current_price(&self) -> f64 {
+        self.order_book.representative_price().unwrap_or(1000.0)
+    }
+    
+    pub fn last_or_mid(&self) -> Option<f64> {
+        self.order_book.mid_price()
+            .or_else(|| self.order_book.best_bid().map(|b| b.price))
+            .or_else(|| self.order_book.best_ask().map(|a| a.price))
+    }
+    
+    pub fn spread_bps(&self) -> f64 {
+        if let Some(spread) = self.order_book.spread() {
+            if let Some(mid) = self.order_book.mid_price() {
+                if mid > 0.0 {
+                    return (spread / mid) * 10000.0;
+                }
+            }
+            spread
+        } else {
+            0.0
+        }
+    }
+    
+    pub fn calculate_ytm(&self, fs: &FinancialSystem) -> Option<f64> {
+        if let FinancialMarketId::Treasury { tenor } = &self.market_id {
+            if let Some(bond_details) = fs.exchange.get_treasury_bond_details(fs, tenor) {
+                let price = self.current_price();
+                let face_value = bond_details.face_value;
+                let coupon_rate = bond_details.coupon_rate_bps / 10000.0;
+                let years_to_maturity = tenor.to_years();
+                let frequency = bond_details.frequency;
+                
+                return Some(math::pricing::ytm_bond(price, face_value, coupon_rate, years_to_maturity, frequency));
+            }
+        }
+        None
+    }
+    
+    pub fn default_yield(&self) -> f64 {
+        if let FinancialMarketId::Treasury { tenor } = &self.market_id {
+            match tenor {
+                Tenor::T2Y => 0.025,
+                Tenor::T5Y => 0.030,
+                Tenor::T10Y => 0.035,
+                Tenor::T30Y => 0.040,
+            }
+        } else {
+            0.0
+        }
     }
 }
 
@@ -530,14 +620,14 @@ pub struct JobOffer {
     pub firm_id: AgentId,
     pub wage_rate: f64,
     pub hours_required: f64,
-    pub quantity: u32, // Number of positions open
+    pub quantity: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct JobApplication {
     pub application_id: Uuid,
     pub consumer_id: AgentId,
-    pub reservation_wage: f64, // Minimum wage acceptable
+    pub reservation_wage: f64,
     pub hours_desired: f64,
 }
 
