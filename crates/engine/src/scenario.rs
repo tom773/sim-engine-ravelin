@@ -74,7 +74,6 @@ impl Scenario {
     pub fn from_toml_str(toml_str: &str) -> Result<Self, toml::de::Error> {
         toml::from_str(toml_str)
     }
-
     pub fn initialize_engine(&self) -> SimulationEngine {
         let mut state = SimState::default();
         state.config.iterations = self.config.iterations;
@@ -106,11 +105,18 @@ impl Scenario {
         let goods_ref = &state.financial_system.goods;
         state.financial_system.exchange.register_goods_market(good_id!("petrol"), goods_ref);
         state.financial_system.exchange.register_goods_market(good_id!("oil"), goods_ref);
+        
         for tenor_str in &self.config.treasury_tenors_to_register {
             let tenor = Tenor::from_str(tenor_str).unwrap();
             state.financial_system.exchange.register_financial_market(FinancialMarketId::Treasury { tenor });
         }
-        state.financial_system.exchange.register_financial_market(FinancialMarketId::SecuredOvernightFinancing);
+        
+        state.financial_system.exchange.register_financial_market(FinancialMarketId::FederalFundsOvernight);
+        state.financial_system.exchange.register_financial_market(FinancialMarketId::TreasuryRepoOvernight);
+        
+        state.financial_system.exchange.register_financial_market(FinancialMarketId::DiscountWindow);
+        state.financial_system.exchange.register_financial_market(FinancialMarketId::StandingRepoFacility);
+        state.financial_system.exchange.register_financial_market(FinancialMarketId::OvernightReverseRepo);
 
         state.financial_system.exchange.register_labour_market(LabourMarketId::GeneralLabour);
 
@@ -129,6 +135,7 @@ impl Scenario {
             engine.state.financial_system.government.id,
             Box::new(BasicGovernmentDecisionModel::default()),
         ); 
+        
         engine.run_initialization();
         engine
     }

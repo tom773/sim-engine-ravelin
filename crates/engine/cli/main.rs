@@ -8,9 +8,13 @@ use axum::{
 };
 use tower_http::cors::{Any, CorsLayer};
 
-mod routes;
-mod dto;
+pub mod routes;
+pub mod dto;
+pub mod market_routes;
 
+pub use routes::*;
+pub use dto::*;
+pub use market_routes::*;
 pub const SCENARIO_TOML: &str = include_str!("../../../config/config.toml");
 
 pub struct AppState {

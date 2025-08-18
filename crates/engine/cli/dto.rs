@@ -72,13 +72,6 @@ pub struct YieldCurvePointDto {
 }
 
 #[derive(Serialize, Clone)]
-pub struct MarketsPageDto {
-    pub treasuries: Vec<TreasuryMarketDto>,
-    pub yield_curve: Vec<YieldCurvePointDto>,
-    pub sofr: f64,
-}
-
-#[derive(Serialize, Clone)]
 pub struct GoodsDto {
     pub id: String,
     pub name: String,
@@ -100,13 +93,113 @@ pub struct GoodsPageDto {
 }
 
 #[derive(Serialize, Clone)]
-pub struct ReferenceRatesDto {
-    
-    pub discount_window_rate: f64, // Fed will always lend dollars at this rate // UPPER BOUND -> Counterparty is Fed
-    pub iorb: f64, // Interest on Reserve Balances - the rate paid on reserves held at the Fed -> Counterparty is Fed
-    pub effr: f64, // Effective Federal Funds Rate - the average rate at which banks lend reserves to each other overnight -> Counterparty is another bank
-    pub sofr: f64, // Secured Overnight Financing Rate - a market determined rate based on overnight repurchase agreements -> Counterparty is another bank
-    pub reverse_repo_rate: f64, // Fed will always borrow dollars from banks // LOWER BOUND -> Counterparty is Fed
+pub struct MarketsPageDto {
+    pub treasuries: Vec<TreasuryMarketDto>,
+    pub yield_curve: Vec<YieldCurvePointDto>,
+    pub overnight_rates: OvernightRatesDto, // Add detailed overnight rates
+}
 
-    pub cb_reserve_requirement: f64,
+#[derive(Serialize, Clone)]
+#[allow(non_snake_case)]
+pub struct OvernightRatesDto {
+    pub effr: Option<f64>,          // EFFR - federal funds market
+    pub sofr: Option<f64>,          // SOFR - Treasury repo market
+    pub iorb: Option<f64>,          // Interest on reserve balances (floor)
+    pub discount_rate: Option<f64>, // Primary credit rate (ceiling)
+    pub overnight_RRP: Option<f64>, // Overnight reverse repo (floor for nonbanks)
+}
+
+#[derive(Serialize, Clone)]
+pub struct MarketBidDto {
+    pub agent_id: String,
+    pub quantity: f64,
+    pub price: f64,
+}
+
+#[derive(Serialize, Clone)]
+pub struct MarketAskDto {
+    pub agent_id: String,
+    pub quantity: f64,
+    pub price: f64,
+}
+
+#[derive(Serialize, Clone)]
+pub struct OrderbookDto {
+    pub market_id: String,
+    pub market_name: String,
+    pub bids: Vec<MarketBidDto>,
+    pub asks: Vec<MarketAskDto>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct GoodsMarketSummaryDto {
+    pub market_id: String,     // e.g., "Goods(…)"
+    pub good_id: String,
+    pub name: String,
+    pub unit: String,
+    pub best_bid: Option<f64>,
+    pub best_ask: Option<f64>,
+    pub spread: Option<f64>,
+    pub mid: Option<f64>,
+    pub last: Option<f64>,
+    pub depth: DepthDto,
+}
+
+#[derive(Serialize, Clone, Default)]
+pub struct DepthDto {
+    pub bid_size_at_best: f64,
+    pub ask_size_at_best: f64,
+    pub bid_levels: usize,
+    pub ask_levels: usize,
+}
+
+#[derive(Serialize, Clone)]
+pub struct TradeDto {
+    pub ts: i64,               // epoch seconds (or tick index)
+    pub price: f64,
+    pub quantity: f64,
+    pub buyer_id: String,
+    pub seller_id: String,
+}
+
+#[derive(Serialize, Clone)]
+pub struct CandleDto {
+    pub ts: i64,               // start of bucket
+    pub open: f64,
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+    pub volume: f64,
+}
+
+#[derive(Serialize, Clone)]
+pub struct MarketHistoryDto {
+    pub market_id: String,
+    pub good_id: String,
+    pub name: String,
+    pub trades: Vec<TradeDto>,
+    pub candles: Vec<CandleDto>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct GoodsMarketsPageDto {
+    pub markets: Vec<GoodsMarketSummaryDto>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct FinancialMarketSummaryDto {
+    pub market_id: String,     
+    pub instrument_id: String,
+    pub name: String,          
+    pub best_bid: Option<f64>,
+    pub best_ask: Option<f64>,
+    pub spread: Option<f64>,
+    pub mid: Option<f64>,
+    pub last: Option<f64>,
+    pub depth: DepthDto,
+}
+
+#[derive(Serialize, Clone)]
+pub struct FinancialMarketsPageDto {
+    pub markets: Vec<FinancialMarketSummaryDto>,
 }

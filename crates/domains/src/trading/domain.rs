@@ -75,11 +75,20 @@ impl TradingDomain {
                 }
             }
             MarketId::Financial(fin_market_id) => match fin_market_id {
-                FinancialMarketId::SecuredOvernightFinancing => {
+                FinancialMarketId::FederalFundsOvernight => {
                     let reserves = state.financial_system.get_bank_reserves(&agent_id).unwrap_or(0.0);
                     if reserves < quantity {
                         return Err(format!(
-                            "Insufficient reserves for SOFR ask (lending): agent {:?} needs ${:.2}, has ${:.2}",
+                            "Insufficient reserves for federal funds ask (lending): agent {:?} needs ${:.2}, has ${:.2}",
+                            agent_id, quantity, reserves
+                        ));
+                    }
+                }
+                FinancialMarketId::TreasuryRepoOvernight => {
+                    let reserves = state.financial_system.get_bank_reserves(&agent_id).unwrap_or(0.0);
+                    if reserves < quantity {
+                        return Err(format!(
+                            "Insufficient reserves for Treasury repo ask (lending): agent {:?} needs ${:.2}, has ${:.2}",
                             agent_id, quantity, reserves
                         ));
                     }
@@ -107,7 +116,11 @@ impl TradingDomain {
                         ));
                     }
                 }
-                FinancialMarketId::CorporateBond { .. } => {}
+                FinancialMarketId::CorporateBond { .. } 
+                | FinancialMarketId::DiscountWindow 
+                | FinancialMarketId::StandingRepoFacility 
+                | FinancialMarketId::OvernightReverseRepo => {
+                }
             },
             MarketId::Labour(_) => {}
         }

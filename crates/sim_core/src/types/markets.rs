@@ -1,7 +1,8 @@
+use crate::utils::{BasisPoints, bps_to_decimal, decimal_to_bps};
 use crate::*;
-use crate::utils::{BasisPoints, decimal_to_bps, bps_to_decimal};
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
+use std::collections::VecDeque;
 use std::{collections::HashMap, fmt, str::FromStr};
 use thiserror::Error;
 use uuid::Uuid;
@@ -25,12 +26,17 @@ impl Tradable for GoodId {
 impl Tradable for FinancialMarketId {
     fn check_holdings(&self, agent_id: &AgentId, quantity: f64, fs: &FinancialSystem) -> Result<(), String> {
         match self {
-            FinancialMarketId::SecuredOvernightFinancing => {
+            FinancialMarketId::FederalFundsOvernight | FinancialMarketId::TreasuryRepoOvernight => {
                 let reserves = fs.get_bank_reserves(agent_id).unwrap_or(0.0);
                 if reserves < quantity {
+                    let market_name = match self {
+                        FinancialMarketId::FederalFundsOvernight => "federal funds",
+                        FinancialMarketId::TreasuryRepoOvernight => "Treasury repo",
+                        _ => "overnight funding",
+                    };
                     Err(format!(
-                        "Insufficient reserves for SOFR ask (lending): need ${:.2}, has ${:.2}",
-                        quantity, reserves
+                        "Insufficient reserves for {} ask (lending): need ${:.2}, has ${:.2}",
+                        market_name, quantity, reserves
                     ))
                 } else {
                     Ok(())
@@ -63,7 +69,10 @@ impl Tradable for FinancialMarketId {
                     Ok(())
                 }
             }
-            FinancialMarketId::CorporateBond { .. } => Ok(()),
+            FinancialMarketId::CorporateBond { .. }
+            | FinancialMarketId::DiscountWindow
+            | FinancialMarketId::StandingRepoFacility
+            | FinancialMarketId::OvernightReverseRepo => Ok(()),
         }
     }
 }
@@ -141,7 +150,7 @@ impl Tenor {
             Tenor::T30Y => 10950,
         }
     }
-    
+
     pub fn to_years(&self) -> f64 {
         match self {
             Tenor::T2Y => 2.0,
@@ -150,11 +159,11 @@ impl Tenor {
             Tenor::T30Y => 30.0,
         }
     }
-    
+
     pub fn add_to_date(&self, date: chrono::NaiveDate) -> chrono::NaiveDate {
         date + chrono::Duration::days(self.to_days() as i64)
     }
-    
+
     pub fn periods(&self, frequency: usize) -> usize {
         let years = match self {
             Tenor::T2Y => 2,
@@ -168,17 +177,25 @@ impl Tenor {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FinancialMarketId {
-    SecuredOvernightFinancing,
+    FederalFundsOvernight,
+    TreasuryRepoOvernight,
     Treasury { tenor: Tenor },
     CorporateBond { rating: CreditRating },
+    DiscountWindow,
+    StandingRepoFacility,
+    OvernightReverseRepo,
 }
 
 impl fmt::Display for FinancialMarketId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            FinancialMarketId::SecuredOvernightFinancing => write!(f, "SOFR"),
+            FinancialMarketId::FederalFundsOvernight => write!(f, "FedFunds_ON"),
+            FinancialMarketId::TreasuryRepoOvernight => write!(f, "TreasuryRepo_ON"),
             FinancialMarketId::Treasury { tenor } => write!(f, "Treasury_{}", tenor),
             FinancialMarketId::CorporateBond { rating } => write!(f, "CorpBond_{}", rating),
+            FinancialMarketId::DiscountWindow => write!(f, "DiscountWindow"),
+            FinancialMarketId::StandingRepoFacility => write!(f, "SRF"),
+            FinancialMarketId::OvernightReverseRepo => write!(f, "ON_RRP"),
         }
     }
 }
@@ -197,18 +214,25 @@ impl FromStr for FinancialMarketId {
     type Err = ParseFinancialMarketIdError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s == "SOFR" {
-            return Ok(FinancialMarketId::SecuredOvernightFinancing);
+        match s {
+            "FedFunds_ON" => Ok(FinancialMarketId::FederalFundsOvernight),
+            "TreasuryRepo_ON" => Ok(FinancialMarketId::TreasuryRepoOvernight),
+            "DiscountWindow" => Ok(FinancialMarketId::DiscountWindow),
+            "SRF" => Ok(FinancialMarketId::StandingRepoFacility),
+            "ON_RRP" => Ok(FinancialMarketId::OvernightReverseRepo),
+            "SOFR" => Ok(FinancialMarketId::TreasuryRepoOvernight),
+            _ => {
+                if let Some(tenor_str) = s.strip_prefix("Treasury_") {
+                    let tenor = tenor_str.parse()?;
+                    return Ok(FinancialMarketId::Treasury { tenor });
+                }
+                if let Some(rating_str) = s.strip_prefix("CorpBond_") {
+                    let rating = rating_str.parse()?;
+                    return Ok(FinancialMarketId::CorporateBond { rating });
+                }
+                Err(ParseFinancialMarketIdError::InvalidFormat(s.to_string()))
+            }
         }
-        if let Some(tenor_str) = s.strip_prefix("Treasury_") {
-            let tenor = tenor_str.parse()?;
-            return Ok(FinancialMarketId::Treasury { tenor });
-        }
-        if let Some(rating_str) = s.strip_prefix("CorpBond_") {
-            let rating = rating_str.parse()?;
-            return Ok(FinancialMarketId::CorporateBond { rating });
-        }
-        Err(ParseFinancialMarketIdError::InvalidFormat(s.to_string()))
     }
 }
 
@@ -220,29 +244,32 @@ pub trait RatesMarket {
 
 impl RatesMarket for FinancialMarketId {
     fn price_to_daily_rate(&self, price: f64) -> f64 {
-        if matches!(self, FinancialMarketId::SecuredOvernightFinancing) {
-            if price <= 0.0 {
-                return f64::INFINITY;
+        match self {
+            FinancialMarketId::FederalFundsOvernight | FinancialMarketId::TreasuryRepoOvernight => {
+                if price <= 0.0 {
+                    return f64::INFINITY;
+                }
+                (1.0 / price) - 1.0
             }
-            (1.0 / price) - 1.0
-        } else {
-            0.0
+            _ => 0.0,
         }
     }
-    
+
     fn daily_rate_to_annual_bps(&self, daily_rate: f64) -> BasisPoints {
-        if matches!(self, FinancialMarketId::SecuredOvernightFinancing) {
-             decimal_to_bps(daily_rate * 360.0)
-        } else {
-            0.0
+        match self {
+            FinancialMarketId::FederalFundsOvernight | FinancialMarketId::TreasuryRepoOvernight => {
+                decimal_to_bps(daily_rate * 360.0)
+            }
+            _ => 0.0,
         }
     }
-    
+
     fn annual_bps_to_daily_rate(&self, annual_bps: BasisPoints) -> f64 {
-        if matches!(self, FinancialMarketId::SecuredOvernightFinancing) {
-            bps_to_decimal(annual_bps) / 360.0
-        } else {
-            0.0
+        match self {
+            FinancialMarketId::FederalFundsOvernight | FinancialMarketId::TreasuryRepoOvernight => {
+                bps_to_decimal(annual_bps) / 360.0
+            }
+            _ => 0.0,
         }
     }
 }
@@ -313,18 +340,16 @@ impl OrderBook {
             _ => None,
         }
     }
-    
+
     pub fn mid_price(&self) -> Option<f64> {
         match (self.best_bid(), self.best_ask()) {
             (Some(bid), Some(ask)) => Some((bid.price + ask.price) / 2.0),
             _ => None,
         }
     }
-    
+
     pub fn representative_price(&self) -> Option<f64> {
-        self.mid_price()
-            .or_else(|| self.best_bid().map(|b| b.price))
-            .or_else(|| self.best_ask().map(|a| a.price))
+        self.mid_price().or_else(|| self.best_bid().map(|b| b.price)).or_else(|| self.best_ask().map(|a| a.price))
     }
 
     pub fn clear_and_match(&mut self, market_id: &MarketId) -> Vec<Trade> {
@@ -406,6 +431,12 @@ pub struct MarketSnapshot {
     pub spread: Option<f64>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TimedTrade {
+    pub at: i64, // epoch seconds or tick number
+    pub trade: Trade,
+}
+
 #[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct Exchange {
@@ -415,6 +446,8 @@ pub struct Exchange {
     pub financial_markets: HashMap<FinancialMarketId, FinancialMarket>,
     #[serde_as(as = "HashMap<DisplayFromStr, _>")]
     pub labour_markets: HashMap<LabourMarketId, LabourMarket>,
+    #[serde_as(as = "HashMap<DisplayFromStr, _>")]
+    pub trade_tape: HashMap<MarketId, VecDeque<TimedTrade>>,
 }
 
 impl Exchange {
@@ -425,9 +458,13 @@ impl Exchange {
 
     pub fn register_financial_market(&mut self, market_id: FinancialMarketId) {
         let name = match &market_id {
-            FinancialMarketId::SecuredOvernightFinancing => "Secured Overnight Financing".to_string(),
+            FinancialMarketId::FederalFundsOvernight => "Federal Funds Overnight".to_string(),
+            FinancialMarketId::TreasuryRepoOvernight => "Treasury Repo Overnight".to_string(),
             FinancialMarketId::Treasury { tenor } => format!("Treasury {}", tenor),
             FinancialMarketId::CorporateBond { rating } => format!("Corporate Bond {:?}", rating),
+            FinancialMarketId::DiscountWindow => "Federal Reserve Discount Window".to_string(),
+            FinancialMarketId::StandingRepoFacility => "Standing Repo Facility".to_string(),
+            FinancialMarketId::OvernightReverseRepo => "Overnight Reverse Repo".to_string(),
         };
         self.financial_markets.entry(market_id.clone()).or_insert_with(|| FinancialMarket::new(market_id, name));
     }
@@ -448,7 +485,7 @@ impl Exchange {
         self.financial_markets.get_mut(market_id)
     }
 
-    pub fn clear_markets(&mut self) -> (Vec<Trade>, HashMap<MarketId, MarketSnapshot>) {
+    pub fn clear_markets(&mut self, now_ts: i64) -> (Vec<Trade>, HashMap<MarketId, MarketSnapshot>) {
         let mut all_trades = Vec::new();
         let mut snapshots = HashMap::new();
 
@@ -462,9 +499,17 @@ impl Exchange {
             snapshots.insert(market_id.clone(), market.snapshot());
             all_trades.extend(market.order_book.clear_and_match(&market_id));
         }
+        for tr in &all_trades {
+            let e = self.trade_tape.entry(tr.market_id.clone()).or_default();
+            e.push_back(TimedTrade { at: now_ts, trade: tr.clone() });
+            if e.len() > 10_000 {
+                e.pop_front();
+            } 
+        }
+
         (all_trades, snapshots)
     }
-    
+
     pub fn register_labour_market(&mut self, market_id: LabourMarketId) {
         let name = market_id.clone().to_string();
         self.labour_markets.entry(market_id.clone()).or_insert_with(|| LabourMarket {
@@ -478,7 +523,7 @@ impl Exchange {
     pub fn labour_market_mut(&mut self, market_id: &LabourMarketId) -> Option<&mut LabourMarket> {
         self.labour_markets.get_mut(market_id)
     }
-    
+
     pub fn get_treasury_bond_details(&self, fs: &FinancialSystem, tenor: &Tenor) -> Option<BondDetails> {
         for instrument in fs.instruments.values() {
             if let Some(bond_details) = instrument.details.as_any().downcast_ref::<BondDetails>() {
@@ -506,7 +551,7 @@ impl GoodsMarket {
     pub fn best_ask(&self) -> Option<&Ask> {
         self.order_book.best_ask()
     }
-    
+
     pub fn current_price(&self) -> Option<f64> {
         self.order_book.representative_price()
     }
@@ -533,17 +578,18 @@ impl FinancialMarket {
     pub fn new(market_id: FinancialMarketId, name: String) -> Self {
         Self { market_id, name, order_book: OrderBook::new() }
     }
-    
+
     pub fn current_price(&self) -> f64 {
-        self.order_book.representative_price().unwrap_or(1000.0)
+        self.order_book.representative_price().unwrap_or(100.0)
     }
-    
+
     pub fn last_or_mid(&self) -> Option<f64> {
-        self.order_book.mid_price()
+        self.order_book
+            .mid_price()
             .or_else(|| self.order_book.best_bid().map(|b| b.price))
             .or_else(|| self.order_book.best_ask().map(|a| a.price))
     }
-    
+
     pub fn spread_bps(&self) -> f64 {
         if let Some(spread) = self.order_book.spread() {
             if let Some(mid) = self.order_book.mid_price() {
@@ -551,12 +597,12 @@ impl FinancialMarket {
                     return (spread / mid) * 10000.0;
                 }
             }
-            spread
+            spread * 100.0
         } else {
             0.0
         }
     }
-    
+
     pub fn calculate_ytm(&self, fs: &FinancialSystem) -> Option<f64> {
         if let FinancialMarketId::Treasury { tenor } = &self.market_id {
             if let Some(bond_details) = fs.exchange.get_treasury_bond_details(fs, tenor) {
@@ -565,13 +611,13 @@ impl FinancialMarket {
                 let coupon_rate = bond_details.coupon_rate_bps / 10000.0;
                 let years_to_maturity = tenor.to_years();
                 let frequency = bond_details.frequency;
-                
+
                 return Some(math::pricing::ytm_bond(price, face_value, coupon_rate, years_to_maturity, frequency));
             }
         }
         None
     }
-    
+
     pub fn default_yield(&self) -> f64 {
         if let FinancialMarketId::Treasury { tenor } = &self.market_id {
             match tenor {

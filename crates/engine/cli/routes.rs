@@ -1,4 +1,4 @@
-use crate::{AppState, dto::*};
+use crate::{AppState, dto::*, market_routes::*};
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
@@ -14,28 +14,28 @@ use uuid::Uuid;
 
 #[derive(Serialize)]
 pub struct Health {
-    initialized: bool,
-    epoch: String,
+    pub initialized: bool,
+    pub epoch: String,
 }
 
 #[derive(Serialize)]
-struct ApiError {
-    code: &'static str,
-    message: &'static str,
+pub struct ApiError {
+    pub code: &'static str,
+    pub message: &'static str,
 }
 
 #[derive(Serialize)]
 pub struct InitResponse {
-    epoch: String,
+    pub epoch: String,
 }
 
 #[derive(serde::Deserialize)]
 pub struct PaginationQuery {
-    page: Option<u32>,
-    page_size: Option<u32>,
+    pub page: Option<u32>,
+    pub page_size: Option<u32>,
 }
 
-fn with_epoch_header(mut headers: HeaderMap, epoch: Uuid) -> HeaderMap {
+pub fn with_epoch_header(mut headers: HeaderMap, epoch: Uuid) -> HeaderMap {
     headers.insert("X-Server-Epoch", epoch.to_string().parse().unwrap());
     headers
 }
@@ -272,95 +272,6 @@ pub async fn query_stats(State(state): State<Arc<AppState>>) -> (StatusCode, Hea
     }
 }
 
-pub async fn get_markets_dto(State(state): State<Arc<AppState>>) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
-    let headers = with_epoch_header(HeaderMap::new(), state.epoch);
-    let engine_guard = state.sim_engine.read().await;
-
-    if let Some(engine) = engine_guard.as_ref() {
-        let mut treasuries: Vec<TreasuryMarketDto> = Vec::new();
-
-        for (market_key, market) in &engine.state.financial_system.exchange.financial_markets {
-            if let FinancialMarketId::Treasury { tenor } = market_key {
-                let price = market.current_price();
-
-                let ytm =
-                    market.calculate_ytm(&engine.state.financial_system).unwrap_or_else(|| market.default_yield())
-                        * 100.0; // Convert to percentage
-
-                let spread = market.spread_bps();
-
-                treasuries.push(TreasuryMarketDto {
-                    instrument_id: format!("Financial(Treasury_{})", tenor),
-                    name: format!("US {}", tenor.to_string().replace("T", "").replace("Y", "Y")),
-                    price: price / 10.0, // Assuming price is for $1000 face value, convert to per $100
-                    yield_to_maturity: ytm,
-                    spread_bps: spread,
-                    daily_change_pct: 0.001, // Placeholder - you could calculate this from market history
-                });
-            }
-        }
-
-        let yield_curve: Vec<YieldCurvePointDto> = treasuries
-            .iter()
-            .map(|treasury| YieldCurvePointDto {
-                tenor: treasury.name.replace("US ", ""), // "US 10Y" -> "10Y"
-                yield_pct: treasury.yield_to_maturity,
-            })
-            .collect();
-
-        let sofr = engine.state.financial_system.central_bank.policy_rate_bps / 100.0;
-
-        let markets_dto = MarketsPageDto { treasuries, yield_curve, sofr };
-
-        (StatusCode::OK, headers, Json(serde_json::to_value(markets_dto).unwrap()))
-    } else {
-        let err = ApiError { code: "NOT_INITIALIZED", message: "Simulation is not initialized." };
-        (StatusCode::CONFLICT, headers, Json(serde_json::json!({ "error": err })))
-    }
-}
-pub async fn get_goods_markets_dto(
-    State(state): State<Arc<AppState>>,
-) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
-    let headers = with_epoch_header(HeaderMap::new(), state.epoch);
-    let engine_guard = state.sim_engine.read().await;
-    
-    if let Some(engine) = engine_guard.as_ref() {
-        let goods = engine.state.financial_system.goods.goods.values()
-            .map(|good| GoodsDto {
-                id: good.id.to_string(),
-                name: good.name.clone(),
-                unit: good.unit.clone(),
-            })
-            .collect::<Vec<_>>();
-        let recipies = engine.state.financial_system.goods.recipes.values()
-            .map(|recipe| RecipiesDto {
-                id: recipe.id.to_string(),
-                name: recipe.name.clone(),
-                inputs: recipe.inputs.iter()
-                    .map(|(good_id, _)| {
-                        let good = engine.state.financial_system.goods.get_good_by_id(good_id).unwrap();
-                        GoodsDto {
-                            id: good.id.to_string(),
-                            name: good.name.clone(),
-                            unit: good.unit.clone(),
-                        }
-                    }).collect(),
-                output: engine.state.financial_system.goods.get_good_by_id(&recipe.output.0).map_or_else(
-                    || GoodsDto { id: String::new(), name: String::new(), unit: String::new() },
-                    |good| GoodsDto { id: good.id.to_string(), name: good.name.clone(), unit: good.unit.clone() }
-                ),
-                efficiency: recipe.efficiency,
-                labour_hours: recipe.labour_hours,
-
-            })
-            .collect::<Vec<_>>();
-        let goods_page = GoodsPageDto { goods, recipies }; 
-        (StatusCode::OK, headers, Json(serde_json::to_value(goods_page).unwrap()))
-    } else {
-        let err = ApiError { code: "NOT_INITIALIZED", message: "Simulation is not initialized." };
-        (StatusCode::CONFLICT, headers, Json(json!({ "error": err })))
-    }
-}
 pub fn http_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
@@ -373,5 +284,11 @@ pub fn http_router(state: Arc<AppState>) -> Router {
         .route("/sim/analysis/stats", get(query_stats))
         .route("/api/markets", get(get_markets_dto))
         .route("/api/goods_mkt", get(get_goods_markets_dto))
+        .route("/api/goods_markets", get(get_goods_market_summaries))
+        .route("/api/goods_markets/{good_id}/orderbook", get(get_goods_orderbook))
+        .route("/api/goods_markets/{good_id}/history", get(get_goods_market_history))
+        .route("/api/financial_markets", get(get_financial_market_summaries))
+        .route("/api/financial_markets/{instrument_id}/orderbook", get(get_financial_orderbook))
+        .route("/api/financial_markets/{instrument_id}/history", get(get_financial_market_history))
         .with_state(state)
 }

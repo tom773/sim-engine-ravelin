@@ -53,7 +53,7 @@ impl SimulationEngine {
             println!("[ERROR] applying action effects: {}", e);
         }
 
-        let (trades, snapshots) = self.state.financial_system.exchange.clear_markets();
+        let (trades, snapshots) = self.state.financial_system.exchange.clear_markets(self.state.ticknum as i64);
 
         self.update_market_history(&trades, &snapshots);
         self.state.financial_system.update_yield_curve(self.state.current_date);
@@ -210,11 +210,97 @@ impl SimulationEngine {
                     }
                 }
             }
-            MarketId::Financial(FinancialMarketId::SecuredOvernightFinancing) => {
-                println!("[INFO] SOFR Trade executed (Settlement logic TBD)");
+            MarketId::Financial(FinancialMarketId::FederalFundsOvernight) => {
+                let _cb_id = self.state.financial_system.central_bank.id;
+                let loan_amount = trade.quantity;
+                let overnight_rate_bps = self.state.financial_system.central_bank.policy_rate_bps;
+                
+                effects.extend(self.create_reserves_transfer_effects(trade.seller, trade.buyer, loan_amount));
+                
+                let fed_funds_loan = FinancialInstrument {
+                    id: InstrumentId(uuid::Uuid::new_v4()),
+                    creditor: trade.seller,
+                    debtor: trade.buyer,
+                    principal: loan_amount,
+                    details: Box::new(LoanDetails {
+                        loan_type: LoanType::FederalFunds,
+                        interest_rate_bps: overnight_rate_bps,
+                        maturity_date: self.state.current_date + chrono::Duration::days(1),
+                        collateral: None,
+                    }),
+                    originated_date: self.state.current_date,
+                    accrued_interest: 0.0,
+                    last_accrual_date: self.state.current_date,
+                };
+                effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(fed_funds_loan)));
+                
+                println!("[INFO] Federal funds trade executed: ${:.2} from {} to {}", loan_amount, trade.seller, trade.buyer);
+            }
+            MarketId::Financial(FinancialMarketId::TreasuryRepoOvernight) => {
+                let repo_amount = trade.quantity;
+                let repo_rate_bps = self.state.financial_system.central_bank.policy_rate_bps - 10.0;
+                
+                effects.extend(self.create_payment_transfer_effects(trade.seller, trade.buyer, repo_amount));
+                
+                let repo_agreement = FinancialInstrument {
+                    id: InstrumentId(uuid::Uuid::new_v4()),
+                    creditor: trade.seller,
+                    debtor: trade.buyer,
+                    principal: repo_amount,
+                    details: Box::new(LoanDetails {
+                        loan_type: LoanType::Repo,
+                        interest_rate_bps: repo_rate_bps,
+                        maturity_date: self.state.current_date + chrono::Duration::days(1),
+                        collateral: Some(CollateralInfo {
+                            collateral_type: "US Treasury".to_string(),
+                            value: repo_amount * 1.02,
+                        }),
+                    }),
+                    originated_date: self.state.current_date,
+                    accrued_interest: 0.0,
+                    last_accrual_date: self.state.current_date,
+                };
+                effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(repo_agreement)));
+                
+                println!("[INFO] Treasury repo trade executed: ${:.2} from {} to {}", repo_amount, trade.seller, trade.buyer);
+            }
+            MarketId::Financial(FinancialMarketId::DiscountWindow) 
+            | MarketId::Financial(FinancialMarketId::StandingRepoFacility) 
+            | MarketId::Financial(FinancialMarketId::OvernightReverseRepo) => {
+                println!("[INFO] Central bank facility trade executed (settlement logic TBD): {:?}", trade.market_id);
             }
             _ => {}
         }
+        
+        effects
+    }
+
+    fn create_reserves_transfer_effects(&self, from: AgentId, to: AgentId, amount: f64) -> Vec<StateEffect> {
+        let mut effects = vec![];
+        let cb_id = self.state.financial_system.central_bank.id;
+        
+        if let Some(from_bs) = self.state.financial_system.get_bs_by_id(&from) {
+            if let Some((reserves_id, reserves_inst)) = from_bs.assets.iter()
+                .find(|(_, inst)| inst.details.as_any().is::<CentralBankReservesDetails>()) {
+                
+                let new_reserves = reserves_inst.principal - amount;
+                if new_reserves < 1e-6 {
+                    effects.push(StateEffect::Financial(FinancialEffect::RemoveInstrument(*reserves_id)));
+                } else {
+                    effects.push(StateEffect::Financial(FinancialEffect::UpdateInstrument { 
+                        id: *reserves_id, 
+                        new_principal: new_reserves 
+                    }));
+                }
+            }
+        }
+        
+        effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(reserves!(
+            to,
+            cb_id,
+            amount,
+            self.state.current_date
+        ))));
         
         effects
     }
@@ -224,7 +310,7 @@ impl SimulationEngine {
         let cb_id = self.state.financial_system.central_bank.id;
         let from_bs = match self.state.financial_system.get_bs_by_id(&from) {
             Some(bs) => bs,
-            None => return vec![], // Should be caught by validation
+            None => return vec![],
         };
 
         let (cash_id, cash_on_hand) = from_bs

@@ -27,7 +27,7 @@ pub struct YieldCurve {
 impl Default for FinancialSystem {
     fn default() -> Self {
         let central_bank =
-            CentralBank { id: AgentId(uuid::Uuid::new_v4()), policy_rate_bps: 430.0, reserve_requirement: 0.1 };
+            CentralBank { id: AgentId(uuid::Uuid::new_v4()), policy_rate_bps: 425.0, reserve_requirement: 0.1 };
         let government = Government {
             id: AgentId(uuid::Uuid::new_v4()),
             tax_rates: TaxRates::default(),
@@ -319,10 +319,9 @@ impl FinancialStatistics for FinancialSystem {
                     .sum::<f64>()
             })
             .sum();
-        r // TODO Vault Cash should technically be included here, but we don't track it separately yet
+        r
     }
     fn m1(&self, bank_ids: &HashSet<AgentId>) -> f64 {
-            // M1 - cash + demand deposits
         self.balance_sheets
             .values()
             .filter(|bs| !bank_ids.contains(&bs.agent_id) && bs.agent_id != self.central_bank.id)
@@ -339,8 +338,7 @@ impl FinancialStatistics for FinancialSystem {
     }
 
     fn m2(&self, bank_ids: &HashSet<AgentId>) -> f64 {
-        // M2 - M1 + savings deposits
-        let m1 = self.m1(bank_ids); // <-- Pass the hashset through
+        let m1 = self.m1(bank_ids);
 
         let savings_deposits: f64 = self
             .balance_sheets

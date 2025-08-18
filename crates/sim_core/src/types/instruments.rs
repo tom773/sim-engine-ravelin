@@ -134,6 +134,9 @@ pub enum LoanType {
     Auto,
     Student,
     CreditCard,
+    FederalFunds,  // Unsecured interbank lending
+    Repo,          // Secured lending with collateral
+    ReverseRepo,   // Reverse of repo (from borrower's perspective)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

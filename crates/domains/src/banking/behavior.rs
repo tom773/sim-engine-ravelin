@@ -1,3 +1,4 @@
+
 use rand::RngCore;
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -35,13 +36,13 @@ impl BasicBankDecisionModel {
         let current_reserves = fs.get_bank_reserves(&bank.id).unwrap_or(0.0);
         let reserve_surplus_or_shortfall = current_reserves - target_reserve_level;
 
-        let overnight_market_id = FinancialMarketId::SecuredOvernightFinancing;
+        let fed_funds_market_id = FinancialMarketId::FederalFundsOvernight;
 
-        let floor_rate_bps = fs.central_bank.policy_rate_bps; // Already in BPS
-        let ceiling_rate_bps = floor_rate_bps + 25.0; // 430 + 25 = 455
-        let target_rate_bps = (floor_rate_bps + ceiling_rate_bps) / 2.0; // 442.5
+        let floor_rate_bps = fs.central_bank.policy_rate_bps;
+        let ceiling_rate_bps = floor_rate_bps + 25.0;
+        let target_rate_bps = (floor_rate_bps + ceiling_rate_bps) / 2.0;
 
-        let daily_rate = overnight_market_id.annual_bps_to_daily_rate(target_rate_bps);
+        let daily_rate = fed_funds_market_id.annual_bps_to_daily_rate(target_rate_bps);
         let price = 1.0 / (1.0 + daily_rate);
 
         if reserve_surplus_or_shortfall < -1.0 {
@@ -49,7 +50,7 @@ impl BasicBankDecisionModel {
 
             actions.push(SimAction::Trading(TradingAction::PostBid {
                 agent_id: bank.id,
-                market_id: MarketId::Financial(overnight_market_id.clone()),
+                market_id: MarketId::Financial(fed_funds_market_id.clone()),
                 quantity: amount_needed,
                 price,
             }));
@@ -58,7 +59,7 @@ impl BasicBankDecisionModel {
             if amount_to_lend > 100.0 {
                 actions.push(SimAction::Trading(TradingAction::PostAsk {
                     agent_id: bank.id,
-                    market_id: MarketId::Financial(overnight_market_id.clone()),
+                    market_id: MarketId::Financial(fed_funds_market_id.clone()),
                     quantity: amount_to_lend,
                     price,
                 }));
@@ -92,12 +93,11 @@ impl BasicBankDecisionModel {
                     Tenor::T30Y => 50.0,
                 };
                 let bid_ask_spread_bps = rand::rng().random_range(13.0..32.0); 
-                let target_yield_bps = fs.central_bank.policy_rate_bps; // Already in BPS
+                let target_yield_bps = fs.central_bank.policy_rate_bps;
 
-                let bid_yield_bps = term_premium + target_yield_bps + (bid_ask_spread_bps / 2.0); // 430 + 5 = 435
-                let ask_yield_bps = term_premium + target_yield_bps - (bid_ask_spread_bps / 2.0); // 430 - 5 = 425
+                let bid_yield_bps = term_premium + target_yield_bps + (bid_ask_spread_bps / 2.0);
+                let ask_yield_bps = term_premium + target_yield_bps - (bid_ask_spread_bps / 2.0);
 
-                // Use BPS approach with discrete periods
                 let benchmark_coupon_bps = fs.central_bank.policy_rate_bps;
                 
                 let bid_price =
@@ -165,12 +165,11 @@ mod banking_tests {
 
     #[test]
     fn test_reserves_management() {
-        let target = 442.5; // 0.04425
-        let daily_rate = FinancialMarketId::SecuredOvernightFinancing.annual_bps_to_daily_rate(target);
+        let target = 442.5;
+        let daily_rate = FinancialMarketId::FederalFundsOvernight.annual_bps_to_daily_rate(target);
         let price = 1.0 / (1.0 + daily_rate);
         println!("Price: {}", price);
         println!("Daily Rate: {}", daily_rate*10000.0);
-        // Expected: daily_rate = 442.5/10000/360 = 0.00012291666..., price = 1/(1+0.00012291666) ≈ 0.9998771
         assert!(daily_rate > 0.0, "Daily rate should be positive"); 
     }
 
@@ -184,12 +183,12 @@ mod banking_tests {
             creditor,
             debtor,
             1000.0,
-            400.0, // 4% in BPS
+            400.0,
             n_date,
             1000.0,
             BondType::Government,
-            2, // semi-annual
-            Tenor::T10Y, // 5 years
+            2,
+            Tenor::T10Y,
             o_date
         );
 
