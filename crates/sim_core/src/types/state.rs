@@ -330,10 +330,42 @@ impl Default for SimConfig {
 #[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct SimHistory {
-    pub transactions: Vec<Transaction>, // Assuming Transaction is defined elsewhere
+    pub transactions: Vec<Transaction>,
     #[serde_as(as = "HashMap<DisplayFromStr, _>")]
     pub market_ticks: HashMap<MarketId, VecDeque<MarketTick>>,
+    pub tick_records: VecDeque<TickRecord>, // New field for action/effect history
 }
+
+impl SimHistory {
+    pub fn add_tick_record(&mut self, record: TickRecord) {
+        self.tick_records.push_back(record);
+        if self.tick_records.len() > 1000 {
+            self.tick_records.pop_front();
+        }
+    }
+    
+    pub fn get_recent_ticks(&self, limit: usize) -> Vec<&TickRecord> {
+        self.tick_records.iter().rev().take(limit).rev().collect()
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TickRecord {
+    pub tick_number: u32,
+    pub date: chrono::NaiveDate,
+    pub actions: Vec<ActionRecord>,
+    pub effects: Vec<StateEffect>,
+    pub trades: Vec<Trade>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ActionRecord {
+    pub action: SimAction,
+    pub agent_id: AgentId,
+    pub agent_type: String, // "Bank", "Consumer", "Firm", "Government"
+    pub agent_name: Option<String>,
+}
+
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Default)]
 pub struct MacroStats {

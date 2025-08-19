@@ -232,9 +232,9 @@ pub async fn get_market_goods_history(
         let trades = exchange.trade_tape.get(&market_id).cloned().unwrap_or_default()
             .iter().rev().take(limit).rev()
             .map(|t| crate::dto::TradeDto {
-                ts: t.at,
                 price: t.trade.price,
                 quantity: t.trade.quantity,
+                market_id: market_id.to_string(),
                 buyer_id: t.trade.buyer.to_string(),
                 seller_id: t.trade.seller.to_string(),
             }).collect();
@@ -382,7 +382,7 @@ pub async fn get_market_financial_history(
         let trades = exchange.trade_tape.get(&market_id).cloned().unwrap_or_default()
             .iter().rev().take(limit).rev()
             .map(|t| crate::dto::TradeDto {
-                ts: t.at, price: t.trade.price, quantity: t.trade.quantity,
+                market_id: market_id.to_string(), price: t.trade.price, quantity: t.trade.quantity,
                 buyer_id: t.trade.buyer.to_string(), seller_id: t.trade.seller.to_string(),
             }).collect();
         

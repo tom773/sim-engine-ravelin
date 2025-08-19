@@ -11,7 +11,9 @@ use tower_http::cors::{Any, CorsLayer};
 pub mod routes;
 pub mod dto;
 pub mod market_routes;
+pub mod sim_history_routes;
 
+pub use sim_history_routes::*;
 pub use routes::*;
 pub use dto::*;
 pub use market_routes::*;

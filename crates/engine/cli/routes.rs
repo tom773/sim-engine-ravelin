@@ -1,4 +1,9 @@
-use crate::{AppState, dto::*, market_routes::*};
+use crate::{
+    AppState, 
+    dto::*, 
+    market_routes::*,
+    sim_history_routes::*,
+};
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
@@ -110,7 +115,7 @@ pub async fn get_dashboard(State(state): State<Arc<AppState>>) -> (StatusCode, H
         };
 
         let central_bank_policy = PolicyRates {
-            policy_rate: fs.central_bank.policy_rate_bps / 100.0,
+            policy_rate: fs.central_bank.policy_rate_bps,
             reserve_requirement: fs.central_bank.reserve_requirement,
         };
 
@@ -315,7 +320,6 @@ pub async fn query_stats(State(state): State<Arc<AppState>>) -> (StatusCode, Hea
     }
 }
 
-
 pub fn http_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
@@ -323,6 +327,9 @@ pub fn http_router(state: Arc<AppState>) -> Router {
         .route("/dashboard", get(get_dashboard))
         .route("/sim/control/tick", post(tick))
         .route("/sim/analysis/stats", get(query_stats))
+        .route("/sim/analysis/history", get(get_simulation_history))  // NEW
+        .route("/sim/analysis/actions", get(get_actions_history))     // NEW  
+        .route("/sim/analysis/tick/{tick_number}", get(get_tick_details)) // NEW
         .route("/agents/{agent_type}", get(get_agents))
         .route("/agents/{agent_type}/summary", get(get_agents_summary))
         .route("/api/markets/overview", get(get_markets_overview))

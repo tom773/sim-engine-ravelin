@@ -1,4 +1,5 @@
 use serde::Serialize;
+use sim_core::prelude::*;
 
 #[derive(Serialize, Clone)]
 pub struct AgentCounts {
@@ -338,15 +339,6 @@ pub struct DepthDto {
 }
 
 #[derive(Serialize, Clone)]
-pub struct TradeDto {
-    pub ts: i64,               // epoch seconds (or tick index)
-    pub price: f64,
-    pub quantity: f64,
-    pub buyer_id: String,
-    pub seller_id: String,
-}
-
-#[derive(Serialize, Clone)]
 pub struct CandleDto {
     pub ts: i64,               // start of bucket
     pub open: f64,
@@ -442,4 +434,134 @@ pub struct MarketMicrostructureDto {
     pub effective_spread: Option<f64>,
     pub realized_spread: Option<f64>,
     pub adverse_selection_cost: Option<f64>,
+}
+
+// Add these DTOs to dto.rs
+
+#[derive(Serialize, Clone)]
+pub struct ActionDto {
+    pub action_type: String,      // e.g., "Banking::Transfer"
+    pub agent_id: String,
+    pub agent_type: String,       // "Bank", "Consumer", "Firm", etc.
+    pub agent_name: Option<String>,
+    pub details: serde_json::Value, // Serialized action details
+}
+
+#[derive(Serialize, Clone)]
+pub struct EffectDto {
+    pub effect_type: String,      // e.g., "Financial::CreateInstrument"
+    pub details: serde_json::Value, // Serialized effect details
+}
+
+#[derive(Serialize, Clone)]
+pub struct TradeDto {
+    pub market_id: String,
+    pub buyer_id: String,
+    pub seller_id: String,
+    pub quantity: f64,
+    pub price: f64,
+}
+
+#[derive(Serialize, Clone)]
+pub struct TickRecordDto {
+    pub tick_number: u32,
+    pub date: String,
+    pub actions: Vec<ActionDto>,
+    pub effects: Vec<EffectDto>,
+    pub trades: Vec<TradeDto>,
+    pub summary: TickSummaryDto,
+}
+
+#[derive(Serialize, Clone)]
+pub struct TickSummaryDto {
+    pub total_actions: usize,
+    pub total_effects: usize,
+    pub total_trades: usize,
+    pub actions_by_type: std::collections::HashMap<String, usize>,
+    pub effects_by_type: std::collections::HashMap<String, usize>,
+    pub agents_active: usize,
+}
+
+#[derive(Serialize, Clone)]
+pub struct SimulationHistoryDto {
+    pub ticks: Vec<TickRecordDto>,
+    pub total_ticks: usize,
+    pub page: u32,
+    pub page_size: u32,
+}
+
+// Helper functions to convert from core types to DTOs
+impl From<&ActionRecord> for ActionDto {
+    fn from(record: &ActionRecord) -> Self {
+        ActionDto {
+            action_type: record.action.name(),
+            agent_id: record.agent_id.to_string(),
+            agent_type: record.agent_type.clone(),
+            agent_name: record.agent_name.clone(),
+            details: serde_json::to_value(&record.action).unwrap_or(serde_json::Value::Null),
+        }
+    }
+}
+
+impl From<&StateEffect> for EffectDto {
+    fn from(effect: &StateEffect) -> Self {
+        EffectDto {
+            effect_type: effect.name(),
+            details: serde_json::to_value(effect).unwrap_or(serde_json::Value::Null),
+        }
+    }
+}
+
+impl From<&Trade> for TradeDto {
+    fn from(trade: &Trade) -> Self {
+        TradeDto {
+            market_id: trade.market_id.to_string(),
+            buyer_id: trade.buyer.to_string(),
+            seller_id: trade.seller.to_string(),
+            quantity: trade.quantity,
+            price: trade.price,
+        }
+    }
+}
+
+impl From<&TickRecord> for TickRecordDto {
+    fn from(record: &TickRecord) -> Self {
+        let actions: Vec<ActionDto> = record.actions.iter().map(ActionDto::from).collect();
+        let effects: Vec<EffectDto> = record.effects.iter().map(EffectDto::from).collect();
+        let trades: Vec<TradeDto> = record.trades.iter().map(TradeDto::from).collect();
+        
+        // Create summary statistics
+        let mut actions_by_type = std::collections::HashMap::new();
+        for action in &actions {
+            *actions_by_type.entry(action.action_type.clone()).or_insert(0) += 1;
+        }
+        
+        let mut effects_by_type = std::collections::HashMap::new();
+        for effect in &effects {
+            *effects_by_type.entry(effect.effect_type.clone()).or_insert(0) += 1;
+        }
+        
+        let agents_active = actions.iter()
+            .map(|a| &a.agent_id)
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        
+        let summary = TickSummaryDto {
+            total_actions: actions.len(),
+            total_effects: effects.len(),
+            total_trades: trades.len(),
+            actions_by_type,
+            effects_by_type,
+            agents_active,
+        };
+        
+        TickRecordDto {
+            tick_number: record.tick_number,
+            date: record.date.format("%Y-%m-%d").to_string(),
+            actions,
+            effects,
+            trades,
+            summary,
+        }
+    }
 }

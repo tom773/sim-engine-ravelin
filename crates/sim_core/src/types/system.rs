@@ -450,23 +450,17 @@ impl FinancialSystem {
         let calculate_rate = |market_id: FinancialMarketId| {
             self.exchange.financial_markets.get(&market_id).and_then(|market| market.last_or_mid()).map(|price| {
                 let daily_rate = market_id.price_to_daily_rate(price);
-                daily_rate * 360.0 * 100.0
+                market_id.daily_rate_to_annual_bps(daily_rate)
             })
         };
 
         let effr = calculate_rate(FinancialMarketId::FederalFundsOvernight);
         let sofr = calculate_rate(FinancialMarketId::TreasuryRepoOvernight);
 
-        let iorb = (policy_rate_bps + 15.0) / 100.0;
-        let discount_rate = (policy_rate_bps + 25.0) / 100.0;
-        let overnight_rrp = (policy_rate_bps).max(0.0) / 100.0;
+        let iorb = policy_rate_bps + 15.0;
+        let discount_rate = policy_rate_bps + 25.0;
+        let overnight_rrp = policy_rate_bps.max(0.0);
 
-        OvernightRates {
-            effr,
-            sofr: sofr,
-            iorb,
-            discount_rate,
-            overnight_rrp,
-        }
+        OvernightRates { effr: effr, sofr: sofr, iorb, discount_rate, overnight_rrp }
     }
 }
