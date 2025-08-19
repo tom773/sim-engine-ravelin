@@ -9,36 +9,29 @@ use serde::Deserialize;
 use serde_json::json;
 use sim_core::*;
 use std::sync::Arc;
+use sim_core::traits::MarketSummaryProvider;
 
 pub async fn get_markets_overview(State(state): State<Arc<AppState>>) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
     let headers = with_epoch_header(HeaderMap::new(), state.epoch);
     let engine_guard = state.sim_engine.read().await;
 
     if let Some(engine) = engine_guard.as_ref() {
-        let mut treasuries: Vec<TreasuryMarketDto> = Vec::new();
+        let fs = &engine.state.financial_system;
 
-        for (market_key, market) in &engine.state.financial_system.exchange.financial_markets {
-            if let FinancialMarketId::Treasury { tenor } = market_key {
-                let price = market.current_price();
-
-                let ytm =
-                    market.calculate_ytm(&engine.state.financial_system).unwrap_or_else(|| market.default_yield())
-                        * 100.0;
-
-                let spread = market.spread_bps();
-
-                treasuries.push(TreasuryMarketDto {
-                    instrument_id: format!("Financial(Treasury_{})", tenor),
-                    name: format!("US {}", tenor.to_string().replace("T", "").replace("Y", "Y")),
-                    price: price / 10.0,
-                    yield_to_maturity: ytm,
-                    spread_bps: spread,
-                    daily_change_pct: 0.001,
-                    duration: None,
-                    convexity: None,
-                });
+        let treasury_summaries = fs.exchange.get_treasury_market_summaries(fs);
+        
+        let treasuries: Vec<TreasuryMarketDto> = treasury_summaries.iter().map(|summary| {
+            TreasuryMarketDto {
+                instrument_id: format!("Financial(Treasury_{})", summary.tenor),
+                name: format!("US {}", summary.tenor.to_string().replace("T", "").replace("Y", "Y")),
+                price: summary.price / 10.0,
+                yield_to_maturity: summary.yield_to_maturity * 100.0,
+                spread_bps: summary.spread_bps,
+                daily_change_pct: 0.001,
+                duration: None,
+                convexity: None,
             }
-        }
+        }).collect();
 
         let yield_curve: Vec<YieldCurvePointDto> = treasuries
             .iter()
@@ -50,54 +43,19 @@ pub async fn get_markets_overview(State(state): State<Arc<AppState>>) -> (Status
             })
             .collect();
 
-        let fed_funds_rate = engine
-            .state
-            .financial_system
-            .exchange
-            .financial_markets
-            .get(&FinancialMarketId::FederalFundsOvernight)
-            .and_then(|market| market.last_or_mid())
-            .map(|price| {
-                let daily_rate = FinancialMarketId::FederalFundsOvernight.price_to_daily_rate(price);
-                daily_rate * 360.0 * 100.0
-            })
-            .unwrap_or(engine.state.financial_system.central_bank.policy_rate_bps / 100.0);
-
-        let sofr = engine
-            .state
-            .financial_system
-            .exchange
-            .financial_markets
-            .get(&FinancialMarketId::TreasuryRepoOvernight)
-            .and_then(|market| market.last_or_mid())
-            .map(|price| {
-                let daily_rate = FinancialMarketId::TreasuryRepoOvernight.price_to_daily_rate(price);
-                daily_rate * 360.0 * 100.0
-            })
-            .unwrap_or(fed_funds_rate - 0.10);
-
-        let overnight_rates = OvernightRatesDto {
-            effr: engine
-                .state
-                .financial_system
-                .exchange
-                .financial_markets
-                .get(&FinancialMarketId::FederalFundsOvernight)
-                .and_then(|market| market.last_or_mid())
-                .map(|price| {
-                    let daily_rate = FinancialMarketId::FederalFundsOvernight.price_to_daily_rate(price);
-                    daily_rate * 360.0 * 100.0
-                }),
-            sofr: Some(sofr),
-            iorb: Some((engine.state.financial_system.central_bank.policy_rate_bps + 15.0) / 100.0),
-            discount_rate: Some((engine.state.financial_system.central_bank.policy_rate_bps + 25.0) / 100.0),
-            overnight_RRP: Some((engine.state.financial_system.central_bank.policy_rate_bps).max(0.0) / 100.0),
+        let overnight_rates_data = fs.calculate_overnight_rates();
+        let overnight_rates_dto = OvernightRatesDto {
+            effr: overnight_rates_data.effr,
+            sofr: overnight_rates_data.sofr,
+            iorb: Some(overnight_rates_data.iorb),
+            discount_rate: Some(overnight_rates_data.discount_rate),
+            overnight_RRP: Some(overnight_rates_data.overnight_rrp),
         };
 
         let markets_dto = MarketsPageDto { 
             treasuries, 
             yield_curve, 
-            overnight_rates,
+            overnight_rates: overnight_rates_dto,
             market_summary: None,
         };
 
@@ -156,6 +114,7 @@ pub async fn get_goods_catalogue(
     }
 }
 
+
 pub async fn get_market_goods_overview(
     State(state): State<Arc<AppState>>,
 ) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
@@ -170,46 +129,25 @@ pub async fn get_market_goods_overview(
             .goods_markets
             .iter()
             .map(|(good_id, market)| {
-                let best_bid = market.order_book.best_bid().map(|b| b.price);
-                let best_ask = market.best_ask().map(|a| a.price);
-                let spread = match (best_bid, best_ask) {
-                    (Some(b), Some(a)) => Some(a - b),
-                    _ => None,
-                };
-                let mid = match (best_bid, best_ask) {
-                    (Some(b), Some(a)) => Some((a + b) * 0.5),
-                    _ => None,
-                };
-                let last = market.current_price();
-
-                let bid_px = best_bid;
-                let ask_px = best_ask;
-                let bid_size_at_best = bid_px
-                    .map(|px| market.order_book.bids.iter().filter(|b| b.price == px).map(|b| b.quantity).sum())
-                    .unwrap_or(0.0);
-                let ask_size_at_best = ask_px
-                    .map(|px| market.order_book.asks.iter().filter(|a| a.price == px).map(|a| a.quantity).sum())
-                    .unwrap_or(0.0);
-
+                let summary = market.summary();
+                let depth = summary.depth;
                 let g = goods.get_good_by_id(good_id);
-                let name = g.map(|x| x.name.clone()).unwrap_or_else(|| format!("{good_id}"));
-                let unit = g.map(|x| x.unit.clone()).unwrap_or_else(|| "".to_string());
 
                 crate::dto::GoodsMarketSummaryDto {
                     market_id: good_id.to_string(),
                     good_id: good_id.to_string(),
-                    name,
-                    unit,
-                    best_bid,
-                    best_ask,
-                    spread,
-                    mid,
-                    last,
+                    name: g.map_or_else(|| format!("{good_id}"), |x| x.name.clone()),
+                    unit: g.map_or_else(|| "".to_string(), |x| x.unit.clone()),
+                    best_bid: depth.best_bid,
+                    best_ask: depth.best_ask,
+                    spread: summary.spread,
+                    mid: summary.mid,
+                    last: summary.last_price,
                     depth: crate::dto::DepthDto {
-                        bid_size_at_best,
-                        ask_size_at_best,
-                        bid_levels: market.order_book.bids.len(),
-                        ask_levels: market.order_book.asks.len(),
+                        bid_size_at_best: depth.bid_size_at_best,
+                        ask_size_at_best: depth.ask_size_at_best,
+                        bid_levels: depth.bid_levels,
+                        ask_levels: depth.ask_levels,
                     },
                     volume_24h: None,
                     price_change_24h: None,
@@ -272,6 +210,7 @@ pub async fn get_market_goods_orderbook(
     }
 }
 
+
 #[derive(Deserialize)]
 pub struct HistoryQuery {
     pub limit: Option<usize>,
@@ -285,79 +224,32 @@ pub async fn get_market_goods_history(
     let engine_guard = state.sim_engine.read().await;
 
     if let Some(engine) = engine_guard.as_ref() {
-        let good_id: GoodId = good_id_str.parse().map_err(|_| ()).unwrap_or_else(|_| GoodId::from_slug(&good_id_str));
-        let goods = &engine.state.financial_system.goods;
-        let name = goods.get_good_name(&good_id).unwrap_or("Unknown").to_string();
-
-        let tape = engine
-            .state
-            .financial_system
-            .exchange
-            .trade_tape
-            .get(&sim_core::markets::MarketId::Goods(good_id))
-            .cloned()
-            .unwrap_or_default();
-
+        let good_id: GoodId = good_id_str.parse().unwrap_or_else(|_| GoodId::from_slug(&good_id_str));
+        let exchange = &engine.state.financial_system.exchange;
+        let market_id = MarketId::Goods(good_id);
+        
         let limit = q.limit.unwrap_or(200);
-        let trades = tape
-            .iter()
-            .rev()
-            .take(limit)
-            .rev()
+        let trades = exchange.trade_tape.get(&market_id).cloned().unwrap_or_default()
+            .iter().rev().take(limit).rev()
             .map(|t| crate::dto::TradeDto {
                 ts: t.at,
                 price: t.trade.price,
                 quantity: t.trade.quantity,
                 buyer_id: t.trade.buyer.to_string(),
                 seller_id: t.trade.seller.to_string(),
-            })
-            .collect::<Vec<_>>();
+            }).collect();
 
         let bucket = q.bucket_secs.unwrap_or(0);
-        let candles = if bucket > 0 {
-            use std::collections::BTreeMap;
-            let mut buckets: BTreeMap<i64, Vec<&sim_core::markets::Trade>> = BTreeMap::new();
-            for t in &tape {
-                let k = (t.at / bucket) * bucket;
-                buckets.entry(k).or_default().push(&t.trade);
-            }
-            buckets
-                .into_iter()
-                .rev()
-                .take(limit)
-                .rev()
-                .map(|(bucket_ts, group)| {
-                    let open = group.first().map(|x| x.price).unwrap_or(0.0);
-                    let close = group.last().map(|x| x.price).unwrap_or(open);
-                    let high = group.iter().map(|x| x.price).fold(f64::MIN, f64::max);
-                    let low = group.iter().map(|x| x.price).fold(f64::MAX, f64::min);
-                    let volume = group.iter().map(|x| x.quantity).sum::<f64>();
-                    let vwap = if volume > 0.0 {
-                        Some((group.iter().map(|x| x.price * x.quantity).sum::<f64>()) / volume)
-                    } else {
-                        None
-                    };
-                    let trades_count = Some(group.len() as u32);
-                    crate::dto::CandleDto { 
-                        ts: bucket_ts, 
-                        open, 
-                        high, 
-                        low, 
-                        close, 
-                        volume,
-                        vwap,
-                        trades_count,
-                    }
-                })
-                .collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
+        let core_candles = exchange.calculate_candles(&market_id, bucket, limit);
+        let candles = core_candles.into_iter().map(|c| CandleDto {
+            ts: c.ts, open: c.open, high: c.high, low: c.low, close: c.close,
+            volume: c.volume, vwap: c.vwap, trades_count: Some(c.trades_count),
+        }).collect();
 
         let dto = crate::dto::MarketHistoryDto {
             market_id: format!("Goods({good_id})"),
             good_id: good_id.to_string(),
-            name,
+            name: exchange.goods_markets.get(&good_id).unwrap().name.to_string(),
             trades,
             candles,
         };
@@ -376,51 +268,32 @@ pub async fn get_market_financial_overview(
 
     if let Some(engine) = engine_guard.as_ref() {
         let exchange = &engine.state.financial_system.exchange;
+        let fs = &engine.state.financial_system;
 
         let markets = exchange.financial_markets.iter().map(|(instr_id, market)| {
-            let best_bid = market.order_book.best_bid().map(|b| b.price);
-            let best_ask = market.order_book.best_ask().map(|a| a.price);
-            let spread = match (best_bid, best_ask) { (Some(b), Some(a)) => Some(a - b), _ => None };
-            let mid    = match (best_bid, best_ask) { (Some(b), Some(a)) => Some((a + b) * 0.5), _ => None };
-            let last   = market.current_price();
+            let summary = market.summary();
+            let depth = summary.depth;
 
-            let bid_sz = if let Some(px) = best_bid {
-                market.order_book.bids.iter().filter(|b| b.price == px).map(|b| b.quantity).sum()
-            } else { 0.0 };
-            let ask_sz = if let Some(px) = best_ask {
-                market.order_book.asks.iter().filter(|a| a.price == px).map(|a| a.quantity).sum()
-            } else { 0.0 };
-
-            let name = market.name.clone();
-
-            let yield_to_maturity = match instr_id {
-                FinancialMarketId::Treasury { .. } => {
-                    market.calculate_ytm(&engine.state.financial_system)
-                        .or_else(|| Some(market.default_yield()))
-                        .map(|y| y * 100.0)
-                }
-                _ => None,
-            };
-
+            let yield_to_maturity = if let FinancialMarketId::Treasury { .. } = instr_id {
+                market.calculate_ytm(fs).or(Some(market.default_yield())).map(|y| y * 100.0)
+            } else { None };
+            
             crate::dto::FinancialMarketSummaryDto {
                 market_id: format!("Financial({})", instr_id),
                 instrument_id: instr_id.to_string(),
-                name,
-                best_bid,
-                best_ask,
-                spread,
-                mid,
-                last: Some(last),
+                name: market.name.clone(),
+                best_bid: depth.best_bid,
+                best_ask: depth.best_ask,
+                spread: summary.spread,
+                mid: summary.mid,
+                last: summary.last_price,
                 depth: crate::dto::DepthDto {
-                    bid_size_at_best: bid_sz,
-                    ask_size_at_best: ask_sz,
-                    bid_levels: market.order_book.bids.len(),
-                    ask_levels: market.order_book.asks.len(),
+                    bid_size_at_best: depth.bid_size_at_best,
+                    ask_size_at_best: depth.ask_size_at_best,
+                    bid_levels: depth.bid_levels,
+                    ask_levels: depth.ask_levels,
                 },
-                volume_24h: None,
-                price_change_24h: None,
-                yield_to_maturity,
-                duration: None,
+                volume_24h: None, price_change_24h: None, yield_to_maturity, duration: None,
             }
         }).collect::<Vec<_>>();
 
@@ -478,6 +351,7 @@ pub async fn get_market_financial_orderbook(
     }
 }
 
+
 #[derive(Deserialize)]
 pub struct FinHistoryQuery {
     pub limit: Option<usize>,
@@ -502,63 +376,30 @@ pub async fn get_market_financial_history(
         };
 
         let exchange = &engine.state.financial_system.exchange;
-        let tape = exchange.trade_tape
-            .get(&sim_core::markets::MarketId::Financial(fm_id.clone()))
-            .cloned()
-            .unwrap_or_default();
+        let market_id = MarketId::Financial(fm_id.clone());
 
         let limit = q.limit.unwrap_or(200);
-        let trades = tape.iter().rev().take(limit).rev().map(|t| crate::dto::TradeDto {
-            ts: t.at,
-            price: t.trade.price,
-            quantity: t.trade.quantity,
-            buyer_id: t.trade.buyer.to_string(),
-            seller_id: t.trade.seller.to_string(),
-        }).collect::<Vec<_>>();
-
+        let trades = exchange.trade_tape.get(&market_id).cloned().unwrap_or_default()
+            .iter().rev().take(limit).rev()
+            .map(|t| crate::dto::TradeDto {
+                ts: t.at, price: t.trade.price, quantity: t.trade.quantity,
+                buyer_id: t.trade.buyer.to_string(), seller_id: t.trade.seller.to_string(),
+            }).collect();
+        
         let bucket = q.bucket_secs.unwrap_or(0);
-        let candles = if bucket > 0 {
-            use std::collections::BTreeMap;
-            let mut buckets: BTreeMap<i64, Vec<&sim_core::markets::Trade>> = BTreeMap::new();
-            for t in &tape {
-                let k = (t.at / bucket) * bucket;
-                buckets.entry(k).or_default().push(&t.trade);
-            }
-            buckets.into_iter().rev().take(limit).rev().map(|(ts, group)| {
-                let open = group.first().map(|x| x.price).unwrap_or(0.0);
-                let close = group.last().map(|x| x.price).unwrap_or(open);
-                let high = group.iter().map(|x| x.price).fold(f64::MIN, f64::max);
-                let low  = group.iter().map(|x| x.price).fold(f64::MAX, f64::min);
-                let volume = group.iter().map(|x| x.quantity).sum::<f64>();
-                let vwap = if volume > 0.0 {
-                    Some((group.iter().map(|x| x.price * x.quantity).sum::<f64>()) / volume)
-                } else {
-                    None
-                };
-                let trades_count = Some(group.len() as u32);
-                crate::dto::CandleDto { 
-                    ts, 
-                    open, 
-                    high, 
-                    low, 
-                    close, 
-                    volume,
-                    vwap,
-                    trades_count,
-                }
-            }).collect::<Vec<_>>()
-        } else { Vec::new() };
+        let core_candles = exchange.calculate_candles(&market_id, bucket, limit);
+        let candles = core_candles.into_iter().map(|c| CandleDto {
+            ts: c.ts, open: c.open, high: c.high, low: c.low, close: c.close,
+            volume: c.volume, vwap: c.vwap, trades_count: Some(c.trades_count),
+        }).collect();
         
         let name = exchange.financial_markets.get(&fm_id)
-            .and_then(|m| Some(m.name.clone()))
+            .map(|m| m.name.clone())
             .unwrap_or_else(|| fm_id.to_string());
 
         let dto = crate::dto::MarketHistoryDto {
             market_id: format!("Financial({fm_id})"),
-            good_id: fm_id.to_string(),
-            name,
-            trades,
-            candles,
+            good_id: fm_id.to_string(), name, trades, candles,
         };
 
         (StatusCode::OK, headers, Json(serde_json::to_value(dto).unwrap()))

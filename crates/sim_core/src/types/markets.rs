@@ -86,6 +86,82 @@ pub enum MarketId {
     Labour(LabourMarketId),
 }
 
+impl std::hash::Hash for MarketId {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            MarketId::Goods(id) => {
+                0.hash(state);
+                id.hash(state);
+            }
+            MarketId::Financial(id) => {
+                1.hash(state);
+                id.hash(state);
+            }
+            MarketId::Labour(id) => {
+                2.hash(state);
+                id.hash(state);
+            }
+        }
+    }
+}
+
+impl std::cmp::PartialEq for MarketId {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (MarketId::Goods(id1), MarketId::Goods(id2)) => id1 == id2,
+            (MarketId::Financial(id1), MarketId::Financial(id2)) => id1 == id2,
+            (MarketId::Labour(id1), MarketId::Labour(id2)) => id1 == id2,
+            _ => false,
+        }
+    }
+}
+
+impl std::cmp::Eq for MarketId {}
+
+impl std::fmt::Display for MarketId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MarketId::Goods(id) => write!(f, "Goods({})", id),
+            MarketId::Financial(id) => write!(f, "Financial({})", id),
+            MarketId::Labour(id) => write!(f, "Labour({})", id),
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum ParseMarketIdError {
+    #[error("Invalid MarketId format: {0}")]
+    InvalidFormat(String),
+    #[error("Failed to parse GoodId: {0}")]
+    ParseGoodId(String),
+    #[error("Failed to parse FinancialMarketId: {0}")]
+    ParseFinancialMarketId(#[from] ParseFinancialMarketIdError),
+    #[error("Failed to parse LabourMarketId: {0}")]
+    ParseLabourMarketId(String),
+}
+
+
+impl std::str::FromStr for MarketId {
+    type Err = ParseMarketIdError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Some(content) = s.strip_prefix("Goods(").and_then(|s| s.strip_suffix(')')) {
+            let id = content.parse().map_err(|_| ParseMarketIdError::ParseGoodId(content.to_string()))?;
+            return Ok(MarketId::Goods(id));
+        }
+        if let Some(content) = s.strip_prefix("Financial(").and_then(|s| s.strip_suffix(')')) {
+            let id = content.parse()?;
+            return Ok(MarketId::Financial(id));
+        }
+        if let Some(content) = s.strip_prefix("Labour(").and_then(|s| s.strip_suffix(')')) {
+            let id = content.parse().map_err(|e| ParseMarketIdError::ParseLabourMarketId(e))?;
+            return Ok(MarketId::Labour(id));
+        }
+        Err(ParseMarketIdError::InvalidFormat(s.to_string()))
+    }
+}
+
+
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct MarketTick {
     pub date: chrono::NaiveDate,
@@ -625,7 +701,6 @@ impl GoodsMarket {
         self.order_book.representative_price()
     }
 }
-
 impl MarketSnapshotProvider for GoodsMarket {
     fn snapshot(&self) -> MarketSnapshot {
         MarketSnapshot {

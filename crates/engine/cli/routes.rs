@@ -1,4 +1,4 @@
-use crate::{AppState, SimulationEngine, dto::*, market_routes::*};
+use crate::{AppState, dto::*, market_routes::*};
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
@@ -9,8 +9,10 @@ use rand::rngs::ThreadRng;
 use serde::Serialize;
 use serde_json::json;
 use sim_core::*;
+use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
+use sim_core::traits::{EconomicAnalytics, FinancialStatistics};
 
 #[derive(Serialize)]
 pub struct Health {
@@ -56,60 +58,12 @@ pub async fn init_sim(State(state): State<Arc<AppState>>) -> (StatusCode, Header
     (StatusCode::OK, headers, Json(InitResponse { epoch: state.epoch.to_string() }))
 }
 
-fn calculate_overnight_rates(engine: &SimulationEngine) -> OvernightRatesDto {
-    let fed_funds_rate = engine
-        .state
-        .financial_system
-        .exchange
-        .financial_markets
-        .get(&FinancialMarketId::FederalFundsOvernight)
-        .and_then(|market| market.last_or_mid())
-        .map(|price| {
-            let daily_rate = FinancialMarketId::FederalFundsOvernight.price_to_daily_rate(price);
-            daily_rate * 360.0 * 100.0
-        })
-        .unwrap_or(engine.state.financial_system.central_bank.policy_rate_bps / 100.0);
-
-    let sofr = engine
-        .state
-        .financial_system
-        .exchange
-        .financial_markets
-        .get(&FinancialMarketId::TreasuryRepoOvernight)
-        .and_then(|market| market.last_or_mid())
-        .map(|price| {
-            let daily_rate = FinancialMarketId::TreasuryRepoOvernight.price_to_daily_rate(price);
-            daily_rate * 360.0 * 100.0
-        })
-        .unwrap_or(fed_funds_rate - 0.10);
-
-    OvernightRatesDto {
-        effr: engine
-            .state
-            .financial_system
-            .exchange
-            .financial_markets
-            .get(&FinancialMarketId::FederalFundsOvernight)
-            .and_then(|market| market.last_or_mid())
-            .map(|price| {
-                let daily_rate = FinancialMarketId::FederalFundsOvernight.price_to_daily_rate(price);
-                daily_rate * 360.0 * 100.0
-            }),
-        sofr: Some(sofr),
-        iorb: Some((engine.state.financial_system.central_bank.policy_rate_bps + 15.0) / 100.0),
-        discount_rate: Some((engine.state.financial_system.central_bank.policy_rate_bps + 25.0) / 100.0),
-        overnight_RRP: Some((engine.state.financial_system.central_bank.policy_rate_bps).max(0.0) / 100.0),
-    }
-}
-
 pub async fn get_dashboard(State(state): State<Arc<AppState>>) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
     let headers = with_epoch_header(HeaderMap::new(), state.epoch);
     let guard = state.sim_engine.read().await;
 
     if let Some(engine) = guard.as_ref() {
-        let stats = engine.state.macro_stats();
-
-        let banks = engine.state.agents.banks.values().cloned().collect::<Vec<_>>();
+        let fs = &engine.state.financial_system;
 
         let agent_counts = AgentCounts {
             banks: engine.state.agents.banks.len(),
@@ -120,28 +74,54 @@ pub async fn get_dashboard(State(state): State<Arc<AppState>>) -> (StatusCode, H
                 + engine.state.agents.consumers.len(),
         };
 
+        let core_stats_data = engine.state.calculate_core_stats();
+        let stats = engine.state.macro_stats();
+
+        let bank_ids: HashSet<AgentId> = engine.state.agents.banks.keys().cloned().collect();
         let monetary_stats = MonetaryStats {
-            velocity_m1: Some(50_000_000_000.0 / stats.m1),
-            velocity_m2: Some(50_000_000_000.0 / stats.m2),
+            velocity_m1: if stats.m1 > 0.0 { Some(core_stats_data.gdp / stats.m1) } else { None },
+            velocity_m2: if stats.m2 > 0.0 { Some(core_stats_data.gdp / stats.m2) } else { None },
             m0: stats.m0,
             monetary_base: stats.m0,
             m1: stats.m1,
             m2: stats.m2,
-            bank_reserves: engine.state.financial_system.all_bank_reserves(&banks.iter().map(|b| b.id).collect()),
-            currency_in_circulation: engine
-                .state
-                .financial_system
-                .currency_in_circulation(engine.state.financial_system.central_bank.id),
+            bank_reserves: fs.all_bank_reserves(&bank_ids),
+            currency_in_circulation: fs.currency_in_circulation(fs.central_bank.id),
         };
-
-        let core_stats = calculate_enhanced_core_stats(engine, &stats);
+        
+        let core_stats_dto = CoreStats {
+            gdp: core_stats_data.gdp,
+            cpi: core_stats_data.cpi,
+            ppi: core_stats_data.ppi,
+            unemployment_rate: core_stats_data.unemployment_rate,
+            labor_force_participation: core_stats_data.labor_force_participation,
+            job_openings: core_stats_data.job_openings,
+            capacity_utilization: core_stats_data.capacity_utilization,
+            industrial_production: core_stats_data.industrial_production,
+            housing_starts: core_stats_data.housing_starts,
+            retail_sales: core_stats_data.consumption * 0.6,
+            consumer_spending: core_stats_data.consumption,
+            trade_balance: core_stats_data.trade_balance,
+            credit_growth: core_stats_data.credit_growth,
+            household_debt: core_stats_data.household_debt,
+            corporate_debt: core_stats_data.corporate_debt,
+            government_debt: core_stats_data.government_debt,
+            bank_liabilities: core_stats_data.bank_liabilities,
+        };
 
         let central_bank_policy = PolicyRates {
-            policy_rate: engine.state.financial_system.central_bank.policy_rate_bps / 100.0,
-            reserve_requirement: engine.state.financial_system.central_bank.reserve_requirement,
+            policy_rate: fs.central_bank.policy_rate_bps / 100.0,
+            reserve_requirement: fs.central_bank.reserve_requirement,
         };
 
-        let overnight_rates = calculate_overnight_rates(engine);
+        let overnight_rates_data = fs.calculate_overnight_rates();
+        let overnight_rates_dto = OvernightRatesDto {
+            effr: overnight_rates_data.effr,
+            sofr: overnight_rates_data.sofr,
+            iorb: Some(overnight_rates_data.iorb),
+            discount_rate: Some(overnight_rates_data.discount_rate),
+            overnight_RRP: Some(overnight_rates_data.overnight_rrp),
+        };
 
         let dashboard = DashboardDto {
             current_date: engine.state.current_date.format("%Y-%m-%d").to_string(),
@@ -149,10 +129,10 @@ pub async fn get_dashboard(State(state): State<Arc<AppState>>) -> (StatusCode, H
             total_iterations: engine.state.config.iterations as u64,
             agent_counts,
             economic_stats: EconomicStats {
-                core_stats,
+                core_stats: core_stats_dto,
                 monetary_policy: central_bank_policy,
                 monetary_stats,
-                overnight_rates,
+                overnight_rates: overnight_rates_dto,
             },
         };
 
@@ -161,117 +141,6 @@ pub async fn get_dashboard(State(state): State<Arc<AppState>>) -> (StatusCode, H
         let err = ApiError { code: "NOT_INITIALIZED", message: "Simulation is not initialized." };
         (StatusCode::CONFLICT, headers, Json(json!({ "error": err })))
     }
-}
-
-fn calculate_enhanced_core_stats(engine: &SimulationEngine, _base_stats: &MacroStats) -> CoreStats {
-    let total_firm_production = engine.state.agents.firms.values().map(|_firm| 1000.0).sum::<f64>();
-
-    let total_consumer_spending = engine.state.agents.consumers.values().map(|_consumer| 0.0).sum::<f64>();
-
-    let employed_agents =
-        engine.state.agents.consumers.values().filter(|consumer| consumer.employed_by.is_some()).count();
-    let bank_liabilities = engine
-        .state
-        .agents
-        .banks
-        .values()
-        .map(|bank| {
-            if let Some(bs) = engine.state.financial_system.get_bs_by_id(&bank.id) {
-                bs.total_liabilities()
-            } else {
-                0.0
-            }
-        })
-        .sum::<f64>();
-    let labor_force = engine.state.agents.consumers.len();
-    let unemployment_rate = if labor_force > 0 { 1.0 - (employed_agents as f64 / labor_force as f64) } else { 0.0 };
-
-    let trade_balance = calculate_trade_balance(engine);
-
-    let capacity_utilization = calculate_capacity_utilization(engine);
-
-    CoreStats {
-        gdp: total_firm_production + total_consumer_spending,
-        cpi: calculate_cpi(engine),
-        ppi: calculate_ppi(engine),
-        unemployment_rate: unemployment_rate * 100.0,
-        labor_force_participation: 62.5,
-        job_openings: calculate_job_openings(engine),
-        capacity_utilization,
-        industrial_production: total_firm_production,
-        housing_starts: 150_000.0,
-        retail_sales: total_consumer_spending * 0.6,
-        consumer_spending: total_consumer_spending,
-        trade_balance,
-        credit_growth: calculate_credit_growth(engine),
-        household_debt: calculate_household_debt(engine),
-        corporate_debt: calculate_corporate_debt(engine),
-        government_debt: calculate_government_debt(engine),
-        bank_liabilities,
-    }
-}
-
-// TODO
-
-fn calculate_trade_balance(_engine: &SimulationEngine) -> f64 {
-    -50_000_000_000.0
-}
-
-fn calculate_capacity_utilization(_engine: &SimulationEngine) -> f64 {
-    87.2
-}
-
-fn calculate_cpi(_engine: &SimulationEngine) -> f64 {
-    245.0
-}
-
-fn calculate_ppi(_engine: &SimulationEngine) -> f64 {
-    250.0
-}
-
-fn calculate_job_openings(engine: &SimulationEngine) -> f64 {
-    engine.state.agents.firms.len() as f64
-}
-
-fn calculate_credit_growth(_engine: &SimulationEngine) -> f64 {
-    0.05
-}
-
-fn calculate_household_debt(engine: &SimulationEngine) -> f64 {
-    engine
-        .state
-        .agents
-        .consumers
-        .values()
-        .map(|consumer| {
-            if let Some(bs) = engine.state.financial_system.get_bs_by_id(&consumer.id) {
-                bs.total_liabilities()
-            } else {
-                0.0
-            }
-        })
-        .sum()
-}
-
-fn calculate_corporate_debt(engine: &SimulationEngine) -> f64 {
-    engine
-        .state
-        .agents
-        .firms
-        .values()
-        .map(|firm| {
-            if let Some(bs) = engine.state.financial_system.get_bs_by_id(&firm.id) {
-                bs.total_liabilities()
-            } else {
-                0.0
-            }
-        })
-        .sum()
-}
-
-fn calculate_government_debt(engine: &SimulationEngine) -> f64 {
-    let gid = engine.state.financial_system.government.get_id();
-    if let Some(bs) = engine.state.financial_system.get_bs_by_id(&gid) { bs.total_liabilities() } else { 0.0 }
 }
 
 pub async fn get_agents_summary(
@@ -445,6 +314,7 @@ pub async fn query_stats(State(state): State<Arc<AppState>>) -> (StatusCode, Hea
         (StatusCode::CONFLICT, headers, Json(serde_json::json!({ "error": err })))
     }
 }
+
 
 pub fn http_router(state: Arc<AppState>) -> Router {
     Router::new()
