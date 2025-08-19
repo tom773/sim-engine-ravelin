@@ -1,9 +1,9 @@
+use crate::*;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
-use crate::*;
 
 #[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -93,7 +93,10 @@ impl BalanceSheetQuery for FinancialSystem {
         self.balance_sheets.get(agent_id).map(|bs| {
             bs.assets
                 .values()
-                .filter(|inst| inst.details.as_any().is::<CentralBankReservesDetails>())
+                .filter(|inst| {
+                    inst.details.as_any().is::<CentralBankReservesDetails>()
+                        || inst.details.as_any().is::<CashDetails>()
+                })
                 .map(|inst| inst.principal)
                 .sum::<f64>()
         })
@@ -307,14 +310,45 @@ impl InstrumentManager for FinancialSystem {
         Ok(())
     }
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CoreEconomicStats {
+    pub gdp: f64,
+    pub consumption: f64,
+    pub cpi: f64,
+    pub ppi: f64,
+    pub unemployment_rate: f64,
+    pub labor_force_participation: f64,
+    pub job_openings: f64,
+    pub capacity_utilization: f64,
+    pub industrial_production: f64,
+    pub housing_starts: f64,
+    pub trade_balance: f64,
+    pub credit_growth: f64,
+    pub household_debt: f64,
+    pub corporate_debt: f64,
+    pub government_debt: f64,
+    pub bank_liabilities: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OvernightRates {
+    pub effr: Option<f64>,
+    pub sofr: Option<f64>,
+    pub iorb: f64,
+    pub discount_rate: f64,
+    pub overnight_rrp: f64,
+}
+
 impl FinancialStatistics for FinancialSystem {
     fn m0(&self) -> f64 {
-        let r = self.balance_sheets
+        let r = self
+            .balance_sheets
             .values()
             .map(|bs| {
                 bs.assets
                     .values()
-                    .filter(|inst| { inst.details.as_any().is::<CentralBankReservesDetails>()})
+                    .filter(|inst| inst.details.as_any().is::<CentralBankReservesDetails>())
                     .map(|inst| inst.principal)
                     .sum::<f64>()
             })
@@ -355,6 +389,41 @@ impl FinancialStatistics for FinancialSystem {
 
         m1 + savings_deposits
     }
+    fn all_bank_assets(&self, bank_ids: &HashSet<AgentId>) -> f64 {
+        self.balance_sheets.values().filter(|bs| bank_ids.contains(&bs.agent_id)).map(|bs| bs.total_assets()).sum()
+    }
+    fn all_bank_reserves(&self, bank_ids: &HashSet<AgentId>) -> f64 {
+        self.balance_sheets
+            .values()
+            .filter(|bs| bank_ids.contains(&bs.agent_id))
+            .map(|bs| {
+                bs.assets
+                    .values()
+                    .filter(|inst| inst.details.as_any().is::<CentralBankReservesDetails>())
+                    .map(|inst| inst.principal)
+                    .sum::<f64>()
+            })
+            .sum()
+    }
+    fn all_bank_deposits(&self, bank_ids: &HashSet<AgentId>) -> f64 {
+        self.balance_sheets
+            .values()
+            .filter(|bs| bank_ids.contains(&bs.agent_id))
+            .map(|bs| {
+                bs.assets
+                    .values()
+                    .filter(|inst| {
+                        inst.details.as_any().is::<DemandDepositDetails>()
+                            || inst.details.as_any().is::<SavingsDepositDetails>()
+                    })
+                    .map(|inst| inst.principal)
+                    .sum::<f64>()
+            })
+            .sum()
+    }
+    fn currency_in_circulation(&self, cb_id: AgentId) -> f64 {
+        self.balance_sheets.values().filter(|bs| bs.agent_id != cb_id).map(|bs| bs.total_liabilities()).sum::<f64>()
+    }
 }
 
 impl FinancialSystem {
@@ -374,5 +443,30 @@ impl FinancialSystem {
     }
     pub fn get_good_by_id(&self, good_id: &GoodId) -> Option<&Good> {
         self.goods.get_good_by_id(good_id)
+    }
+    pub fn calculate_overnight_rates(&self) -> OvernightRates {
+        let policy_rate_bps = self.central_bank.policy_rate_bps;
+
+        let calculate_rate = |market_id: FinancialMarketId| {
+            self.exchange.financial_markets.get(&market_id).and_then(|market| market.last_or_mid()).map(|price| {
+                let daily_rate = market_id.price_to_daily_rate(price);
+                daily_rate * 360.0 * 100.0
+            })
+        };
+
+        let effr = calculate_rate(FinancialMarketId::FederalFundsOvernight);
+        let sofr = calculate_rate(FinancialMarketId::TreasuryRepoOvernight);
+
+        let iorb = (policy_rate_bps + 15.0) / 100.0;
+        let discount_rate = (policy_rate_bps + 25.0) / 100.0;
+        let overnight_rrp = (policy_rate_bps).max(0.0) / 100.0;
+
+        OvernightRates {
+            effr,
+            sofr: sofr,
+            iorb,
+            discount_rate,
+            overnight_rrp,
+        }
     }
 }

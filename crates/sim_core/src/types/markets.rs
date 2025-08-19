@@ -6,10 +6,7 @@ use std::collections::VecDeque;
 use std::{collections::HashMap, fmt, str::FromStr};
 use thiserror::Error;
 use uuid::Uuid;
-
-pub trait Tradable {
-    fn check_holdings(&self, agent_id: &AgentId, quantity: f64, fs: &FinancialSystem) -> Result<(), String>;
-}
+use std::collections::BTreeMap;
 
 impl Tradable for GoodId {
     fn check_holdings(&self, agent_id: &AgentId, quantity: f64, fs: &FinancialSystem) -> Result<(), String> {
@@ -236,12 +233,6 @@ impl FromStr for FinancialMarketId {
     }
 }
 
-pub trait RatesMarket {
-    fn price_to_daily_rate(&self, price: f64) -> f64;
-    fn daily_rate_to_annual_bps(&self, daily_rate: f64) -> BasisPoints;
-    fn annual_bps_to_daily_rate(&self, annual_bps: BasisPoints) -> f64;
-}
-
 impl RatesMarket for FinancialMarketId {
     fn price_to_daily_rate(&self, price: f64) -> f64 {
         match self {
@@ -395,6 +386,25 @@ impl OrderBook {
 
         trades
     }
+    pub fn depth_summary(&self) -> MarketDepthSummary {
+        let best_bid = self.best_bid().map(|b| b.price);
+        let best_ask = self.best_ask().map(|a| a.price);
+
+        let bid_size_at_best =
+            best_bid.map(|px| self.bids.iter().filter(|b| b.price == px).map(|b| b.quantity).sum()).unwrap_or(0.0);
+
+        let ask_size_at_best =
+            best_ask.map(|px| self.asks.iter().filter(|a| a.price == px).map(|a| a.quantity).sum()).unwrap_or(0.0);
+
+        MarketDepthSummary {
+            best_bid,
+            best_ask,
+            bid_size_at_best,
+            ask_size_at_best,
+            bid_levels: self.bids.len(),
+            ask_levels: self.asks.len(),
+        }
+    }
 }
 
 impl fmt::Display for Tenor {
@@ -433,7 +443,7 @@ pub struct MarketSnapshot {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TimedTrade {
-    pub at: i64, // epoch seconds or tick number
+    pub at: i64,
     pub trade: Trade,
 }
 
@@ -462,9 +472,9 @@ impl Exchange {
             FinancialMarketId::TreasuryRepoOvernight => "Treasury Repo Overnight".to_string(),
             FinancialMarketId::Treasury { tenor } => format!("Treasury {}", tenor),
             FinancialMarketId::CorporateBond { rating } => format!("Corporate Bond {:?}", rating),
-            FinancialMarketId::DiscountWindow => "Federal Reserve Discount Window".to_string(),
+            FinancialMarketId::DiscountWindow => "Discount Window".to_string(),
             FinancialMarketId::StandingRepoFacility => "Standing Repo Facility".to_string(),
-            FinancialMarketId::OvernightReverseRepo => "Overnight Reverse Repo".to_string(),
+            FinancialMarketId::OvernightReverseRepo => "Reverse Repo Overnight".to_string(),
         };
         self.financial_markets.entry(market_id.clone()).or_insert_with(|| FinancialMarket::new(market_id, name));
     }
@@ -504,7 +514,7 @@ impl Exchange {
             e.push_back(TimedTrade { at: now_ts, trade: tr.clone() });
             if e.len() > 10_000 {
                 e.pop_front();
-            } 
+            }
         }
 
         (all_trades, snapshots)
@@ -533,6 +543,65 @@ impl Exchange {
             }
         }
         None
+    }
+    pub fn get_treasury_market_summaries(&self, fs: &FinancialSystem) -> Vec<TreasuryMarketSummary> {
+        let mut summaries = Vec::new();
+
+        for (market_key, market) in &self.financial_markets {
+            if let FinancialMarketId::Treasury { tenor } = market_key {
+                let price = market.current_price();
+                let ytm = market.calculate_ytm(fs).unwrap_or_else(|| market.default_yield());
+                let spread_bps = market.spread_bps();
+
+                summaries.push(TreasuryMarketSummary {
+                    market_id: market_key.clone(),
+                    tenor: *tenor,
+                    price,
+                    yield_to_maturity: ytm,
+                    spread_bps,
+                });
+            }
+        }
+        summaries.sort_by_key(|s| s.tenor.to_days());
+        summaries
+    }
+
+    pub fn calculate_candles(&self, market_id: &MarketId, bucket_secs: i64, limit: usize) -> Vec<Candle> {
+        if bucket_secs <= 0 {
+            return Vec::new();
+        }
+
+        let tape = match self.trade_tape.get(market_id) {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+
+        let mut buckets: BTreeMap<i64, Vec<&Trade>> = BTreeMap::new();
+        for t in tape {
+            let k = (t.at / bucket_secs) * bucket_secs;
+            buckets.entry(k).or_default().push(&t.trade);
+        }
+
+        buckets
+            .into_iter()
+            .rev()
+            .take(limit)
+            .rev()
+            .map(|(ts, group)| {
+                let open = group.first().map(|x| x.price).unwrap_or(0.0);
+                let close = group.last().map(|x| x.price).unwrap_or(open);
+                let high = group.iter().map(|x| x.price).fold(f64::MIN, f64::max);
+                let low = group.iter().map(|x| x.price).fold(f64::MAX, f64::min);
+                let volume = group.iter().map(|x| x.quantity).sum::<f64>();
+                let vwap = if volume > 0.0 {
+                    Some(group.iter().map(|x| x.price * x.quantity).sum::<f64>() / volume)
+                } else {
+                    None
+                };
+
+                Candle { ts, open, high, low, close, volume, vwap, trades_count: group.len() as u32 }
+            })
+            .collect()
     }
 }
 
@@ -683,4 +752,66 @@ pub struct LabourMarket {
     pub name: String,
     pub job_offers: Vec<JobOffer>,
     pub job_applications: Vec<JobApplication>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct MarketDepthSummary {
+    pub best_bid: Option<f64>,
+    pub best_ask: Option<f64>,
+    pub bid_size_at_best: f64,
+    pub ask_size_at_best: f64,
+    pub bid_levels: usize,
+    pub ask_levels: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MarketSummary {
+    pub depth: MarketDepthSummary,
+    pub mid: Option<f64>,
+    pub spread: Option<f64>,
+    pub last_price: Option<f64>,
+}
+
+
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TreasuryMarketSummary {
+    pub market_id: FinancialMarketId,
+    pub tenor: Tenor,
+    pub price: f64,
+    pub yield_to_maturity: f64,
+    pub spread_bps: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Candle {
+    pub ts: i64,
+    pub open: f64,
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+    pub volume: f64,
+    pub vwap: Option<f64>,
+    pub trades_count: u32,
+}
+
+impl MarketSummaryProvider for GoodsMarket {
+    fn summary(&self) -> MarketSummary {
+        MarketSummary {
+            depth: self.order_book.depth_summary(),
+            mid: self.order_book.mid_price(),
+            spread: self.order_book.spread(),
+            last_price: self.current_price(),
+        }
+    }
+}
+impl MarketSummaryProvider for FinancialMarket {
+    fn summary(&self) -> MarketSummary {
+        MarketSummary {
+            depth: self.order_book.depth_summary(),
+            mid: self.order_book.mid_price(),
+            spread: self.order_book.spread(),
+            last_price: self.order_book.representative_price(),
+        }
+    }
 }

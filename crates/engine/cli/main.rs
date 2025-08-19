@@ -22,7 +22,6 @@ pub struct AppState {
     sim_engine: RwLock<Option<SimulationEngine>>,
     scenario: Scenario,
 }
-
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> anyhow::Result<()> {
     let scenario = Scenario::from_toml_str(SCENARIO_TOML).expect("Failed to parse scenario TOML");

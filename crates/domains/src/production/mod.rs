@@ -10,7 +10,7 @@
 //!
 //! - **`domain.rs`**: Implements the `ProductionDomain` struct. This service validates
 //!   and executes `ProductionAction`s, such as `Produce` and `Hire`. For a `Produce`
-//!   action, it validates that the firm has the necessary input goods and labor, as
+//!   action, it validates that the firm has the necessary input goods and labour, as
 //!   defined by its `ProductionRecipe`. If valid, it generates `StateEffect`s to consume
 //!   the inputs and add the finished product to the firm's inventory.
 //!
@@ -24,7 +24,7 @@
 //! - **`BasicFirmDecisionModel`**: The default logic controller for firm agents.
 //! - **`ProductionAction`**: The set of actions available to firms (defined in `sim_actions`).
 //! - **`ProductionRecipe`**: A data structure from `sim_types` that defines the inputs,
-//!   outputs, and labor required for a production process.
+//!   outputs, and labour required for a production process.
 pub mod behavior;
 pub mod domain;
 pub use domain::*;

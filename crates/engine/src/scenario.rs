@@ -105,6 +105,8 @@ impl Scenario {
         let goods_ref = &state.financial_system.goods;
         state.financial_system.exchange.register_goods_market(good_id!("petrol"), goods_ref);
         state.financial_system.exchange.register_goods_market(good_id!("oil"), goods_ref);
+        state.financial_system.exchange.register_goods_market(good_id!("bread"), goods_ref);
+        state.financial_system.exchange.register_goods_market(good_id!("wheat"), goods_ref);
         
         for tenor_str in &self.config.treasury_tenors_to_register {
             let tenor = Tenor::from_str(tenor_str).unwrap();

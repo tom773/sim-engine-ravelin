@@ -13,6 +13,11 @@ pub struct MonetaryStats {
     pub m0: f64,
     pub m1: f64,
     pub m2: f64,
+    pub velocity_m1: Option<f64>,
+    pub velocity_m2: Option<f64>,
+    pub monetary_base: f64,
+    pub currency_in_circulation: f64,
+    pub bank_reserves: f64,
 }
 
 #[derive(Serialize, Clone)]
@@ -22,14 +27,175 @@ pub struct PolicyRates {
 }
 
 #[derive(Serialize, Clone)]
+pub struct InflationMetrics {
+    pub cpi: f64,
+    pub cpi_yoy: Option<f64>,
+    pub cpi_mom: Option<f64>,
+    pub core_cpi: Option<f64>,
+    pub ppi: f64,
+    pub ppi_yoy: Option<f64>,
+    pub pce: Option<f64>,
+    pub breakeven_5y: Option<f64>,
+    pub breakeven_10y: Option<f64>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct LaborMarketStats {
+    pub unemployment_rate: f64,
+    pub labor_force_participation: f64,
+    pub employment_population_ratio: Option<f64>,
+    pub job_openings: f64,
+    pub job_openings_rate: Option<f64>,
+    pub quits_rate: Option<f64>,
+    pub hires_rate: Option<f64>,
+    pub layoffs_rate: Option<f64>,
+    pub average_hourly_earnings: Option<f64>,
+    pub average_weekly_hours: Option<f64>,
+    pub nonfarm_payrolls_change: Option<f64>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct ProductionMetrics {
+    pub capacity_utilization: f64,
+    pub industrial_production: f64,
+    pub manufacturing_pmi: Option<f64>,
+    pub services_pmi: Option<f64>,
+    pub housing_starts: f64,
+    pub building_permits: Option<f64>,
+    pub existing_home_sales: Option<f64>,
+    pub new_home_sales: Option<f64>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct ConsumerMetrics {
+    pub retail_sales: f64,
+    pub retail_sales_ex_auto: Option<f64>,
+    pub consumer_spending: f64,
+    pub consumer_confidence: Option<f64>,
+    pub personal_income: Option<f64>,
+    pub personal_saving_rate: Option<f64>,
+    pub consumer_credit: Option<f64>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct TradeMetrics {
+    pub trade_balance: f64,
+    pub exports: Option<f64>,
+    pub imports: Option<f64>,
+    pub current_account_balance: Option<f64>,
+    pub goods_trade_balance: Option<f64>,
+    pub services_trade_balance: Option<f64>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct DebtMetrics {
+    pub credit_growth: f64,
+    pub household_debt: f64,
+    pub household_debt_to_income: Option<f64>,
+    pub corporate_debt: f64,
+    pub corporate_debt_to_gdp: Option<f64>,
+    pub government_debt: f64,
+    pub debt_to_gdp: Option<f64>,
+    pub financial_sector_debt: Option<f64>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct FinancialStabilityMetrics {
+    pub vix: Option<f64>,
+    pub term_spread_10y2y: Option<f64>,
+    pub credit_spreads_high_yield: Option<f64>,
+    pub credit_spreads_investment_grade: Option<f64>,
+    pub bank_lending_standards: Option<f64>,
+    pub margin_debt: Option<f64>,
+    pub leverage_ratio_avg: Option<f64>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct EconomicStats {
+    // Core economic indicators
+    pub core_stats: CoreStats,
+    pub monetary_policy: PolicyRates,
+    pub monetary_stats: MonetaryStats,
+    pub overnight_rates: OvernightRatesDto,
+}
+
+#[derive(Serialize, Clone)]
+pub struct CoreStats {
+    // All Dummy - DEPRECATED: Use EconomicStats instead
+    pub gdp: f64,
+    // Prices
+    pub cpi: f64,
+    pub ppi: f64,
+    // Employment
+    pub unemployment_rate: f64,
+    pub labor_force_participation: f64,
+    pub job_openings: f64,
+    // Production 
+    pub capacity_utilization: f64,
+    pub industrial_production: f64,
+    pub housing_starts: f64,
+    // Consumer
+    pub retail_sales: f64,
+    pub consumer_spending: f64,
+    // Trade
+    pub trade_balance: f64,
+    // Debt
+    pub credit_growth: f64,
+    pub household_debt: f64,
+    pub corporate_debt: f64,
+    pub government_debt: f64,
+    pub bank_liabilities: f64,
+}
+
+#[derive(Serialize, Clone)]
+pub struct MarketSentimentMetrics {
+    pub fear_greed_index: Option<f64>,
+    pub put_call_ratio: Option<f64>,
+    pub insider_buying_selling_ratio: Option<f64>,
+    pub short_interest_ratio: Option<f64>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct SectorPerformance {
+    pub sector_name: String,
+    pub performance_1d: Option<f64>,
+    pub performance_1w: Option<f64>,
+    pub performance_1m: Option<f64>,
+    pub performance_ytd: Option<f64>,
+    pub pe_ratio: Option<f64>,
+    pub dividend_yield: Option<f64>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct DetailedDashboardDto {
+    pub current_date: String,
+    pub tick_number: u64,
+    pub total_iterations: u64,
+    pub agent_counts: AgentCounts,
+    pub economic_stats: EconomicStats,
+    pub market_sentiment: Option<MarketSentimentMetrics>,
+    pub sector_performance: Option<Vec<SectorPerformance>>,
+    pub simulation_health: SimulationHealthMetrics,
+}
+
+#[derive(Serialize, Clone)]
+pub struct SimulationHealthMetrics {
+    pub total_agents_active: usize,
+    pub markets_operational: usize,
+    pub total_transactions_last_tick: Option<u64>,
+    pub avg_transaction_value: Option<f64>,
+    pub system_liquidity: Option<f64>,
+    pub price_stability_index: Option<f64>,
+}
+
+// Keep existing DashboardDto for backward compatibility
+#[derive(Serialize, Clone)]
 pub struct DashboardDto {
     pub current_date: String,
     pub tick_number: u64,
     pub total_iterations: u64,
     pub agent_counts: AgentCounts,
-    pub employment_rate: f64,
-    pub monetary_stats: MonetaryStats,
-    pub central_bank_policy: PolicyRates,
+    pub economic_stats: EconomicStats,
 }
 
 #[derive(Serialize, Clone)]
@@ -63,12 +229,16 @@ pub struct TreasuryMarketDto {
     pub yield_to_maturity: f64,
     pub spread_bps: f64,
     pub daily_change_pct: f64,
+    pub duration: Option<f64>,
+    pub convexity: Option<f64>,
 }
 
 #[derive(Serialize, Clone)]
 pub struct YieldCurvePointDto {
     pub tenor: String,
     pub yield_pct: f64,
+    pub price: Option<f64>,
+    pub change_bps: Option<f64>,
 }
 
 #[derive(Serialize, Clone)]
@@ -77,6 +247,7 @@ pub struct GoodsDto {
     pub name: String,
     pub unit: String,
 }
+
 #[derive(Serialize, Clone)]
 pub struct RecipiesDto {
     pub id: String,
@@ -86,6 +257,7 @@ pub struct RecipiesDto {
     pub efficiency: f64,
     pub labour_hours: f64,
 }
+
 #[derive(Serialize, Clone)]
 pub struct GoodsPageDto {
     pub goods: Vec<GoodsDto>,
@@ -96,7 +268,17 @@ pub struct GoodsPageDto {
 pub struct MarketsPageDto {
     pub treasuries: Vec<TreasuryMarketDto>,
     pub yield_curve: Vec<YieldCurvePointDto>,
-    pub overnight_rates: OvernightRatesDto, // Add detailed overnight rates
+    pub overnight_rates: OvernightRatesDto,
+    pub market_summary: Option<MarketSummaryStats>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct MarketSummaryStats {
+    pub total_volume_24h: f64,
+    pub total_trades_24h: u64,
+    pub avg_spread_bps: f64,
+    pub market_cap_total: Option<f64>,
+    pub volatility_index: Option<f64>,
 }
 
 #[derive(Serialize, Clone)]
@@ -133,7 +315,7 @@ pub struct OrderbookDto {
 
 #[derive(Serialize, Clone)]
 pub struct GoodsMarketSummaryDto {
-    pub market_id: String,     // e.g., "Goods(…)"
+    pub market_id: String,     // e.g., "Goods(â€¦)"
     pub good_id: String,
     pub name: String,
     pub unit: String,
@@ -143,6 +325,8 @@ pub struct GoodsMarketSummaryDto {
     pub mid: Option<f64>,
     pub last: Option<f64>,
     pub depth: DepthDto,
+    pub volume_24h: Option<f64>,
+    pub price_change_24h: Option<f64>,
 }
 
 #[derive(Serialize, Clone, Default)]
@@ -170,6 +354,8 @@ pub struct CandleDto {
     pub low: f64,
     pub close: f64,
     pub volume: f64,
+    pub vwap: Option<f64>,     // volume weighted average price
+    pub trades_count: Option<u32>,
 }
 
 #[derive(Serialize, Clone)]
@@ -197,9 +383,63 @@ pub struct FinancialMarketSummaryDto {
     pub mid: Option<f64>,
     pub last: Option<f64>,
     pub depth: DepthDto,
+    pub volume_24h: Option<f64>,
+    pub price_change_24h: Option<f64>,
+    pub yield_to_maturity: Option<f64>,
+    pub duration: Option<f64>,
 }
 
 #[derive(Serialize, Clone)]
 pub struct FinancialMarketsPageDto {
     pub markets: Vec<FinancialMarketSummaryDto>,
+}
+
+// New DTOs for expanded analytics
+
+#[derive(Serialize, Clone)]
+pub struct EconomicForecastDto {
+    pub forecast_horizon_days: u32,
+    pub gdp_growth_forecast: Option<f64>,
+    pub inflation_forecast: Option<f64>,
+    pub unemployment_forecast: Option<f64>,
+    pub interest_rate_forecast: Option<f64>,
+    pub confidence_interval: Option<f64>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct RiskMetricsDto {
+    pub var_95: Option<f64>,     // Value at Risk 95%
+    pub var_99: Option<f64>,     // Value at Risk 99%
+    pub expected_shortfall: Option<f64>,
+    pub max_drawdown: Option<f64>,
+    pub sharpe_ratio: Option<f64>,
+    pub sortino_ratio: Option<f64>,
+    pub correlation_matrix: Option<Vec<Vec<f64>>>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct NetworkAnalyticsDto {
+    pub network_density: Option<f64>,
+    pub clustering_coefficient: Option<f64>,
+    pub average_path_length: Option<f64>,
+    pub systemic_risk_score: Option<f64>,
+    pub interconnectedness_index: Option<f64>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct DetailedAnalyticsDto {
+    pub economic_forecast: Option<EconomicForecastDto>,
+    pub risk_metrics: Option<RiskMetricsDto>,
+    pub network_analytics: Option<NetworkAnalyticsDto>,
+    pub market_microstructure: Option<MarketMicrostructureDto>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct MarketMicrostructureDto {
+    pub bid_ask_spreads_avg: Option<f64>,
+    pub order_flow_imbalance: Option<f64>,
+    pub price_impact: Option<f64>,
+    pub effective_spread: Option<f64>,
+    pub realized_spread: Option<f64>,
+    pub adverse_selection_cost: Option<f64>,
 }

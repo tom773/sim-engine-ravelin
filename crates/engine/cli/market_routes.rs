@@ -10,7 +10,7 @@ use serde_json::json;
 use sim_core::*;
 use std::sync::Arc;
 
-pub async fn get_markets_dto(State(state): State<Arc<AppState>>) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
+pub async fn get_markets_overview(State(state): State<Arc<AppState>>) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
     let headers = with_epoch_header(HeaderMap::new(), state.epoch);
     let engine_guard = state.sim_engine.read().await;
 
@@ -34,6 +34,8 @@ pub async fn get_markets_dto(State(state): State<Arc<AppState>>) -> (StatusCode,
                     yield_to_maturity: ytm,
                     spread_bps: spread,
                     daily_change_pct: 0.001,
+                    duration: None,
+                    convexity: None,
                 });
             }
         }
@@ -43,6 +45,8 @@ pub async fn get_markets_dto(State(state): State<Arc<AppState>>) -> (StatusCode,
             .map(|treasury| YieldCurvePointDto {
                 tenor: treasury.name.replace("US ", ""),
                 yield_pct: treasury.yield_to_maturity,
+                price: Some(treasury.price),
+                change_bps: None,
             })
             .collect();
 
@@ -90,7 +94,12 @@ pub async fn get_markets_dto(State(state): State<Arc<AppState>>) -> (StatusCode,
             overnight_RRP: Some((engine.state.financial_system.central_bank.policy_rate_bps).max(0.0) / 100.0),
         };
 
-        let markets_dto = MarketsPageDto { treasuries, yield_curve, overnight_rates };
+        let markets_dto = MarketsPageDto { 
+            treasuries, 
+            yield_curve, 
+            overnight_rates,
+            market_summary: None,
+        };
 
         (StatusCode::OK, headers, Json(serde_json::to_value(markets_dto).unwrap()))
     } else {
@@ -98,7 +107,8 @@ pub async fn get_markets_dto(State(state): State<Arc<AppState>>) -> (StatusCode,
         (StatusCode::CONFLICT, headers, Json(serde_json::json!({ "error": err })))
     }
 }
-pub async fn get_goods_markets_dto(
+
+pub async fn get_goods_catalogue(
     State(state): State<Arc<AppState>>,
 ) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
     let headers = with_epoch_header(HeaderMap::new(), state.epoch);
@@ -146,7 +156,7 @@ pub async fn get_goods_markets_dto(
     }
 }
 
-pub async fn get_goods_market_summaries(
+pub async fn get_market_goods_overview(
     State(state): State<Arc<AppState>>,
 ) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
     let headers = with_epoch_header(HeaderMap::new(), state.epoch);
@@ -186,7 +196,7 @@ pub async fn get_goods_market_summaries(
                 let unit = g.map(|x| x.unit.clone()).unwrap_or_else(|| "".to_string());
 
                 crate::dto::GoodsMarketSummaryDto {
-                    market_id: format!("Goods({good_id})"),
+                    market_id: good_id.to_string(),
                     good_id: good_id.to_string(),
                     name,
                     unit,
@@ -201,6 +211,8 @@ pub async fn get_goods_market_summaries(
                         bid_levels: market.order_book.bids.len(),
                         ask_levels: market.order_book.asks.len(),
                     },
+                    volume_24h: None,
+                    price_change_24h: None,
                 }
             })
             .collect::<Vec<_>>();
@@ -213,7 +225,7 @@ pub async fn get_goods_market_summaries(
     }
 }
 
-pub async fn get_goods_orderbook(
+pub async fn get_market_goods_orderbook(
     State(state): State<Arc<AppState>>, Path(good_id_str): Path<String>,
 ) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
     let headers = with_epoch_header(HeaderMap::new(), state.epoch);
@@ -266,7 +278,7 @@ pub struct HistoryQuery {
     pub bucket_secs: Option<i64>,
 }
 
-pub async fn get_goods_market_history(
+pub async fn get_market_goods_history(
     State(state): State<Arc<AppState>>, Path(good_id_str): Path<String>, Query(q): Query<HistoryQuery>,
 ) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
     let headers = with_epoch_header(HeaderMap::new(), state.epoch);
@@ -320,7 +332,22 @@ pub async fn get_goods_market_history(
                     let high = group.iter().map(|x| x.price).fold(f64::MIN, f64::max);
                     let low = group.iter().map(|x| x.price).fold(f64::MAX, f64::min);
                     let volume = group.iter().map(|x| x.quantity).sum::<f64>();
-                    crate::dto::CandleDto { ts: bucket_ts, open, high, low, close, volume }
+                    let vwap = if volume > 0.0 {
+                        Some((group.iter().map(|x| x.price * x.quantity).sum::<f64>()) / volume)
+                    } else {
+                        None
+                    };
+                    let trades_count = Some(group.len() as u32);
+                    crate::dto::CandleDto { 
+                        ts: bucket_ts, 
+                        open, 
+                        high, 
+                        low, 
+                        close, 
+                        volume,
+                        vwap,
+                        trades_count,
+                    }
                 })
                 .collect::<Vec<_>>()
         } else {
@@ -341,7 +368,7 @@ pub async fn get_goods_market_history(
     }
 }
 
-pub async fn get_financial_market_summaries(
+pub async fn get_market_financial_overview(
     State(state): State<Arc<AppState>>,
 ) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
     let headers = with_epoch_header(HeaderMap::new(), state.epoch);
@@ -357,7 +384,6 @@ pub async fn get_financial_market_summaries(
             let mid    = match (best_bid, best_ask) { (Some(b), Some(a)) => Some((a + b) * 0.5), _ => None };
             let last   = market.current_price();
 
-            // depth at best
             let bid_sz = if let Some(px) = best_bid {
                 market.order_book.bids.iter().filter(|b| b.price == px).map(|b| b.quantity).sum()
             } else { 0.0 };
@@ -365,8 +391,16 @@ pub async fn get_financial_market_summaries(
                 market.order_book.asks.iter().filter(|a| a.price == px).map(|a| a.quantity).sum()
             } else { 0.0 };
 
-            // Symbol/name fallbacks from market metadata if available
-            let name   = market.name.clone();
+            let name = market.name.clone();
+
+            let yield_to_maturity = match instr_id {
+                FinancialMarketId::Treasury { .. } => {
+                    market.calculate_ytm(&engine.state.financial_system)
+                        .or_else(|| Some(market.default_yield()))
+                        .map(|y| y * 100.0)
+                }
+                _ => None,
+            };
 
             crate::dto::FinancialMarketSummaryDto {
                 market_id: format!("Financial({})", instr_id),
@@ -383,6 +417,10 @@ pub async fn get_financial_market_summaries(
                     bid_levels: market.order_book.bids.len(),
                     ask_levels: market.order_book.asks.len(),
                 },
+                volume_24h: None,
+                price_change_24h: None,
+                yield_to_maturity,
+                duration: None,
             }
         }).collect::<Vec<_>>();
 
@@ -393,9 +431,10 @@ pub async fn get_financial_market_summaries(
         (StatusCode::CONFLICT, headers, Json(serde_json::to_value(json!({ "error": err })).unwrap()))
     }
 }
-pub async fn get_financial_orderbook(
+
+pub async fn get_market_financial_orderbook(
     State(state): State<Arc<AppState>>,
-    Path(instr_id_str): Path<String>, // note: binding, then type
+    Path(instr_id_str): Path<String>,
 ) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
     let headers = with_epoch_header(HeaderMap::new(), state.epoch);
     let engine_guard = state.sim_engine.read().await;
@@ -438,12 +477,14 @@ pub async fn get_financial_orderbook(
         (StatusCode::CONFLICT, headers, Json(json!({ "error": err })))
     }
 }
+
 #[derive(Deserialize)]
 pub struct FinHistoryQuery {
     pub limit: Option<usize>,
     pub bucket_secs: Option<i64>,
 }
-pub async fn get_financial_market_history(
+
+pub async fn get_market_financial_history(
     State(state): State<Arc<AppState>>,
     Path(instr_id_str): Path<String>,
     Query(q): Query<FinHistoryQuery>,
@@ -489,16 +530,32 @@ pub async fn get_financial_market_history(
                 let high = group.iter().map(|x| x.price).fold(f64::MIN, f64::max);
                 let low  = group.iter().map(|x| x.price).fold(f64::MAX, f64::min);
                 let volume = group.iter().map(|x| x.quantity).sum::<f64>();
-                crate::dto::CandleDto { ts, open, high, low, close, volume }
+                let vwap = if volume > 0.0 {
+                    Some((group.iter().map(|x| x.price * x.quantity).sum::<f64>()) / volume)
+                } else {
+                    None
+                };
+                let trades_count = Some(group.len() as u32);
+                crate::dto::CandleDto { 
+                    ts, 
+                    open, 
+                    high, 
+                    low, 
+                    close, 
+                    volume,
+                    vwap,
+                    trades_count,
+                }
             }).collect::<Vec<_>>()
         } else { Vec::new() };
+        
         let name = exchange.financial_markets.get(&fm_id)
             .and_then(|m| Some(m.name.clone()))
             .unwrap_or_else(|| fm_id.to_string());
 
         let dto = crate::dto::MarketHistoryDto {
             market_id: format!("Financial({fm_id})"),
-            good_id: fm_id.to_string(), // keep field name, or rename in DTO if you prefer
+            good_id: fm_id.to_string(),
             name,
             trades,
             candles,

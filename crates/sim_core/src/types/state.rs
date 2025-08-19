@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DisplayFromStr};
-use std::collections::{HashMap, HashSet, VecDeque}; // Import VecDeque
+use std::collections::{HashMap, HashSet, VecDeque};
 use crate::*;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -16,7 +16,7 @@ pub struct SimState {
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct InflationView {
     pub cpi: f64,
-    pub inflation_rate: f64, // e.g., annualized rate based on recent ticks
+    pub inflation_rate: f64,
 }
 
 impl Default for SimState {
@@ -96,7 +96,7 @@ impl SimState {
 
 
             MarketView {
-                last: latest.close, // Use close price as the definitive last price
+                last: latest.close,
                 mid: latest.best_bid.and_then(|bid| latest.best_ask.map(|ask| (bid + ask) / 2.0)),
                 spread: latest.spread,
                 volume,
@@ -299,8 +299,8 @@ pub struct MacroStats {
     pub unemployment: usize,
     pub labour_force: usize,
     pub unemployment_rate: f64,
-    pub avg_wage_rate: f64,     // simple average across contracts
-    pub payroll_proxy: f64,     // sum of (wage_rate * hours) across contracts
+    pub avg_wage_rate: f64,
+    pub payroll_proxy: f64,
 
     pub business_investment: f64,
     pub business_investment_note: &'static str,
@@ -310,9 +310,9 @@ pub struct MacroStats {
 
     pub net_exports: f64,
     pub net_exports_note: &'static str,
-    pub m0: f64, // base money supply
-    pub m2: f64, // broad money supply
-    pub m1: f64, // cash + demand deposits held by non-banks
+    pub m0: f64,
+    pub m2: f64,
+    pub m1: f64,
     pub velocity: f64,
     pub velocity_note: &'static str,
 }
