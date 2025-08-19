@@ -12,6 +12,20 @@ unit = "gallon"
 category = "Energy"
 cpi_weight = 0.3
 
+[[goods]]
+slug = "bread"
+name = "Bread"
+unit = "loaf"
+category = "FinalGood"
+cpi_weight = 0.1
+
+[[goods]]
+slug = "wheat"
+name = "Wheat"
+unit = "bushel"
+category = "RawMaterial"
+cpi_weight = 0.05
+
 [[recipes]]
 name = "Oil Refining"
 output = { slug = "petrol", qty = 19.5 }
@@ -21,3 +35,13 @@ inputs = [
 labourHours = 0.5
 capitalRequired = 100.0
 efficiency = 0.85
+
+[[recipes]]
+name = "Bread Production"
+output = { slug = "bread", qty = 1.0 }
+inputs = [
+  { slug = "wheat", qty = 0.5 }
+]
+labourHours = 0.2
+capitalRequired = 20.0
+efficiency = 0.9

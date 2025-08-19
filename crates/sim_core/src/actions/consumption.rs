@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ConsumptionAction {
     Purchase { agent_id: AgentId, seller: AgentId, good_id: GoodId, amount: f64 },
-    // New: PurchaseAtBest (Market order) (Point 3)
     PurchaseAtBest { agent_id: AgentId, good_id: GoodId, max_notional: f64 },
     Consume { agent_id: AgentId, good_id: GoodId, amount: f64 },
     NoAction { agent_id: AgentId },

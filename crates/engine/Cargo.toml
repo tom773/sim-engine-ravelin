@@ -12,6 +12,7 @@ path = "cli/main.rs"
 sim_core = { path = "../sim_core" }
 # Domain crates
 domains = { path = "../domains" }
+math = { path = "../math" }
 # Workspace dependencies
 serde = { workspace = true }
 serde_json = { workspace = true }

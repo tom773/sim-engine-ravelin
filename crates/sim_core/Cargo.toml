@@ -8,6 +8,7 @@ name = "sim_core"
 path = "src/lib.rs"
 
 [dependencies]
+math = { path = "../math" }
 serde = { workspace = true }
 chrono = { workspace = true }
 ndarray = { workspace = true }
