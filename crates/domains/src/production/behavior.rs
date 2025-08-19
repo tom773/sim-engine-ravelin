@@ -53,11 +53,11 @@ impl DecisionModel for BasicFirmDecisionModel {
 
         if let Some(recipe_id) = firm.recipe {
             if let Some(recipe) = fs.goods.get_recipe(&recipe_id) {
-                let weekly_labor_cost: f64 = firm.employees.values().map(|c| c.wage_rate * c.hours).sum();
+                let weekly_labour_cost: f64 = firm.employees.values().map(|c| c.wage_rate * c.hours).sum();
                 let weekly_output = recipe.output.1 * recipe.efficiency * firm.employees.len() as f64;
                 
                 if weekly_output > 0.0 {
-                    let unit_cost = weekly_labor_cost / weekly_output;
+                    let unit_cost = weekly_labour_cost / weekly_output;
                     let target_price = unit_cost * 1.25;
 
                     let output_good_id = recipe.output.0;

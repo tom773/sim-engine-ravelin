@@ -1,5 +1,5 @@
 use domains::prelude::*;
-use sim_core::{SimAction, SimState, StateEffect, Trade};
+use sim_core::{SimAction, SimState, StateEffect};
 use std::collections::HashMap;
 
 pub struct DomainRegistry {
@@ -37,19 +37,6 @@ impl DomainRegistry {
         } else {
             println!("[ERROR] No domain registered to handle action: {:?}", action.name());
             vec![]
-        }
-    }
-
-    pub fn settle_trade(&self, trade: &Trade, state: &SimState) -> TradingResult {
-        if let Some(domain) = self.domains.get("Trading") {
-            if let Some(trading_domain) = domain.as_any().downcast_ref::<TradingDomain>() {
-                return trading_domain.settle_trade(trade, state);
-            }
-        }
-        TradingResult {
-            success: false,
-            effects: vec![],
-            errors: vec!["TradingDomain not found for settlement.".to_string()],
         }
     }
 }

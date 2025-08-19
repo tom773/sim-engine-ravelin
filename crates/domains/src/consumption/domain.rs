@@ -1,12 +1,9 @@
 use serde::{Deserialize, Serialize};
 use sim_core::*;
 use sim_macros::SimDomain;
-use crate::banking::BankingDomain;
 
 #[derive(Clone, Debug, Serialize, Deserialize, SimDomain)]
-pub struct ConsumptionDomain {
-    payment_router: BankingDomain,
-}
+pub struct ConsumptionDomain {}
 
 #[derive(Debug, Clone)]
 pub struct ConsumptionResult {
@@ -17,9 +14,7 @@ pub struct ConsumptionResult {
 
 impl ConsumptionDomain {
     pub fn new() -> Self {
-        Self {
-            payment_router: BankingDomain::new(),
-        }
+        Self {}
     }
 
     pub fn can_handle(&self, action: &ConsumptionAction) -> bool {
@@ -128,6 +123,7 @@ impl ConsumptionDomain {
             }
         }
     }
+
     pub fn execute_purchase(
         &self,
         buyer: AgentId,
@@ -137,23 +133,20 @@ impl ConsumptionDomain {
         state: &SimState,
     ) -> ConsumptionResult {
         let mut effects = vec![];
-
         let price =
             state.financial_system.exchange.goods_market(&good_id).and_then(|m| m.best_ask()).map_or(1.0, |ask| ask.price);
 
         let total_cost = amount * price;
 
-        let payment_result = self.payment_router.execute_transfer(buyer, seller, total_cost, state);
-
-        if !payment_result.success {
-            return ConsumptionResult {
-                success: false,
-                effects: vec![],
-                errors: vec![format!("Payment failed during direct purchase: {:?}", payment_result.errors)],
-            };
-        }
-
-        effects.extend(payment_result.effects);
+        effects.push(StateEffect::Financial(FinancialEffect::RecordTransaction(Transaction {
+            id: uuid::Uuid::new_v4(),
+            date: state.ticknum,
+            qty: total_cost,
+            from: buyer,
+            to: seller,
+            tx_type: TransactionType::Transfer { from: buyer, to: seller, amount: total_cost },
+            instrument_id: None,
+        })));
 
         effects.push(StateEffect::Inventory(InventoryEffect::RemoveInventory {
             owner: seller,
@@ -218,7 +211,6 @@ impl ConsumptionDomain {
 
         ConsumptionResult { success: true, effects, errors: vec![] }
     }
-
 
     pub fn execute_consume(&self, agent_id: AgentId, good_id: GoodId, amount: f64) -> ConsumptionResult {
         let effects =

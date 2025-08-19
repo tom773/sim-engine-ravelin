@@ -175,7 +175,9 @@ impl GoodsRegistry {
     pub fn get_good_name(&self, id: &GoodId) -> Option<&str> {
         self.goods.get(id).map(|good| good.name.as_str())
     }
-
+    pub fn get_good_by_id(&self, id: &GoodId) -> Option<&Good> {
+        self.goods.get(id)
+    }
     pub fn get_recipe(&self, id: &RecipeId) -> Option<&ProductionRecipe> {
         self.recipes.get(id)
     }

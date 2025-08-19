@@ -105,9 +105,9 @@ impl Consumer {
     }
 
     pub fn update_expectations(&mut self, state: &SimState, alpha: f64) {
-        let inflation_view = state.cpi_view();
+        let inflation_view = state.calculate_core_stats().cpi;
         
-        self.expectations.expected_inflation = alpha * inflation_view.inflation_rate + (1.0 - alpha) * self.expectations.expected_inflation;
+        self.expectations.expected_inflation = alpha * inflation_view + (1.0 - alpha) * self.expectations.expected_inflation;
         
     }
 }
