@@ -130,8 +130,8 @@ Periodic processes maintain financial plumbing:
 ## Next
 * Consolidate trade settlement logic
 * Ensure trades are tracked, and accessible by the API
-#### * Implement labour market - currently a stub as it requires different plumbing to goods & financial markets
+* #### Implement labour market - currently a stub as it requires different plumbing to goods & financial markets
 * Balance starting config to allow functioning in overnight funding markets
-#### * Decision models should access market stats for decision making
-#### * Consumer & Corporate Debt Markets (Mortgages, Corporate Bond issues)
+* #### Decision models should access market stats for decision making
+* #### Consumer & Corporate Debt Markets (Mortgages, Corporate Bond issues)
 * More expansive derivative instrument system - swaps, structured products, MBS, ABS, etc...
