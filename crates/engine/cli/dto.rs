@@ -370,6 +370,8 @@ pub struct FinancialMarketSummaryDto {
     pub instrument_id: String,
     pub name: String,          
     pub best_bid: Option<f64>,
+    pub best_bid_yield: Option<f64>,
+    pub best_ask_yield: Option<f64>,
     pub best_ask: Option<f64>,
     pub spread: Option<f64>,
     pub mid: Option<f64>,

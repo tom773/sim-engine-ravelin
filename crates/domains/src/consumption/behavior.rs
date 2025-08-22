@@ -1,9 +1,134 @@
 use sim_core::*;
 use std::any::Any;
-use rand::RngCore;
+use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SimpleConsumerDecisionModel {
+    pub mpc: f64,
+}
+
+impl Default for SimpleConsumerDecisionModel {
+    fn default() -> Self {
+        Self {
+            mpc: 0.7,
+        }
+    }
+}
+
+#[typetag::serde]
+impl DecisionModel for SimpleConsumerDecisionModel {
+    fn decide(&self, agent: &dyn Any, state: &SimState, rng: &mut dyn RngCore) -> Vec<SimAction> {
+        let consumer = match agent.downcast_ref::<Consumer>() {
+            Some(c) => c,
+            None => return vec![],
+        };
+
+        let mut actions = Vec::new();
+        println!("Consumer {} making simple decisions", consumer.id);
+
+        self.handle_employment(consumer, state, &mut actions);
+
+        let fs = &state.financial_system;
+        let weekly_income = consumer.income / 52.0;
+        let liquid_assets = fs.get_liquid_assets(&consumer.id);
+        let total_resources = weekly_income + liquid_assets;
+        
+        if total_resources < 1.0 {
+            return actions;
+        }
+
+        let budget = total_resources * self.mpc;
+        let save_amount = total_resources - budget;
+
+        println!("Consumer {} has ${:.2} total resources, spending ${:.2}, saving ${:.2}", 
+                 consumer.id, total_resources, budget, save_amount);
+
+
+        self.make_simple_purchases(consumer, budget, state, &mut actions, rng);
+
+
+        if save_amount > 1.0 {
+            actions.push(SimAction::Banking(BankingAction::Deposit {
+                agent_id: consumer.id,
+                bank: consumer.bank_id,
+                amount: save_amount,
+            }));
+        }
+
+        actions
+    }
+}
+
+impl SimpleConsumerDecisionModel {
+    fn handle_employment(&self, consumer: &Consumer, _state: &SimState, actions: &mut Vec<SimAction>) {
+        if consumer.employed_by.is_none() {
+            let expected_hourly_wage = match consumer.personality {
+                PersonalityArchetype::Balanced => 25.0,
+                PersonalityArchetype::Spender => 30.0,
+                PersonalityArchetype::Saver => 20.0,
+            };
+
+            let application = JobApplication {
+                application_id: Uuid::new_v4(),
+                consumer_id: consumer.id,
+                reservation_wage: expected_hourly_wage * 0.9,
+                hours_desired: 40.0,
+            };
+
+            actions.push(SimAction::Labour(LabourAction::ApplyForJob {
+                market_id: LabourMarketId::GeneralLabour,
+                application,
+            }));
+        }
+    }
+
+    fn make_simple_purchases(&self, consumer: &Consumer, budget: f64, state: &SimState, actions: &mut Vec<SimAction>, rng: &mut dyn RngCore) {
+
+        let consumption_basket = vec![
+            ("bread", 0.4, 3.0),
+            ("petrol", 0.6, 4.0),
+        ];
+
+        for (good_slug, budget_share, fallback_price) in consumption_basket {
+            let good_id = match goods::CATALOGUE.get_good_id_by_slug(good_slug) {
+                Some(id) => id,
+                None => {
+                    println!("Warning: Good '{}' not found in catalogue", good_slug);
+                    continue;
+                }
+            };
+
+            let allocation = budget * budget_share;
+            
+
+            let price = state.market_view(&MarketId::Goods(good_id))
+                .and_then(|view| view.last_or_mid())
+                .unwrap_or(fallback_price);
+
+            println!("Consumer {} wants to spend ${:.2} on {} at price ${:.2}", 
+                     consumer.id, allocation, good_slug, price);
+
+
+            let bid_price = price * rng.random_range(0.95..1.05);
+            let max_quantity = allocation / bid_price;
+
+            if allocation > 0.01 && max_quantity > 0.01 {
+                actions.push(SimAction::Trading(TradingAction::PostBid {
+                    agent_id: consumer.id,
+                    market_id: MarketId::Goods(good_id),
+                    quantity: max_quantity,
+                    price: bid_price,
+                }));
+            }
+        }
+    }
+}
+
+
+
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CESConsumerDecisionModel {
@@ -35,7 +160,7 @@ impl DecisionModel for CESConsumerDecisionModel {
             Some(c) => c,
             None => return vec![],
         };
-
+        println!("Consumer {} making decisions", consumer.id);
         let mut actions = Vec::new();
 
         self.handle_employment(consumer, state, &mut actions);
@@ -72,7 +197,7 @@ impl DecisionModel for CESConsumerDecisionModel {
                 }
             }
         }
-
+        println!("Consumer {} market data: {:#?}", consumer.id, market_data.clone());
         if market_data.is_empty() {
             self.handle_savings(consumer, save_amount, &mut actions);
             return actions;
@@ -102,7 +227,8 @@ impl DecisionModel for CESConsumerDecisionModel {
         }
         let bread_id = goods::CATALOGUE.get_good_id_by_slug("bread").unwrap();
         self.handle_savings(consumer, save_amount, &mut actions);
-        self.handle_purchase(consumer, bread_id, 1.0, &mut actions); // TODO actually consume bread
+        self.handle_purchase(consumer, bread_id, 1.0, &mut actions);
+        
         actions
     }
 }
@@ -151,7 +277,7 @@ impl CESConsumerDecisionModel {
         if amount > 0.0 {
             actions.push(SimAction::Consumption(ConsumptionAction::Purchase {
                 agent_id: consumer.id,
-                seller: consumer.id, // Assuming self-purchase for simplicity
+                seller: consumer.id,
                 good_id,
                 amount,
             }));

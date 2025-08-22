@@ -78,8 +78,6 @@ impl BasicBankDecisionModel {
                 }
             }
         }
-        println!("Bank {} holds bonds: {:?}", bank.name, holdings_by_tenor);
-
         let quantity_to_quote = 5.0;
         const FACE_VALUE: f64 = 1000.0;
         let frequency = 2;

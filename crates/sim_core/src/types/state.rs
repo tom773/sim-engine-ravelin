@@ -302,6 +302,17 @@ impl AgentRegistry {
             None
         }
     }
+    pub fn get_agent_as_any_mut(&mut self, id: &AgentId) -> Option<&mut dyn std::any::Any> {
+        if let Some(bank) = self.banks.get_mut(id) {
+            Some(bank)
+        } else if let Some(consumer) = self.consumers.get_mut(id) {
+            Some(consumer)
+        } else if let Some(firm) = self.firms.get_mut(id) {
+            Some(firm)
+        } else {
+            None
+        }
+    }
     pub fn get_bank(&self, id: &AgentId) -> Option<&Bank> { self.banks.get(id) }
     pub fn get_consumer(&self, id: &AgentId) -> Option<&Consumer> { self.consumers.get(id) }
     pub fn get_firm(&self, id: &AgentId) -> Option<&Firm> { self.firms.get(id) }

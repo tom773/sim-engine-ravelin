@@ -37,6 +37,17 @@ initialInventory = [
     { goodSlug = "oil", quantity = 1000.0, unitCost = 50.0 }
 ]
 
+[[firms]]
+id = "bread_petrol_yum"
+name = "Bread & Petrol Co."
+bankId = "bank_b"
+recipeName = "Bread Production"
+initialCash = 150000.0
+initialInventory = [
+    { goodSlug = "bread", quantity = 500.0, unitCost = 2.0 },
+    { goodSlug = "petrol", quantity = 300.0, unitCost = 3.0 }
+]   
+
 [[consumers]]
 id = "consumer_1"
 bankId = "bank_a"

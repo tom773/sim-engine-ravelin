@@ -277,13 +277,21 @@ pub async fn get_market_financial_overview(
             let yield_to_maturity = if let FinancialMarketId::Treasury { .. } = instr_id {
                 market.calculate_ytm(fs).or(Some(market.default_yield())).map(|y| y * 100.0)
             } else { None };
-            
+            let bid_yield = if let FinancialMarketId::Treasury { .. } = instr_id {
+                market.calculate_ytm_with_price(fs, depth.best_bid.unwrap_or(0.0)).or(Some(market.default_yield())).map(|y| y * 100.0)
+            } else { None };
+            let ask_yield = if let FinancialMarketId::Treasury { .. } = instr_id {
+                market.calculate_ytm_with_price(fs, depth.best_ask.unwrap_or(0.0)).or(Some(market.default_yield())).map(|y| y * 100.0)
+            } else { None };
+
             crate::dto::FinancialMarketSummaryDto {
                 market_id: format!("Financial({})", instr_id),
                 instrument_id: instr_id.to_string(),
                 name: market.name.clone(),
                 best_bid: depth.best_bid,
+                best_bid_yield: bid_yield,
                 best_ask: depth.best_ask,
+                best_ask_yield: ask_yield,
                 spread: summary.spread,
                 mid: summary.mid,
                 last: summary.last_price,

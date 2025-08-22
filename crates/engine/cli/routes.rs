@@ -56,7 +56,10 @@ pub async fn healthz(State(state): State<Arc<AppState>>) -> (HeaderMap, Json<Hea
 pub async fn init_sim(State(state): State<Arc<AppState>>) -> (StatusCode, HeaderMap, Json<InitResponse>) {
     let mut guard = state.sim_engine.write().await;
     if guard.is_none() {
-        let engine = state.scenario.initialize_engine();
+        let mut engine = state.scenario.initialize_engine();
+        if let Err(e) = engine.connect_to_db().await {
+            println!("[ERROR] Failed to connect to SurrealDB: {}", e);
+        }
         *guard = Some(engine);
     }
     let headers = with_epoch_header(HeaderMap::new(), state.epoch);
@@ -319,7 +322,33 @@ pub async fn query_stats(State(state): State<Arc<AppState>>) -> (StatusCode, Hea
         (StatusCode::CONFLICT, headers, Json(serde_json::json!({ "error": err })))
     }
 }
+pub async fn get_agent_balance_sheet(
+    Path(agent_id): Path<AgentId>, 
+    State(state): State<Arc<AppState>>,
+) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
+    let headers = with_epoch_header(HeaderMap::new(), state.epoch);
+    let guard = state.sim_engine.read().await; // Use read() instead of write()
 
+    if let Some(engine) = guard.as_ref() { // Use as_ref() instead of as_deref_mut()
+        if !engine.state.agents.agent_exists(&agent_id) {
+            return (StatusCode::NOT_FOUND, headers, Json(json!({ "error": "Agent not found" })));
+        }
+
+        if let Some(bs) = engine.state.financial_system.get_bs_by_id(&agent_id) {
+            let balance_sheet = BalanceSheetSummary {
+                assets: bs.total_assets(),
+                liabilities: bs.total_liabilities(),
+                equity: bs.net_worth(),
+            };
+            (StatusCode::OK, headers, Json(serde_json::to_value(balance_sheet).unwrap()))
+        } else {
+            (StatusCode::NOT_FOUND, headers, Json(json!({ "error": "Balance sheet not found" })))
+        }
+    } else {
+        let err = ApiError { code: "NOT_INITIALIZED", message: "Simulation is not initialized." };
+        (StatusCode::CONFLICT, headers, Json(json!({ "error": err })))
+    }
+}
 pub fn http_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
@@ -332,6 +361,7 @@ pub fn http_router(state: Arc<AppState>) -> Router {
         .route("/sim/analysis/tick/{tick_number}", get(get_tick_details)) // NEW
         .route("/agents/{agent_type}", get(get_agents))
         .route("/agents/{agent_type}/summary", get(get_agents_summary))
+        .route("/agents/{agent_id}/balance_sheet", get(get_agent_balance_sheet))
         .route("/api/markets/overview", get(get_markets_overview))
         .route("/api/markets/goods/cat", get(get_goods_catalogue))
         .route("/api/markets/goods/overview", get(get_market_goods_overview))

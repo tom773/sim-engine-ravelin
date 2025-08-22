@@ -15,7 +15,7 @@ domains = { path = "../domains" }
 math = { path = "../math" }
 # Workspace dependencies
 serde = { workspace = true }
-serde_json = { workspace = true }
+serde_json.workspace = true
 tokio = { workspace = true }
 axum = { workspace = true }
 tower-http = { workspace = true} 
@@ -30,8 +30,7 @@ typetag = { workspace = true }
 serde_with = { workspace = true }
 rand_chacha = "0.9.0"
 rand_core = "0.9.3"
-async-nats = { version = "0.42.0", features = ["websockets"] }
-futures = "0.3.31"
 inventory = "0.3"
 tokio-util = "0.7.16"
 anyhow = "1.0.98"
+surrealdb = "2.3.7"

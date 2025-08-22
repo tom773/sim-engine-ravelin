@@ -2,11 +2,11 @@ use crate::utils::{BasisPoints, bps_to_decimal, decimal_to_bps};
 use crate::*;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
+use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::{collections::HashMap, fmt, str::FromStr};
 use thiserror::Error;
 use uuid::Uuid;
-use std::collections::BTreeMap;
 
 impl Tradable for GoodId {
     fn check_holdings(&self, agent_id: &AgentId, quantity: f64, fs: &FinancialSystem) -> Result<(), String> {
@@ -140,7 +140,6 @@ pub enum ParseMarketIdError {
     ParseLabourMarketId(String),
 }
 
-
 impl std::str::FromStr for MarketId {
     type Err = ParseMarketIdError;
 
@@ -160,7 +159,6 @@ impl std::str::FromStr for MarketId {
         Err(ParseMarketIdError::InvalidFormat(s.to_string()))
     }
 }
-
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct MarketTick {
@@ -761,7 +759,20 @@ impl FinancialMarket {
         }
         None
     }
+    pub fn calculate_ytm_with_price(&self, fs: &FinancialSystem, price: f64) -> Option<f64> {
+        if let FinancialMarketId::Treasury { tenor } = &self.market_id {
+            if let Some(bond_details) = fs.exchange.get_treasury_bond_details(fs, tenor) {
+                let price = price;
+                let face_value = bond_details.face_value;
+                let coupon_rate = bond_details.coupon_rate_bps / 10000.0;
+                let years_to_maturity = tenor.to_years();
+                let frequency = bond_details.frequency;
 
+                return Some(math::pricing::ytm_bond(price, face_value, coupon_rate, years_to_maturity, frequency));
+            }
+        }
+        None
+    }
     pub fn default_yield(&self) -> f64 {
         if let FinancialMarketId::Treasury { tenor } = &self.market_id {
             match tenor {
@@ -846,8 +857,6 @@ pub struct MarketSummary {
     pub spread: Option<f64>,
     pub last_price: Option<f64>,
 }
-
-
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TreasuryMarketSummary {

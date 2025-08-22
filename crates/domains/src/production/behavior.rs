@@ -3,11 +3,23 @@ use std::any::Any;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize, Default, Deserialize)]
-pub struct BasicFirmDecisionModel;
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SimpleFirmDecisionModel {
+    pub target_markup: f64,
+    pub base_wage: f64,
+}
+
+impl Default for SimpleFirmDecisionModel {
+    fn default() -> Self {
+        Self {
+            target_markup: 1.25, // 25% markup
+            base_wage: 25.0,     // Base hourly wage
+        }
+    }
+}
 
 #[typetag::serde]
-impl DecisionModel for BasicFirmDecisionModel {
+impl DecisionModel for SimpleFirmDecisionModel {
     fn decide(&self, agent: &dyn Any, state: &SimState, _rng: &mut dyn RngCore) -> Vec<SimAction> {
         let firm = match agent.downcast_ref::<Firm>() {
             Some(f) => f,
@@ -15,31 +27,70 @@ impl DecisionModel for BasicFirmDecisionModel {
         };
         
         let mut actions = Vec::new();
-        let fs = &state.financial_system;
+        let _fs = &state.financial_system;
 
-        if firm.employees.len() < 5 {
-            actions.push(SimAction::Production(ProductionAction::Hire { agent_id: firm.id, count: 1 }));
+        println!("Firm {} ({}) making decisions", firm.id, firm.name);
+
+        self.handle_hiring(firm, &mut actions);
+
+        self.handle_production(firm, state, &mut actions);
+
+        self.handle_wages(firm, &mut actions);
+
+        self.handle_sales(firm, state, &mut actions);
+
+        self.handle_input_purchases(firm, state, &mut actions);
+
+        actions
+    }
+}
+
+impl SimpleFirmDecisionModel {
+    fn handle_hiring(&self, firm: &Firm, actions: &mut Vec<SimAction>) {
+        let current_employees = firm.employees.len();
+        let target_employees = 3;
+        
+        if current_employees < target_employees {
+            let positions_to_fill = target_employees - current_employees;
+            println!("Firm {} hiring {} positions", firm.name, positions_to_fill);
+            
+            actions.push(SimAction::Production(ProductionAction::Hire { 
+                agent_id: firm.id, 
+                count: positions_to_fill as u32,
+            }));
+        }
+    }
+
+    fn handle_production(&self, firm: &Firm, state: &SimState, actions: &mut Vec<SimAction>) {
+        if firm.employees.is_empty() {
+            return;
         }
 
         if let Some(recipe_id) = firm.recipe {
-            if !firm.employees.is_empty() {
-                if let Some(recipe) = fs.goods.get_recipe(&recipe_id) {
-                    if let Some(inventory) = fs.get_bs_by_id(&firm.id).and_then(|bs| bs.get_inventory()) {
-                        let can_produce = recipe.inputs.iter().all(|(good, qty)| {
-                            inventory.get(good).map_or(false, |item| item.quantity >= *qty)
-                        });
-                        if can_produce {
-                            actions.push(SimAction::Production(ProductionAction::Produce { 
-                                agent_id: firm.id, 
-                                recipe_id, 
-                                batches: 1 
-                            }));
-                        }
+            if let Some(recipe) = state.financial_system.goods.get_recipe(&recipe_id) {
+                if let Some(inventory) = state.financial_system.get_bs_by_id(&firm.id)
+                    .and_then(|bs| bs.get_inventory()) {
+                    
+                    let can_produce = recipe.inputs.iter().all(|(good_id, required_qty)| {
+                        inventory.get(good_id).map_or(false, |item| item.quantity >= *required_qty)
+                    });
+
+                    if can_produce {
+                        println!("Firm {} producing with recipe {}", firm.name, recipe.name);
+                        actions.push(SimAction::Production(ProductionAction::Produce { 
+                            agent_id: firm.id, 
+                            recipe_id, 
+                            batches: 1,
+                        }));
+                    } else {
+                        println!("Firm {} cannot produce - missing inputs", firm.name);
                     }
                 }
             }
         }
+    }
 
+    fn handle_wages(&self, firm: &Firm, actions: &mut Vec<SimAction>) {
         for (employee_id, contract) in &firm.employees {
             let weekly_wage = contract.wage_rate * contract.hours;
             if weekly_wage > 0.0 {
@@ -50,32 +101,88 @@ impl DecisionModel for BasicFirmDecisionModel {
                 }));
             }
         }
+    }
 
+    fn handle_sales(&self, firm: &Firm, state: &SimState, actions: &mut Vec<SimAction>) {
+        if let Some(inventory) = state.financial_system.get_bs_by_id(&firm.id)
+            .and_then(|bs| bs.get_inventory()) {
+            
+            for (good_id, item) in inventory {
+                if item.quantity > 0.1 {
+                    let base_price = self.calculate_selling_price(firm, *good_id, state);
+                    
+                    println!("Firm {} posting ask for {:.2} units of {:?} at ${:.2}", 
+                             firm.name, item.quantity, good_id, base_price);
+
+                    actions.push(SimAction::Trading(TradingAction::PostAsk {
+                        agent_id: firm.id,
+                        market_id: MarketId::Goods(*good_id),
+                        quantity: item.quantity,
+                        price: base_price,
+                    }));
+                }
+            }
+        }
+    }
+
+    fn handle_input_purchases(&self, firm: &Firm, state: &SimState, actions: &mut Vec<SimAction>) {
         if let Some(recipe_id) = firm.recipe {
-            if let Some(recipe) = fs.goods.get_recipe(&recipe_id) {
-                let weekly_labour_cost: f64 = firm.employees.values().map(|c| c.wage_rate * c.hours).sum();
-                let weekly_output = recipe.output.1 * recipe.efficiency * firm.employees.len() as f64;
-                
-                if weekly_output > 0.0 {
-                    let unit_cost = weekly_labour_cost / weekly_output;
-                    let target_price = unit_cost * 1.25;
+            if let Some(recipe) = state.financial_system.goods.get_recipe(&recipe_id) {
+                if let Some(inventory) = state.financial_system.get_bs_by_id(&firm.id)
+                    .and_then(|bs| bs.get_inventory()) {
+                    
+                    for (input_good_id, required_qty) in &recipe.inputs {
+                        let current_qty = inventory.get(input_good_id)
+                            .map_or(0.0, |item| item.quantity);
+                        
+                        let target_qty = required_qty * 2.0;
+                        if current_qty < target_qty {
+                            let buy_qty = target_qty - current_qty;
+                            let max_price = 100.0; // Willing to pay up to $100 per unit
+                            
+                            println!("Firm {} wants to buy {:.2} units of {:?}", 
+                                     firm.name, buy_qty, input_good_id);
 
-                    let output_good_id = recipe.output.0;
-                    if let Some(inventory) = fs.get_bs_by_id(&firm.id).and_then(|bs| bs.get_inventory()) {
-                        if let Some(item) = inventory.get(&output_good_id) {
-                            if item.quantity > 0.0 {
-                                actions.push(SimAction::Trading(TradingAction::PostAsk {
-                                    agent_id: firm.id,
-                                    market_id: MarketId::Goods(output_good_id),
-                                    quantity: item.quantity,
-                                    price: target_price,
-                                }));
-                            }
+                            actions.push(SimAction::Trading(TradingAction::PostBid {
+                                agent_id: firm.id,
+                                market_id: MarketId::Goods(*input_good_id),
+                                quantity: buy_qty,
+                                price: max_price,
+                            }));
                         }
                     }
                 }
             }
         }
-        actions
+    }
+
+    fn calculate_selling_price(&self, firm: &Firm, good_id: GoodId, state: &SimState) -> f64 {
+        if let Some(recipe_id) = firm.recipe {
+            if let Some(recipe) = state.financial_system.goods.get_recipe(&recipe_id) {
+                if recipe.output.0 == good_id {
+                    let labor_cost_per_hour = self.base_wage;
+                    let labor_hours_per_unit = recipe.labour_hours;
+                    let labor_cost_per_unit = labor_cost_per_hour * labor_hours_per_unit;
+                    
+                    let input_cost_per_unit: f64 = recipe.inputs.iter()
+                        .map(|(_, qty)| qty * 50.0) // Assume $50 per unit of input
+                        .sum();
+                    
+                    let total_cost = (labor_cost_per_unit + input_cost_per_unit) / recipe.efficiency;
+                    return total_cost * self.target_markup;
+                }
+            }
+        }
+        
+        match goods::CATALOGUE.get_good_by_id(&good_id) {
+            Some(good) => match good.name.as_str() {
+                "Bread" => 3.0,
+                "Petrol" => 4.0,
+                "Crude Oil" => 60.0,
+                "Wheat" => 8.0,
+                _ => 10.0,
+            },
+            None => 10.0,
+        }
     }
 }
