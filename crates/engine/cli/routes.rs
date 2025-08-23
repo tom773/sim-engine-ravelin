@@ -62,6 +62,7 @@ pub async fn init_sim(State(state): State<Arc<AppState>>) -> (StatusCode, Header
         }
         *guard = Some(engine);
     }
+    println!("Simulation initialized with epoch: {}", state.epoch);
     let headers = with_epoch_header(HeaderMap::new(), state.epoch);
     (StatusCode::OK, headers, Json(InitResponse { epoch: state.epoch.to_string() }))
 }
@@ -69,10 +70,8 @@ pub async fn init_sim(State(state): State<Arc<AppState>>) -> (StatusCode, Header
 pub async fn get_dashboard(State(state): State<Arc<AppState>>) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
     let headers = with_epoch_header(HeaderMap::new(), state.epoch);
     let guard = state.sim_engine.read().await;
-
     if let Some(engine) = guard.as_ref() {
         let fs = &engine.state.financial_system;
-
         let agent_counts = AgentCounts {
             banks: engine.state.agents.banks.len(),
             firms: engine.state.agents.firms.len(),
@@ -84,8 +83,8 @@ pub async fn get_dashboard(State(state): State<Arc<AppState>>) -> (StatusCode, H
 
         let core_stats_data = engine.state.calculate_core_stats();
         let stats = engine.state.macro_stats();
-
         let bank_ids: HashSet<AgentId> = engine.state.agents.banks.keys().cloned().collect();
+
         let monetary_stats = MonetaryStats {
             velocity_m1: if stats.m1 > 0.0 { Some(core_stats_data.gdp / stats.m1) } else { None },
             velocity_m2: if stats.m2 > 0.0 { Some(core_stats_data.gdp / stats.m2) } else { None },
@@ -96,7 +95,7 @@ pub async fn get_dashboard(State(state): State<Arc<AppState>>) -> (StatusCode, H
             bank_reserves: fs.all_bank_reserves(&bank_ids),
             currency_in_circulation: fs.currency_in_circulation(fs.central_bank.id),
         };
-        
+
         let core_stats_dto = CoreStats {
             gdp: core_stats_data.gdp,
             cpi: core_stats_data.cpi,
@@ -156,7 +155,6 @@ pub async fn get_agents_summary(
 ) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
     let headers = with_epoch_header(HeaderMap::new(), state.epoch);
     let guard = state.sim_engine.read().await;
-
     if let Some(engine) = guard.as_ref() {
         let page = pagination.page.unwrap_or(1).max(1);
         let page_size = pagination.page_size.unwrap_or(20).min(100).max(1);
@@ -181,7 +179,6 @@ pub async fn get_agents_summary(
                         } else {
                             BalanceSheetSummary { assets: 0.0, liabilities: 0.0, equity: 0.0 }
                         };
-
                         AgentSummaryDto {
                             id: bank.id.to_string(),
                             name: bank.name.clone(),
@@ -210,7 +207,6 @@ pub async fn get_agents_summary(
                         } else {
                             BalanceSheetSummary { assets: 0.0, liabilities: 0.0, equity: 0.0 }
                         };
-
                         AgentSummaryDto {
                             id: firm.id.to_string(),
                             name: firm.name.clone(),
@@ -239,7 +235,6 @@ pub async fn get_agents_summary(
                         } else {
                             BalanceSheetSummary { assets: 0.0, liabilities: 0.0, equity: 0.0 }
                         };
-
                         AgentSummaryDto {
                             id: consumer.id.to_string(),
                             name: format!("Consumer {}", &consumer.id.to_string()[..8]),
@@ -257,7 +252,6 @@ pub async fn get_agents_summary(
         };
 
         let paginated = Paginated { items, total_items, page, page_size };
-
         (StatusCode::OK, headers, Json(serde_json::to_value(paginated).unwrap()))
     } else {
         let err = ApiError { code: "NOT_INITIALIZED", message: "Simulation is not initialized." };
@@ -322,18 +316,17 @@ pub async fn query_stats(State(state): State<Arc<AppState>>) -> (StatusCode, Hea
         (StatusCode::CONFLICT, headers, Json(serde_json::json!({ "error": err })))
     }
 }
+
 pub async fn get_agent_balance_sheet(
     Path(agent_id): Path<AgentId>, 
     State(state): State<Arc<AppState>>,
 ) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
     let headers = with_epoch_header(HeaderMap::new(), state.epoch);
-    let guard = state.sim_engine.read().await; // Use read() instead of write()
-
-    if let Some(engine) = guard.as_ref() { // Use as_ref() instead of as_deref_mut()
+    let guard = state.sim_engine.read().await;
+    if let Some(engine) = guard.as_ref() {
         if !engine.state.agents.agent_exists(&agent_id) {
             return (StatusCode::NOT_FOUND, headers, Json(json!({ "error": "Agent not found" })));
         }
-
         if let Some(bs) = engine.state.financial_system.get_bs_by_id(&agent_id) {
             let balance_sheet = BalanceSheetSummary {
                 assets: bs.total_assets(),
@@ -349,6 +342,26 @@ pub async fn get_agent_balance_sheet(
         (StatusCode::CONFLICT, headers, Json(json!({ "error": err })))
     }
 }
+pub async fn get_employment_contracts(
+    State(state): State<Arc<AppState>>,
+) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
+    let headers = with_epoch_header(HeaderMap::new(), state.epoch);
+    let guard = state.sim_engine.read().await;
+    if let Some(engine) = guard.as_ref() {
+        let contracts: Vec<EmploymentContractDto> = engine.state.agents.firms.values()
+            .flat_map(|firm| firm.employees.iter().map(|emp| EmploymentContractDto {
+                employee_id: emp.0.to_string(),
+                firm_id: firm.id.to_string(),
+                wage_rate: emp.1.wage_rate,
+                hours: emp.1.hours,
+            }))
+            .collect();
+        (StatusCode::OK, headers, Json(serde_json::to_value(contracts).unwrap()))
+    } else {
+        let err = ApiError { code: "NOT_INITIALIZED", message: "Simulation is not initialized." };
+        (StatusCode::CONFLICT, headers, Json(json!({ "error": err })))
+    }
+}
 pub fn http_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
@@ -356,19 +369,27 @@ pub fn http_router(state: Arc<AppState>) -> Router {
         .route("/dashboard", get(get_dashboard))
         .route("/sim/control/tick", post(tick))
         .route("/sim/analysis/stats", get(query_stats))
-        .route("/sim/analysis/history", get(get_simulation_history))  // NEW
-        .route("/sim/analysis/actions", get(get_actions_history))     // NEW  
-        .route("/sim/analysis/tick/{tick_number}", get(get_tick_details)) // NEW
+        .route("/sim/analysis/history", get(get_simulation_history))
+        .route("/sim/analysis/actions", get(get_actions_history))
+        .route("/sim/analysis/effects", get(get_effects_history))
+        .route("/sim/analysis/a2e/{tick_number}", get(get_actions_to_effects))
+        .route("/sim/analysis/tick/{tick_number}", get(get_tick_details))
+
         .route("/agents/{agent_type}", get(get_agents))
         .route("/agents/{agent_type}/summary", get(get_agents_summary))
         .route("/agents/{agent_id}/balance_sheet", get(get_agent_balance_sheet))
         .route("/api/markets/overview", get(get_markets_overview))
+        
         .route("/api/markets/goods/cat", get(get_goods_catalogue))
         .route("/api/markets/goods/overview", get(get_market_goods_overview))
         .route("/api/markets/goods/{good_id}/orderbook", get(get_market_goods_orderbook))
         .route("/api/markets/goods/{good_id}/history", get(get_market_goods_history))
+        
         .route("/api/markets/financial/overview", get(get_market_financial_overview))
         .route("/api/markets/financial/{instrument_id}/orderbook", get(get_market_financial_orderbook))
         .route("/api/markets/financial/{instrument_id}/history", get(get_market_financial_history))
+
+        .route("/api/markets/labour/overview", get(get_market_labour_overview))
+        .route("/api/markets/labour/contracts", get(get_employment_contracts))
         .with_state(state)
 }

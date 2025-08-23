@@ -27,7 +27,6 @@ impl DecisionModel for SimpleConsumerDecisionModel {
         };
 
         let mut actions = Vec::new();
-        println!("Consumer {} making simple decisions", consumer.id);
 
         self.handle_employment(consumer, state, &mut actions);
 
@@ -43,12 +42,7 @@ impl DecisionModel for SimpleConsumerDecisionModel {
         let budget = total_resources * self.mpc;
         let save_amount = total_resources - budget;
 
-        println!("Consumer {} has ${:.2} total resources, spending ${:.2}, saving ${:.2}", 
-                 consumer.id, total_resources, budget, save_amount);
-
-
         self.make_simple_purchases(consumer, budget, state, &mut actions, rng);
-
 
         if save_amount > 1.0 {
             actions.push(SimAction::Banking(BankingAction::Deposit {
@@ -107,9 +101,6 @@ impl SimpleConsumerDecisionModel {
             let price = state.market_view(&MarketId::Goods(good_id))
                 .and_then(|view| view.last_or_mid())
                 .unwrap_or(fallback_price);
-
-            println!("Consumer {} wants to spend ${:.2} on {} at price ${:.2}", 
-                     consumer.id, allocation, good_slug, price);
 
 
             let bid_price = price * rng.random_range(0.95..1.05);

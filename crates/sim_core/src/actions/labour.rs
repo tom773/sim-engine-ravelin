@@ -11,9 +11,6 @@ pub enum LabourAction {
         market_id: LabourMarketId,
         offer: JobOffer,
     },
-    ClearLabourMarket {
-        market_id: LabourMarketId,
-    },
     Fire { firm_id: AgentId, employee_id: AgentId },
 }
 
@@ -22,7 +19,6 @@ impl LabourAction {
         match self {
             LabourAction::ApplyForJob { .. } => "ApplyForJob",
             LabourAction::PostJobOffer { .. } => "PostJobOffer",
-            LabourAction::ClearLabourMarket { .. } => "ClearLabourMarket",
             LabourAction::Fire { .. } => "Fire",
         }
     }
@@ -31,7 +27,6 @@ impl LabourAction {
         match self {
             LabourAction::ApplyForJob { application, .. } => application.consumer_id,
             LabourAction::PostJobOffer { offer, .. } => offer.firm_id,
-            LabourAction::ClearLabourMarket { .. } => AgentId::default(), // System action
             LabourAction::Fire { firm_id, .. } => *firm_id,
         }
     }

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::Serialize;
 use sim_core::prelude::*;
 
@@ -113,7 +115,7 @@ pub struct FinancialStabilityMetrics {
 
 #[derive(Serialize, Clone)]
 pub struct EconomicStats {
-    // Core economic indicators
+
     pub core_stats: CoreStats,
     pub monetary_policy: PolicyRates,
     pub monetary_stats: MonetaryStats,
@@ -122,25 +124,25 @@ pub struct EconomicStats {
 
 #[derive(Serialize, Clone)]
 pub struct CoreStats {
-    // All Dummy - DEPRECATED: Use EconomicStats instead
+
     pub gdp: f64,
-    // Prices
+
     pub cpi: f64,
     pub ppi: f64,
-    // Employment
+
     pub unemployment_rate: f64,
     pub labor_force_participation: f64,
     pub job_openings: f64,
-    // Production 
+
     pub capacity_utilization: f64,
     pub industrial_production: f64,
     pub housing_starts: f64,
-    // Consumer
+
     pub retail_sales: f64,
     pub consumer_spending: f64,
-    // Trade
+
     pub trade_balance: f64,
-    // Debt
+
     pub credit_growth: f64,
     pub household_debt: f64,
     pub corporate_debt: f64,
@@ -189,7 +191,7 @@ pub struct SimulationHealthMetrics {
     pub price_stability_index: Option<f64>,
 }
 
-// Keep existing DashboardDto for backward compatibility
+
 #[derive(Serialize, Clone)]
 pub struct DashboardDto {
     pub current_date: String,
@@ -285,11 +287,11 @@ pub struct MarketSummaryStats {
 #[derive(Serialize, Clone)]
 #[allow(non_snake_case)]
 pub struct OvernightRatesDto {
-    pub effr: Option<f64>,          // EFFR - federal funds market
-    pub sofr: Option<f64>,          // SOFR - Treasury repo market
-    pub iorb: Option<f64>,          // Interest on reserve balances (floor)
-    pub discount_rate: Option<f64>, // Primary credit rate (ceiling)
-    pub overnight_RRP: Option<f64>, // Overnight reverse repo (floor for nonbanks)
+    pub effr: Option<f64>,
+    pub sofr: Option<f64>,
+    pub iorb: Option<f64>,
+    pub discount_rate: Option<f64>,
+    pub overnight_RRP: Option<f64>,
 }
 
 #[derive(Serialize, Clone)]
@@ -316,7 +318,7 @@ pub struct OrderbookDto {
 
 #[derive(Serialize, Clone)]
 pub struct GoodsMarketSummaryDto {
-    pub market_id: String,     // e.g., "Goods(â€¦)"
+    pub market_id: String,
     pub good_id: String,
     pub name: String,
     pub unit: String,
@@ -330,6 +332,35 @@ pub struct GoodsMarketSummaryDto {
     pub price_change_24h: Option<f64>,
 }
 
+#[derive(Serialize, Clone)]
+pub struct LabourMarketSummaryDto {
+   pub market_id: String,
+   pub name: String,
+   pub job_offers: Vec<JobOfferDto>,
+   pub job_applications: Vec<JobApplicationDto>, 
+}
+#[derive(Clone, Serialize)]
+pub struct LabourMarketPageDto {
+    pub markets: Vec<LabourMarketSummaryDto>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct JobOfferDto {
+    pub offer_id: String,
+    pub firm_id: String,
+    pub wage_rate: f64,
+    pub hours_required: f64,
+    pub quantity: u32,
+}
+
+#[derive(Clone, Serialize)]
+pub struct JobApplicationDto {
+    pub application_id: String,
+    pub consumer_id: String,
+    pub reservation_wage: f64,
+    pub hours_desired: f64,
+}
+
 #[derive(Serialize, Clone, Default)]
 pub struct DepthDto {
     pub bid_size_at_best: f64,
@@ -337,16 +368,23 @@ pub struct DepthDto {
     pub bid_levels: usize,
     pub ask_levels: usize,
 }
+#[derive(Serialize, Clone)]
+pub struct EmploymentContractDto {
+    pub employee_id: String,
+    pub firm_id: String,
+    pub wage_rate: f64,
+    pub hours: f64,
+}
 
 #[derive(Serialize, Clone)]
 pub struct CandleDto {
-    pub ts: i64,               // start of bucket
+    pub ts: i64,
     pub open: f64,
     pub high: f64,
     pub low: f64,
     pub close: f64,
     pub volume: f64,
-    pub vwap: Option<f64>,     // volume weighted average price
+    pub vwap: Option<f64>,
     pub trades_count: Option<u32>,
 }
 
@@ -388,7 +426,7 @@ pub struct FinancialMarketsPageDto {
     pub markets: Vec<FinancialMarketSummaryDto>,
 }
 
-// New DTOs for expanded analytics
+
 
 #[derive(Serialize, Clone)]
 pub struct EconomicForecastDto {
@@ -402,8 +440,8 @@ pub struct EconomicForecastDto {
 
 #[derive(Serialize, Clone)]
 pub struct RiskMetricsDto {
-    pub var_95: Option<f64>,     // Value at Risk 95%
-    pub var_99: Option<f64>,     // Value at Risk 99%
+    pub var_95: Option<f64>,
+    pub var_99: Option<f64>,
     pub expected_shortfall: Option<f64>,
     pub max_drawdown: Option<f64>,
     pub sharpe_ratio: Option<f64>,
@@ -438,21 +476,21 @@ pub struct MarketMicrostructureDto {
     pub adverse_selection_cost: Option<f64>,
 }
 
-// Add these DTOs to dto.rs
+
 
 #[derive(Serialize, Clone)]
 pub struct ActionDto {
-    pub action_type: String,      // e.g., "Banking::Transfer"
+    pub action_type: String,
     pub agent_id: String,
-    pub agent_type: String,       // "Bank", "Consumer", "Firm", etc.
+    pub agent_type: String,
     pub agent_name: Option<String>,
-    pub details: serde_json::Value, // Serialized action details
+    pub details: serde_json::Value,
 }
 
 #[derive(Serialize, Clone)]
 pub struct EffectDto {
-    pub effect_type: String,      // e.g., "Financial::CreateInstrument"
-    pub details: serde_json::Value, // Serialized effect details
+    pub effect_type: String,
+    pub details: serde_json::Value,
 }
 
 #[derive(Serialize, Clone)]
@@ -470,6 +508,7 @@ pub struct TickRecordDto {
     pub date: String,
     pub actions: Vec<ActionDto>,
     pub effects: Vec<EffectDto>,
+    pub action_to_effect_indices: HashMap<usize, Vec<usize>>,
     pub trades: Vec<TradeDto>,
     pub summary: TickSummaryDto,
 }
@@ -492,7 +531,7 @@ pub struct SimulationHistoryDto {
     pub page_size: u32,
 }
 
-// Helper functions to convert from core types to DTOs
+
 impl From<&ActionRecord> for ActionDto {
     fn from(record: &ActionRecord) -> Self {
         ActionDto {
@@ -531,8 +570,13 @@ impl From<&TickRecord> for TickRecordDto {
         let actions: Vec<ActionDto> = record.actions.iter().map(ActionDto::from).collect();
         let effects: Vec<EffectDto> = record.effects.iter().map(EffectDto::from).collect();
         let trades: Vec<TradeDto> = record.trades.iter().map(TradeDto::from).collect();
+        let action_to_effect_idx: HashMap<usize, Vec<usize>> = record
+            .action_to_effect_indices
+            .iter()
+            .map(|(action_idx, effect_indices)| (*action_idx, effect_indices.clone()))
+            .collect();
         
-        // Create summary statistics
+
         let mut actions_by_type = std::collections::HashMap::new();
         for action in &actions {
             *actions_by_type.entry(action.action_type.clone()).or_insert(0) += 1;
@@ -541,6 +585,10 @@ impl From<&TickRecord> for TickRecordDto {
         let mut effects_by_type = std::collections::HashMap::new();
         for effect in &effects {
             *effects_by_type.entry(effect.effect_type.clone()).or_insert(0) += 1;
+        }
+        let mut action_to_effect_indices = HashMap::new();
+        for (action_idx, effect_indices) in &action_to_effect_idx {
+            action_to_effect_indices.insert(*action_idx, effect_indices.clone());
         }
         
         let agents_active = actions.iter()
@@ -562,6 +610,7 @@ impl From<&TickRecord> for TickRecordDto {
             date: record.date.format("%Y-%m-%d").to_string(),
             actions,
             effects,
+            action_to_effect_indices,
             trades,
             summary,
         }

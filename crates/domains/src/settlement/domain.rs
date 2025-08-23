@@ -169,6 +169,7 @@ impl SettlementDomain {
                 });
                 SettlementResult { success: true, effects: vec![effect], errors: vec![] }
             } else {
+                println!("[DEBUG] Not creating effects ");
                 SettlementResult { success: true, effects: vec![], errors: vec![] }
             }
         } else {

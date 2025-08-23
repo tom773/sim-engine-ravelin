@@ -29,8 +29,6 @@ impl DecisionModel for SimpleFirmDecisionModel {
         let mut actions = Vec::new();
         let _fs = &state.financial_system;
 
-        println!("Firm {} ({}) making decisions", firm.id, firm.name);
-
         self.handle_hiring(firm, &mut actions);
 
         self.handle_production(firm, state, &mut actions);
@@ -52,7 +50,6 @@ impl SimpleFirmDecisionModel {
         
         if current_employees < target_employees {
             let positions_to_fill = target_employees - current_employees;
-            println!("Firm {} hiring {} positions", firm.name, positions_to_fill);
             
             actions.push(SimAction::Production(ProductionAction::Hire { 
                 agent_id: firm.id, 
@@ -76,7 +73,6 @@ impl SimpleFirmDecisionModel {
                     });
 
                     if can_produce {
-                        println!("Firm {} producing with recipe {}", firm.name, recipe.name);
                         actions.push(SimAction::Production(ProductionAction::Produce { 
                             agent_id: firm.id, 
                             recipe_id, 
@@ -111,9 +107,6 @@ impl SimpleFirmDecisionModel {
                 if item.quantity > 0.1 {
                     let base_price = self.calculate_selling_price(firm, *good_id, state);
                     
-                    println!("Firm {} posting ask for {:.2} units of {:?} at ${:.2}", 
-                             firm.name, item.quantity, good_id, base_price);
-
                     actions.push(SimAction::Trading(TradingAction::PostAsk {
                         agent_id: firm.id,
                         market_id: MarketId::Goods(*good_id),
@@ -140,9 +133,6 @@ impl SimpleFirmDecisionModel {
                             let buy_qty = target_qty - current_qty;
                             let max_price = 100.0; // Willing to pay up to $100 per unit
                             
-                            println!("Firm {} wants to buy {:.2} units of {:?}", 
-                                     firm.name, buy_qty, input_good_id);
-
                             actions.push(SimAction::Trading(TradingAction::PostBid {
                                 agent_id: firm.id,
                                 market_id: MarketId::Goods(*input_good_id),

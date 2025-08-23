@@ -552,7 +552,13 @@ impl Exchange {
         };
         self.financial_markets.entry(market_id.clone()).or_insert_with(|| FinancialMarket::new(market_id, name));
     }
-
+    pub fn clear_labour_markets(&mut self, state: &SimState) -> Vec<StateEffect> {
+        let mut all_effects = Vec::new();
+        for market in self.labour_markets.values_mut() {
+            all_effects.extend(market.clear_and_match(state));
+        }
+        all_effects
+    }
     pub fn goods_market(&self, good_id: &GoodId) -> Option<&GoodsMarket> {
         self.goods_markets.get(good_id)
     }
@@ -840,6 +846,56 @@ pub struct LabourMarket {
     pub job_applications: Vec<JobApplication>,
 }
 
+impl LabourMarket {
+    pub fn clear_and_match(&mut self, state: &SimState) -> Vec<StateEffect> {
+        let mut effects = Vec::new();
+
+        self.job_applications
+            .sort_by(|a, b| a.reservation_wage.partial_cmp(&b.reservation_wage).unwrap_or(std::cmp::Ordering::Equal));
+        self.job_offers.sort_by(|a, b| b.wage_rate.partial_cmp(&a.wage_rate).unwrap_or(std::cmp::Ordering::Equal));
+
+        let mut filled_application_ids = Vec::new();
+
+        let mut offers = self.job_offers.clone();
+
+        for application in &self.job_applications {
+            if state.agents.consumers.get(&application.consumer_id).map_or(true, |c| c.employed_by.is_some()) {
+                continue;
+            }
+
+            for offer in offers.iter_mut() {
+                if offer.quantity > 0 && offer.wage_rate >= application.reservation_wage {
+                    let contract = EmploymentContract {
+                        employee_id: application.consumer_id,
+                        wage_rate: offer.wage_rate,
+                        hours: application.hours_desired.min(offer.hours_required),
+                        start_date: state.current_date,
+                    };
+
+                    effects.push(StateEffect::Agent(AgentEffect::EstablishEmployment {
+                        firm_id: offer.firm_id,
+                        consumer_id: application.consumer_id,
+                        contract,
+                    }));
+
+                    offer.quantity -= 1;
+                    filled_application_ids.push(application.application_id);
+
+                    break;
+                }
+            }
+        }
+        println!("{:#?}", filled_application_ids);
+        effects.push(StateEffect::Market(MarketEffect::ClearLabourMarketOrders {
+            market_id: self.market_id.clone(),
+            filled_applications: filled_application_ids,
+        }));
+
+        self.job_offers.clear();
+
+        effects
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct MarketDepthSummary {
     pub best_bid: Option<f64>,

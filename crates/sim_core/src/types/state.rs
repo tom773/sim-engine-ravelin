@@ -34,7 +34,6 @@ impl Default for SimState {
 
 impl SimState {
     pub fn advance_time(&mut self) {
-        self.ticknum += 1;
         self.current_date = self.current_date + chrono::Duration::days(1);
     }
 
@@ -366,6 +365,7 @@ pub struct TickRecord {
     pub date: chrono::NaiveDate,
     pub actions: Vec<ActionRecord>,
     pub effects: Vec<StateEffect>,
+    pub action_to_effect_indices: HashMap<usize, Vec<usize>>, // Maps action index to effect indices
     pub trades: Vec<Trade>,
 }
 

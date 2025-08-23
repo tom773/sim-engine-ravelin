@@ -416,3 +416,43 @@ pub async fn get_market_financial_history(
         (StatusCode::CONFLICT, headers, Json(json!({ "error": err })))
     }
 }
+
+pub async fn get_market_labour_overview(
+    State(state): State<Arc<AppState>>,
+) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
+    let headers = with_epoch_header(HeaderMap::new(), state.epoch);
+    let engine_guard = state.sim_engine.read().await;
+
+    if let Some(engine) = engine_guard.as_ref() {
+        let exchange = &engine.state.financial_system.exchange;
+        let markets = exchange.labour_markets.iter().map(|(id, market)| {
+            LabourMarketSummaryDto {
+                market_id: id.to_string(),
+                name: market.name.clone(),
+                job_applications: market.job_applications.iter().map(|app| {
+                    JobApplicationDto {
+                        application_id: app.application_id.to_string(),
+                        consumer_id: app.consumer_id.to_string(),
+                        reservation_wage: app.reservation_wage,
+                        hours_desired: app.hours_desired,
+                    }
+                }).collect(),
+                job_offers: market.job_offers.iter().map(|offer| {
+                    JobOfferDto {
+                        offer_id: offer.offer_id.to_string(),
+                        firm_id: offer.firm_id.to_string(),
+                        wage_rate: offer.wage_rate,
+                        hours_required: offer.hours_required,
+                        quantity: offer.quantity,
+                    }
+                }).collect(),
+            }
+        }).collect::<Vec<_>>();
+
+        let page = LabourMarketPageDto { markets };
+        (StatusCode::OK, headers, Json(serde_json::to_value(page).unwrap()))
+    } else {
+        let err = ApiError { code: "NOT_INITIALIZED", message: "Simulation is not initialized." };
+        (StatusCode::CONFLICT, headers, Json(json!({ "error": err })))
+    }
+}
