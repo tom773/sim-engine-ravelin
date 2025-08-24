@@ -72,7 +72,9 @@ impl InstrumentDetails for SavingsDepositDetails {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CentralBankReservesDetails;
+pub struct CentralBankReservesDetails {
+    pub interest_on_overnight_reserves_bps: BasisPoints,
+}
 #[typetag::serde]
 impl InstrumentDetails for CentralBankReservesDetails {
     fn as_any(&self) -> &dyn Any {

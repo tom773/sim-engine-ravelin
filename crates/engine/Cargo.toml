@@ -12,7 +12,6 @@ path = "cli/main.rs"
 sim_core = { path = "../sim_core" }
 # Domain crates
 domains = { path = "../domains" }
-math = { path = "../math" }
 # Workspace dependencies
 serde = { workspace = true }
 serde_json.workspace = true
@@ -34,3 +33,4 @@ inventory = "0.3"
 tokio-util = "0.7.16"
 anyhow = "1.0.98"
 surrealdb = "2.3.7"
+ordered-float = "5.0.0"

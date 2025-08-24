@@ -20,54 +20,78 @@ pub struct Scenario {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ScenarioConfig {
     iterations: u32,
     treasury_tenors_to_register: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct BankConfig {
     pub id: String,
     pub name: String,
-    pub initial_reserves: f64,
-    pub initial_bonds: Vec<BondConfig>,
+    pub initial_assets: Vec<AssetConfig>,
+    pub initial_liabilities: Vec<LiabilityConfig>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct FirmConfig {
     pub id: String,
     pub name: String,
     pub bank_id: String,
     pub recipe_name: String,
-    pub initial_cash: f64,
-    pub initial_inventory: Vec<InventoryConfig>,
+    pub initial_assets: Vec<AssetConfig>,
+    pub initial_liabilities: Vec<LiabilityConfig>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ConsumerConfig {
     pub id: String,
     pub bank_id: String,
-    pub initial_cash: f64,
     pub income: f64,
+    pub initial_assets: Vec<AssetConfig>,
+    pub initial_liabilities: Vec<LiabilityConfig>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BondConfig {
-    pub tenor: String,
-    pub quantity: u32,
+#[serde(tag = "type")]
+pub enum AssetConfig {
+    Cash {
+        amount: f64,
+    },
+    Deposit {
+        bank_id: String,
+        amount: f64,
+    },
+    Reserves {
+        amount: f64,
+    },
+    Bond {
+        tenor: String,
+        quantity: u32,
+    },
+    Inventory {
+        good_slug: String,
+        quantity: f64,
+        unit_cost: f64,
+    },
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InventoryConfig {
-    pub good_slug: String,
-    pub quantity: f64,
-    pub unit_cost: f64,
+#[serde(tag = "type")]
+pub enum LiabilityConfig {
+    Deposit {
+        creditor_id: String,
+        amount: f64,
+        #[serde(default)]
+        rate_bps: Option<f64>,
+    },
+    Loan {
+        creditor_id: String,
+        amount: f64,
+        rate_bps: f64,
+        #[serde(default)]
+        maturity_days: Option<u32>,
+    },
 }
 
 impl Scenario {
@@ -92,13 +116,13 @@ impl Scenario {
 
         for consumer_conf in &self.consumers {
             let bank_id = *agent_ids.get(&consumer_conf.bank_id).expect("Bank not found for consumer");
-            let consumer = factory.create_consumer(consumer_conf, bank_id, cb_id);
+            let consumer = factory.create_consumer(consumer_conf, bank_id, cb_id, &agent_ids);
             agent_ids.insert(consumer_conf.id.clone(), consumer.id);
         }
 
         for firm_conf in &self.firms {
             let bank_id = *agent_ids.get(&firm_conf.bank_id).expect("Bank not found for firm");
-            let firm = factory.create_firm(firm_conf, bank_id, cb_id);
+            let firm = factory.create_firm(firm_conf, bank_id, cb_id, &agent_ids);
             agent_ids.insert(firm_conf.id.clone(), firm.id);
         }
 

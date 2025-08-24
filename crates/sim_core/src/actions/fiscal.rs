@@ -12,6 +12,8 @@ pub enum FiscalAction {
         government_id: AgentId,
         tenor: Tenor,
         face_value: f64,
+        quantity: u32,
+        coupon_rate: BasisPoints,
     },
     SetSpendingTarget {
         government_id: AgentId,

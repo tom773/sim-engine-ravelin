@@ -46,6 +46,7 @@ package-lock.json
 code.md
 settlement.md
 engine.md
+domain.md
 core.md
 Dockerfile.dev
 app/src/.svelte-kit/*

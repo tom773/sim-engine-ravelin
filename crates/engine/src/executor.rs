@@ -55,13 +55,14 @@ impl SimulationEngine {
         }
 
         let (trades, snapshots) = self.state.financial_system.exchange.clear_markets(self.state.ticknum as i64);
+
         self.update_market_history(&trades, &snapshots);
         self.state.financial_system.update_yield_curve(self.state.current_date);
-        let labour_effects = self.state.financial_system.exchange.clear_labour_markets(&self.state.clone()); // use clone to pass state immutably
+        let labour_effects = self.state.financial_system.exchange.clear_labour_markets(&self.state.clone());
         if let Err(e) = self.state.apply_effects(&labour_effects) {
             println!("[ERROR] applying labour market effects: {}", e);
         }
-        let settlement_effects = self.settle_trades(&trades);
+        let settlement_effects = self.settle_trades(trades.clone());
         if let Err(e) = self.state.apply_effects(&settlement_effects) {
             println!("[ERROR] applying settlement effects: {}", e);
         }
@@ -142,7 +143,7 @@ impl SimulationEngine {
             .await?;
 
         if self.state.ticknum % 100 == 0 {
-            writer.cleanup_old_data(1000).await?; // Keep last 1000 ticks
+            writer.cleanup_old_data(1000).await?;
         }
 
         Ok(())
@@ -245,10 +246,11 @@ impl SimulationEngine {
         (action_records, action_to_effect_indices, all_effects)
     }
 
-    fn settle_trades(&self, trades: &[Trade]) -> Vec<StateEffect> {
+    fn settle_trades(&self, trades: Vec<Trade>) -> Vec<StateEffect> {
         let mut all_effects = Vec::new();
         for trade in trades {
-            let settlement_effects = self.create_settlement_effects(trade);
+            println!("[INFO] Settling trade: {:?}", trade);
+            let settlement_effects = self.create_settlement_effects(&trade);
             all_effects.extend(settlement_effects);
             all_effects.push(StateEffect::Market(MarketEffect::ExecuteTrade(trade.clone())));
         }
@@ -274,25 +276,54 @@ impl SimulationEngine {
                 }));
             }
             MarketId::Financial(FinancialMarketId::Treasury { tenor }) => {
-                if let Some(seller_bs) = self.state.financial_system.get_bs_by_id(&trade.seller) {
-                    for (inst_id, inst) in &seller_bs.assets {
-                        if let Some(bond_details) = inst.details.as_any().downcast_ref::<BondDetails>() {
-                            if bond_details.bond_type == BondType::Government
-                                && bond_details.tenor == *tenor
-                                && bond_details.quantity >= trade.quantity as u64
-                            {
-                                effects.push(StateEffect::Financial(FinancialEffect::SplitAndTransferInstrument {
-                                    id: *inst_id,
-                                    buyer: trade.buyer,
-                                    quantity: trade.quantity as u64,
-                                }));
-                                let total_payment = trade.price * trade.quantity;
-                                effects.extend(self.create_payment_transfer_effects(
-                                    trade.buyer,
-                                    trade.seller,
-                                    total_payment,
-                                ));
-                                break;
+                if trade.seller == self.state.financial_system.government.id {
+                    let total_cost = trade.price * trade.quantity;
+                    effects.extend(self.create_payment_transfer_effects(trade.buyer, trade.seller, total_cost));
+                    const FACE_VALUE: f64 = 1000.0;
+                    let coupon_rate = self.state.financial_system.central_bank.policy_rate_bps;
+                    let maturity_date = tenor.add_to_date(self.state.current_date);
+
+                    let principal = total_cost;
+
+                    let mut new_bond = bond!(
+                        trade.buyer,
+                        trade.seller,
+                        principal,
+                        coupon_rate,
+                        maturity_date,
+                        FACE_VALUE,
+                        BondType::Government,
+                        2,
+                        *tenor,
+                        self.state.current_date
+                    );
+
+                    if let Some(details) = new_bond.details.as_any_mut().downcast_mut::<BondDetails>() {
+                        details.quantity = trade.quantity as u64;
+                    }
+
+                    effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(new_bond)));
+                } else {
+                    if let Some(seller_bs) = self.state.financial_system.get_bs_by_id(&trade.seller) {
+                        for (inst_id, inst) in &seller_bs.assets {
+                            if let Some(bond_details) = inst.details.as_any().downcast_ref::<BondDetails>() {
+                                if bond_details.bond_type == BondType::Government
+                                    && bond_details.tenor == *tenor
+                                    && bond_details.quantity >= trade.quantity as u64
+                                {
+                                    effects.push(StateEffect::Financial(FinancialEffect::SplitAndTransferInstrument {
+                                        id: *inst_id,
+                                        buyer: trade.buyer,
+                                        quantity: trade.quantity as u64,
+                                    }));
+                                    let total_payment = trade.price * trade.quantity;
+                                    effects.extend(self.create_payment_transfer_effects(
+                                        trade.buyer,
+                                        trade.seller,
+                                        total_payment,
+                                    ));
+                                    break;
+                                }
                             }
                         }
                     }
@@ -383,7 +414,8 @@ impl SimulationEngine {
             to,
             cb_id,
             amount,
-            self.state.current_date
+            self.state.current_date,
+            self.state.financial_system.central_bank.policy_rate_bps + 15.0
         ))));
         effects
     }
@@ -418,7 +450,8 @@ impl SimulationEngine {
                         to,
                         cb_id,
                         amount_from_cash,
-                        self.state.current_date
+                        self.state.current_date,
+                        self.state.financial_system.central_bank.policy_rate_bps + 15.0
                     ))));
                 } else {
                     effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(cash!(
@@ -474,7 +507,8 @@ impl SimulationEngine {
                         payee_bank_id,
                         cb_id,
                         amount_remaining_for_deposit,
-                        self.state.current_date
+                        self.state.current_date,
+                        self.state.financial_system.central_bank.policy_rate_bps + 15.0
                     ))));
 
                     if !self.state.agents.banks.contains_key(&to) && payee_bank_id != AgentId::default() {
@@ -560,6 +594,77 @@ impl SimulationEngine {
         } else {
             ("Unknown".to_string(), None)
         }
+    }
+    pub fn debug_market_state(&self) {
+        println!("\n=== MARKET DEBUG STATE ===");
+
+        // Debug Treasury markets
+        for (market_id, market) in &self.state.financial_system.exchange.financial_markets {
+            if let FinancialMarketId::Treasury { tenor } = market_id {
+                println!("\n--- Treasury Market {:?} ---", tenor);
+                println!("Bids ({}): ", market.order_book.bids.len());
+                for (i, bid) in market.order_book.bids.iter().enumerate() {
+                    println!("  Bid {}: Agent {} - {} @ {:.2}", i, bid.agent_id, bid.quantity, bid.price);
+                }
+                println!("Asks ({}): ", market.order_book.asks.len());
+                for (i, ask) in market.order_book.asks.iter().enumerate() {
+                    println!("  Ask {}: Agent {} - {} @ {:.2}", i, ask.agent_id, ask.quantity, ask.price);
+                }
+
+                if let (Some(best_bid), Some(best_ask)) = (market.order_book.best_bid(), market.order_book.best_ask()) {
+                    println!(
+                        "  Best Bid: {:.2}, Best Ask: {:.2}, Spread: {:.2}",
+                        best_bid.price,
+                        best_ask.price,
+                        best_ask.price - best_bid.price
+                    );
+                } else {
+                    println!("  No best bid/ask available");
+                }
+            }
+        }
+
+        // Debug government balance sheet
+        let gov_id = self.state.financial_system.government.id;
+        if let Some(gov_bs) = self.state.financial_system.get_bs_by_id(&gov_id) {
+            println!("\n--- Government Balance Sheet ---");
+            println!("Liquid Assets: {:.2}", gov_bs.liquid_assets());
+            println!("Total Assets: {:.2}", gov_bs.total_assets());
+            println!("Total Liabilities: {:.2}", gov_bs.total_liabilities());
+            println!("Net Worth: {:.2}", gov_bs.net_worth());
+        }
+
+        println!("=== END MARKET DEBUG ===\n");
+    }
+
+    // Call this method after applying effects but before clearing markets
+    pub fn debug_effects_application(&self, effects: &[StateEffect]) {
+        println!("\n=== EFFECTS DEBUG ===");
+        for (i, effect) in effects.iter().enumerate() {
+            match effect {
+                StateEffect::Market(MarketEffect::PlaceOrderInBook { market_id, order }) => match order {
+                    Order::Ask(ask) => {
+                        println!(
+                            "Effect {}: Placing ASK - Agent {} selling {} @ {:.2} in {:?}",
+                            i, ask.agent_id, ask.quantity, ask.price, market_id
+                        );
+                    }
+                    Order::Bid(bid) => {
+                        println!(
+                            "Effect {}: Placing BID - Agent {} buying {} @ {:.2} in {:?}",
+                            i, bid.agent_id, bid.quantity, bid.price, market_id
+                        );
+                    }
+                },
+                StateEffect::Financial(fin_effect) => {
+                    println!("Effect {}: Financial - {}", i, fin_effect.name());
+                }
+                _ => {
+                    println!("Effect {}: {}", i, effect.name());
+                }
+            }
+        }
+        println!("=== END EFFECTS DEBUG ===\n");
     }
 }
 
