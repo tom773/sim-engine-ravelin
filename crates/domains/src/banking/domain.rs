@@ -2,9 +2,15 @@ use serde::{Deserialize, Serialize};
 use sim_core::*;
 use sim_macros::SimDomain;
 
-// The SimDomain derive macro is added here. It will auto-generate the `impl Domain for BankingDomain` block.
 #[derive(Clone, Debug, Serialize, Deserialize, SimDomain)]
 pub struct BankingDomain {}
+
+#[derive(Debug, Clone)]
+pub struct BankingResult {
+    pub success: bool,
+    pub effects: Vec<StateEffect>,
+    pub errors: Vec<String>,
+}
 
 impl BankingDomain {
     pub fn new() -> Self {
@@ -12,65 +18,47 @@ impl BankingDomain {
     }
 
     pub fn execute(&self, action: &BankingAction, state: &SimState) -> BankingResult {
-        if let Err(error) = self.validate(action, state) {
+        if let Err(error) = self.basic_validate(action, state) {
             return BankingResult { success: false, effects: vec![], errors: vec![error] };
         }
 
         match action {
-            BankingAction::Deposit { agent_id, bank, amount } => self.execute_deposit(*agent_id, *bank, *amount, state),
-            BankingAction::Withdraw { agent_id, bank, amount } => {
-                self.execute_withdraw(*agent_id, *bank, *amount, state)
-            }
-            BankingAction::Transfer { from, to, amount } => self.execute_transfer(*from, *to, *amount, state),
+            BankingAction::Deposit { agent_id, bank, amount } => self.execute_deposit(*agent_id, *bank, *amount),
+            BankingAction::Withdraw { agent_id, bank, amount } => self.execute_withdraw(*agent_id, *bank, *amount),
+            BankingAction::Transfer { from, to, amount } => self.execute_transfer(*from, *to, *amount),
             BankingAction::PayWages { agent_id, employee, amount } => {
-                self.execute_transfer(*agent_id, *employee, *amount, state)
+                self.execute_pay_wages(*agent_id, *employee, *amount)
             }
-            BankingAction::UpdateReserves { bank, amount_change } => {
-                self.execute_update_reserves(*bank, *amount_change, state)
+            BankingAction::UpdateReserves { bank: _, amount_change: _ } => {
+                BankingResult {
+                    success: false,
+                    effects: vec![],
+                    errors: vec!["Reserve updates not yet implemented with semantic effects".to_string()],
+                }
             }
             BankingAction::InjectLiquidity => self.execute_inject_liquidity(state),
         }
     }
 
-    pub fn validate(&self, action: &BankingAction, state: &SimState) -> Result<(), String> {
+    fn basic_validate(&self, action: &BankingAction, state: &SimState) -> Result<(), String> {
         match action {
-            BankingAction::Deposit { agent_id, bank, amount } => {
-                self.validate_deposit(*agent_id, *bank, *amount, state)
+            BankingAction::Deposit { agent_id, bank, amount }
+            | BankingAction::Withdraw { agent_id , bank, amount } => {
+                Validator::positive_amount(*amount)?;
+                self.validate_agent_exists(*agent_id, state)?;
+                self.validate_bank_exists(*bank, state)?;
+                Ok(())
             }
-            BankingAction::Withdraw { agent_id, bank, amount } => {
-                self.validate_withdraw(*agent_id, *bank, *amount, state)
+            BankingAction::Transfer { from, to, amount }
+            | BankingAction::PayWages { agent_id: from, employee: to, amount } => {
+                Validator::positive_amount(*amount)?;
+                self.validate_agent_exists(*from, state)?;
+                self.validate_agent_exists(*to, state)?;
+                Ok(())
             }
-            BankingAction::Transfer { from, to, amount } => self.validate_transfer(*from, *to, *amount, state),
-            BankingAction::PayWages { agent_id, employee, amount } => {
-                self.validate_transfer(*agent_id, *employee, *amount, state)
-            }
-            BankingAction::UpdateReserves { bank, .. } => self.validate_bank_exists(*bank, state),
+            BankingAction::UpdateReserves { bank, amount_change: _ } => self.validate_bank_exists(*bank, state),
             BankingAction::InjectLiquidity => Ok(()),
         }
-    }
-
-    fn validate_deposit(&self, depositor: AgentId, bank: AgentId, amount: f64, state: &SimState) -> Result<(), String> {
-        Validator::positive_amount(amount)?;
-        self.validate_agent_exists(depositor, state)?;
-        self.validate_bank_exists(bank, state)?;
-        self.validate_sufficient_cash(depositor, amount, state)
-    }
-
-    fn validate_withdraw(
-        &self, account_holder: AgentId, bank: AgentId, amount: f64, state: &SimState,
-    ) -> Result<(), String> {
-        Validator::positive_amount(amount)?;
-        self.validate_agent_exists(account_holder, state)?;
-        self.validate_bank_exists(bank, state)?;
-        self.validate_sufficient_deposits(account_holder, bank, amount, state)?;
-        self.validate_bank_liquidity(bank, amount, state)
-    }
-
-    pub fn validate_transfer(&self, from: AgentId, to: AgentId, amount: f64, state: &SimState) -> Result<(), String> {
-        Validator::positive_amount(amount)?;
-        self.validate_agent_exists(from, state)?;
-        self.validate_agent_exists(to, state)?;
-        self.validate_sufficient_liquid_assets(from, amount, state)
     }
 
     fn validate_agent_exists(&self, agent_id: AgentId, state: &SimState) -> Result<(), String> {
@@ -89,261 +77,31 @@ impl BankingDomain {
         }
     }
 
-    fn validate_sufficient_cash(&self, agent_id: AgentId, amount: f64, state: &SimState) -> Result<(), String> {
-        let cash = state.financial_system.get_cash_assets(&agent_id);
-        if cash >= amount {
-            Ok(())
-        } else {
-            Err(format!("Insufficient cash for agent {}: have ${:.2}, need ${:.2}", agent_id, cash, amount))
-        }
+    pub fn execute_deposit(&self, depositor: AgentId, bank: AgentId, amount: f64) -> BankingResult {
+        let effect = StateEffect::Financial(FinancialEffect::DepositFunds { depositor, bank, amount });
+        BankingResult { success: true, effects: vec![effect], errors: vec![] }
     }
 
-    fn validate_sufficient_deposits(
-        &self, account_holder: AgentId, bank: AgentId, amount: f64, state: &SimState,
-    ) -> Result<(), String> {
-        let deposits = state.financial_system.get_deposits_at_bank(&account_holder, &bank);
-        if deposits >= amount {
-            Ok(())
-        } else {
-            Err(format!(
-                "Insufficient deposits for agent {}: have ${:.2}, need ${:.2}",
-                account_holder, deposits, amount
-            ))
-        }
-    }
-    fn validate_sufficient_liquid_assets(
-        &self, agent_id: AgentId, amount: f64, state: &SimState,
-    ) -> Result<(), String> {
-        let liquid_assets = state.financial_system.get_liquid_assets(&agent_id);
-        if liquid_assets >= amount {
-            Ok(())
-        } else {
-            Err(format!(
-                "Insufficient liquid assets for agent {}: have ${:.2}, need ${:.2}",
-                agent_id, liquid_assets, amount
-            ))
-        }
-    }
-    fn validate_bank_liquidity(&self, bank: AgentId, amount: f64, state: &SimState) -> Result<(), String> {
-        let liquidity = state.financial_system.get_liquid_assets(&bank);
-        if liquidity >= amount {
-            Ok(())
-        } else {
-            Err(format!("Insufficient bank liquidity for {}: have ${:.2}, need ${:.2}", bank, liquidity, amount))
-        }
-    }
-    pub fn execute_deposit(&self, depositor: AgentId, bank: AgentId, amount: f64, state: &SimState) -> BankingResult {
-        let mut effects = vec![];
-        let cb_id = state.financial_system.central_bank.id;
-
-        // 1) Create the deposit liability for the bank (asset for depositor).
-        let bank_spread_bps = state.agents.get_bank(&bank).map(|b| b.deposit_spread_bps).unwrap_or(-50.0);
-        let policy_rate_bps = state.financial_system.central_bank.policy_rate_bps;
-        let deposit_rate_bps = (policy_rate_bps + bank_spread_bps).max(0.0);
-        let deposit = deposit!(depositor, bank, amount, deposit_rate_bps, state.current_date);
-        effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(deposit)));
-
-        // 2) Debit depositor CASH and credit the bank's RESERVES (no generic transfer).
-        if let Some(from_bs) = state.financial_system.get_bs_by_id(&depositor) {
-            if let Some((cash_id, cash_inst)) =
-                from_bs.assets.iter().find(|(_, i)| i.details.as_any().is::<CashDetails>()).map(|(id, i)| (*id, i))
-            {
-                let new_cash = (cash_inst.principal - amount).max(0.0);
-                if new_cash < 1e-6 {
-                    effects.push(StateEffect::Financial(FinancialEffect::RemoveInstrument(cash_id)));
-                } else {
-                    effects.push(StateEffect::Financial(FinancialEffect::UpdateInstrument { id: cash_id, new_principal: new_cash }));
-                }
-            }
-        }
-        // Bank gets reserves (will consolidate if already present).
-        effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(reserves!(
-            bank,
-            cb_id,
-            amount,
-            state.current_date
-        ))));
-
-        BankingResult { success: true, effects, errors: vec![] }
+    pub fn execute_withdraw(&self, account_holder: AgentId, bank: AgentId, amount: f64) -> BankingResult {
+        let effect = StateEffect::Financial(FinancialEffect::WithdrawFunds { account_holder, bank, amount });
+        BankingResult { success: true, effects: vec![effect], errors: vec![] }
     }
 
-    pub fn execute_withdraw(
-        &self, account_holder: AgentId, bank: AgentId, amount: f64, state: &SimState,
-    ) -> BankingResult {
-        let mut effects = vec![];
-
-        if let Some((deposit_id, deposit)) = state.financial_system.get_bs_by_id(&account_holder).and_then(|bs| {
-            bs.assets.iter().find(|(_, inst)| inst.debtor == bank && inst.details.as_any().is::<DemandDepositDetails>())
-        }) {
-            let new_principal = deposit.principal - amount;
-            if new_principal < 1e-6 {
-                effects.push(StateEffect::Financial(FinancialEffect::RemoveInstrument(*deposit_id)));
-            } else {
-                effects
-                    .push(StateEffect::Financial(FinancialEffect::UpdateInstrument { id: *deposit_id, new_principal }));
-            }
-
-            let transfer_effects = self.create_transfer_effects(bank, account_holder, amount, state);
-            effects.extend(transfer_effects);
-        }
-
-        BankingResult { success: !effects.is_empty(), effects, errors: vec![] }
+    pub fn execute_transfer(&self, from: AgentId, to: AgentId, amount: f64) -> BankingResult {
+        let effect = StateEffect::Financial(FinancialEffect::TransferFunds { from, to, amount });
+        BankingResult { success: true, effects: vec![effect], errors: vec![] }
     }
 
-    pub fn execute_transfer(&self, from: AgentId, to: AgentId, amount: f64, state: &SimState) -> BankingResult {
-        let effects = self.create_transfer_effects(from, to, amount, state);
-        BankingResult { success: !effects.is_empty(), effects, errors: vec![] }
-    }
-
-    pub fn execute_update_reserves(&self, _bank: AgentId, _amount_change: f64, _state: &SimState) -> BankingResult {
-        BankingResult {
-            success: false,
-            effects: vec![],
-            errors: vec!["Reserve update not yet implemented".to_string()],
-        }
+    pub fn execute_pay_wages(&self, employer: AgentId, employee: AgentId, amount: f64) -> BankingResult {
+        let effect = StateEffect::Financial(FinancialEffect::PayWages { employer, employee, amount });
+        BankingResult { success: true, effects: vec![effect], errors: vec![] }
     }
 
     pub fn execute_inject_liquidity(&self, state: &SimState) -> BankingResult {
-        let effects: Vec<StateEffect> = state
-            .agents
-            .consumers
-            .iter()
-            .map(|consumer| {
-                let cash = cash!(*consumer.0, 1000.0, state.financial_system.central_bank.id, state.current_date);
-                StateEffect::Financial(FinancialEffect::CreateInstrument(cash))
-            })
-            .collect();
+        let recipients: Vec<AgentId> = state.agents.consumers.keys().cloned().collect();
+        let amount_per_recipient = 1000.0;
 
-        BankingResult { success: true, effects, errors: vec![] }
+        let effect = StateEffect::Financial(FinancialEffect::InjectLiquidity { recipients, amount_per_recipient });
+        BankingResult { success: true, effects: vec![effect], errors: vec![] }
     }
-
-    fn create_transfer_effects(&self, from: AgentId, to: AgentId, amount: f64, state: &SimState) -> Vec<StateEffect> {
-        let mut effects = vec![];
-        let cb_id = state.financial_system.central_bank.id;
-        let from_bs = match state.financial_system.get_bs_by_id(&from) {
-            Some(bs) => bs,
-            None => return vec![], // Should be caught by validation
-        };
-
-        let (cash_id, cash_on_hand) = from_bs
-            .assets
-            .iter()
-            .find(|(_, inst)| inst.details.as_any().is::<CashDetails>())
-            .map(|(id, inst)| (Some(*id), inst.principal))
-            .unwrap_or((None, 0.0));
-
-        let amount_from_cash = cash_on_hand.min(amount);
-        let amount_remaining_for_deposit = amount - amount_from_cash;
-
-        if amount_from_cash > 1e-6 {
-            if let Some(id) = cash_id {
-                let new_principal = cash_on_hand - amount_from_cash;
-                if new_principal < 1e-6 {
-                    effects.push(StateEffect::Financial(FinancialEffect::RemoveInstrument(id)));
-                } else {
-                    effects.push(StateEffect::Financial(FinancialEffect::UpdateInstrument { id, new_principal }));
-                }
-                // Cash transfer:
-                if state.agents.banks.contains_key(&to) {
-                    // Paying a BANK with cash increases its reserves, not cash-on-hand.
-                    effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(reserves!(
-                        to,
-                        cb_id,
-                        amount_from_cash,
-                        state.current_date
-                    ))));
-                } else {
-                    // Paying a non-bank with cash -> they receive cash.
-                    effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(cash!(
-                        to,
-                        amount_from_cash,
-                        cb_id,
-                        state.current_date
-                    ))));
-                }
-            }
-        }
-
-        if amount_remaining_for_deposit > 1e-6 {
-            if let Some((dep_id, dep_inst)) =
-                from_bs.assets.iter().find(|(_, inst)| inst.details.as_any().is::<DemandDepositDetails>())
-            {
-                let payer_bank_id = dep_inst.debtor;
-                let new_deposit_principal = dep_inst.principal - amount_remaining_for_deposit;
-
-                if new_deposit_principal < 1e-6 {
-                    effects.push(StateEffect::Financial(FinancialEffect::RemoveInstrument(*dep_id)));
-                } else {
-                    effects.push(StateEffect::Financial(FinancialEffect::UpdateInstrument {
-                        id: *dep_id,
-                        new_principal: new_deposit_principal,
-                    }));
-                }
-
-                // 1) Reserves move: payer bank -> payee bank
-                if let Some((res_id, res_inst)) = state.financial_system.get_bs_by_id(&payer_bank_id).and_then(|bs| {
-                    bs.assets.iter().find(|(_, i)| i.details.as_any().is::<CentralBankReservesDetails>())
-                }) {
-                    let new_reserves = res_inst.principal - amount_remaining_for_deposit;
-                    if new_reserves < 1e-6 {
-                        effects.push(StateEffect::Financial(FinancialEffect::RemoveInstrument(*res_id)));
-                    } else {
-                        effects.push(StateEffect::Financial(FinancialEffect::UpdateInstrument {
-                            id: *res_id,
-                            new_principal: new_reserves,
-                        }));
-                    }
-                }
-                // Credit payee bank reserves by same amount.
-                // Determine the payee's bank: if `to` is a bank, it's itself; if consumer/firm, use their bank_id.
-                let payee_bank_id = if state.agents.banks.contains_key(&to) {
-                    to
-                } else if let Some(c) = state.agents.get_consumer(&to) {
-                    c.bank_id
-                } else if let Some(f) = state.agents.get_firm(&to) {
-                    f.bank_id
-                } else {
-                    // Fallback: if unknown, treat as cash
-                    AgentId::default()
-                };
-                if payee_bank_id != AgentId::default() {
-                    effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(reserves!(
-                        payee_bank_id,
-                        cb_id,
-                        amount_remaining_for_deposit,
-                        state.current_date
-                    ))));
-                }
-                // 2) Credit a DEPOSIT to the payee only if the payee is NOT a bank (banks shouldn't hold demand deposits on themselves).
-                if !state.agents.banks.contains_key(&to) && payee_bank_id != AgentId::default() {
-                    let bank_spread_bps = state.agents.get_bank(&payee_bank_id).map(|b| b.deposit_spread_bps).unwrap_or(-50.0);
-                    let policy_rate_bps = state.financial_system.central_bank.policy_rate_bps;
-                    let dep_rate_bps = (policy_rate_bps + bank_spread_bps).max(0.0);
-                    effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(deposit!(
-                        to,
-                        payee_bank_id,
-                        amount_remaining_for_deposit,
-                        dep_rate_bps,
-                        state.current_date
-                    ))));
-                } else if payee_bank_id == AgentId::default() {
-                    // Could not resolve a bank — fallback to cash
-                    effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(cash!(
-                        to,
-                        amount_remaining_for_deposit,
-                        cb_id,
-                        state.current_date
-                    ))));
-                }
-            }
-        }
-        effects
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct BankingResult {
-    pub success: bool,
-    pub effects: Vec<StateEffect>,
-    pub errors: Vec<String>,
 }

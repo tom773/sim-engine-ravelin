@@ -5,11 +5,10 @@ use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
 };
-use serde::Deserialize;
+use serde::{Deserialize};
 use serde_json::json;
 use sim_core::*;
 use std::sync::Arc;
-use sim_core::traits::MarketSummaryProvider;
 
 pub async fn get_markets_overview(State(state): State<Arc<AppState>>) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
     let headers = with_epoch_header(HeaderMap::new(), state.epoch);
@@ -451,6 +450,26 @@ pub async fn get_market_labour_overview(
 
         let page = LabourMarketPageDto { markets };
         (StatusCode::OK, headers, Json(serde_json::to_value(page).unwrap()))
+    } else {
+        let err = ApiError { code: "NOT_INITIALIZED", message: "Simulation is not initialized." };
+        (StatusCode::CONFLICT, headers, Json(json!({ "error": err })))
+    }
+}
+
+pub async fn get_goods_id_map(
+    State(state): State<Arc<AppState>>,
+) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
+    let headers = with_epoch_header(HeaderMap::new(), state.epoch);
+    let engine_guard = state.sim_engine.read().await;
+    let mut map_items: Vec<(String, &str)> = Vec::new();
+
+    if let Some(engine) = engine_guard.as_ref() {
+
+        let _ = engine.state.financial_system.goods.goods.iter()
+            .map(|(id, good)| { 
+                map_items.push((id.to_string(), good.name.as_str()));
+            });
+        (StatusCode::OK, headers, Json(serde_json::to_value(map_items).unwrap()))
     } else {
         let err = ApiError { code: "NOT_INITIALIZED", message: "Simulation is not initialized." };
         (StatusCode::CONFLICT, headers, Json(json!({ "error": err })))

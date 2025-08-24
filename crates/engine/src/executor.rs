@@ -383,7 +383,8 @@ impl SimulationEngine {
             to,
             cb_id,
             amount,
-            self.state.current_date
+            self.state.current_date,
+            self.state.financial_system.central_bank.policy_rate_bps+15.0
         ))));
         effects
     }
@@ -418,7 +419,8 @@ impl SimulationEngine {
                         to,
                         cb_id,
                         amount_from_cash,
-                        self.state.current_date
+                        self.state.current_date,
+                        self.state.financial_system.central_bank.policy_rate_bps+15.0
                     ))));
                 } else {
                     effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(cash!(
@@ -474,7 +476,8 @@ impl SimulationEngine {
                         payee_bank_id,
                         cb_id,
                         amount_remaining_for_deposit,
-                        self.state.current_date
+                        self.state.current_date,
+                        self.state.financial_system.central_bank.policy_rate_bps+15.0
                     ))));
 
                     if !self.state.agents.banks.contains_key(&to) && payee_bank_id != AgentId::default() {

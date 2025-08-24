@@ -78,13 +78,15 @@ macro_rules! bond {
 }
 #[macro_export]
 macro_rules! reserves {
-    ($bank:expr, $cb_id:expr, $amount:expr, $originated:expr) => {
+    ($bank:expr, $cb_id:expr, $amount:expr, $originated:expr, $iorb:expr) => {
         $crate::FinancialInstrument {
             id: $crate::InstrumentId(uuid::Uuid::new_v4()),
             creditor: $bank,
             debtor: $cb_id,
             principal: $amount,
-            details: Box::new($crate::CentralBankReservesDetails),
+            details: Box::new($crate::CentralBankReservesDetails{
+                interest_on_overnight_reserves_bps: $iorb,
+            }),
             originated_date: $originated,
             accrued_interest: 0.0,
             last_accrual_date: $originated,

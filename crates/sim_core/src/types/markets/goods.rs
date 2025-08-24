@@ -184,5 +184,5 @@ impl GoodsRegistry {
 }
 
 pub static CATALOGUE: Lazy<GoodsRegistry> = Lazy::new(|| {
-    GoodsRegistry::from_toml(include_str!("../../../../config/goods.toml")).expect("failed to parse goods catalogue")
+    GoodsRegistry::from_toml(include_str!("../../../../../config/goods.toml")).expect("failed to parse goods catalogue")
 });

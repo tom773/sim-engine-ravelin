@@ -78,19 +78,6 @@ impl BalanceSheet {
     }
 }
 
-pub trait BalanceSheetQuery {
-    fn get_bs_by_id(&self, agent_id: &AgentId) -> Option<&BalanceSheet>;
-    fn get_bs_mut_by_id(&mut self, agent_id: &AgentId) -> Option<&mut BalanceSheet>;
-    fn get_total_assets(&self, agent_id: &AgentId) -> f64;
-    fn get_total_liabilities(&self, agent_id: &AgentId) -> f64;
-    fn get_liquid_assets(&self, agent_id: &AgentId) -> f64;
-    fn get_deposits_at_bank(&self, agent_id: &AgentId, bank_id: &AgentId) -> f64;
-    fn get_total_deposits(&self, agent_id: &AgentId) -> f64;
-    fn get_cash_assets(&self, agent_id: &AgentId) -> f64;
-    fn liquidity(&self, agent_id: &AgentId) -> f64;
-    fn get_bank_reserves(&self, agent_id: &AgentId) -> Option<f64>;
-}
-
 pub trait InventoryQuery {
     fn update_inventory_market_value(&mut self);
     fn get_or_create_inventory_mut(&mut self) -> &mut HashMap<GoodId, InventoryItem>;

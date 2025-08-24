@@ -1,9 +1,4 @@
-use crate::{
-    AppState, 
-    dto::*, 
-    market_routes::*,
-    sim_history_routes::*,
-};
+use crate::{AppState, dto::*, market_routes::*, sim_history_routes::*};
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
@@ -17,7 +12,6 @@ use sim_core::*;
 use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
-use sim_core::traits::{EconomicAnalytics, FinancialStatistics};
 
 #[derive(Serialize)]
 pub struct Health {
@@ -318,8 +312,7 @@ pub async fn query_stats(State(state): State<Arc<AppState>>) -> (StatusCode, Hea
 }
 
 pub async fn get_agent_balance_sheet(
-    Path(agent_id): Path<AgentId>, 
-    State(state): State<Arc<AppState>>,
+    Path(agent_id): Path<AgentId>, State(state): State<Arc<AppState>>,
 ) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
     let headers = with_epoch_header(HeaderMap::new(), state.epoch);
     let guard = state.sim_engine.read().await;
@@ -328,14 +321,15 @@ pub async fn get_agent_balance_sheet(
             return (StatusCode::NOT_FOUND, headers, Json(json!({ "error": "Agent not found" })));
         }
         if let Some(bs) = engine.state.financial_system.get_bs_by_id(&agent_id) {
-            let balance_sheet = BalanceSheetSummary {
-                assets: bs.total_assets(),
-                liabilities: bs.total_liabilities(),
-                equity: bs.net_worth(),
-            };
-            (StatusCode::OK, headers, Json(serde_json::to_value(balance_sheet).unwrap()))
+            #[derive(Serialize)]
+            struct BalanceSheetResponse<'a> {
+                agent_id: &'a AgentId,
+                balance_sheet: &'a BalanceSheet,
+            }
+            let bs_dto = BalanceSheetResponse { agent_id: &agent_id, balance_sheet: bs };
+            (StatusCode::OK, headers, Json(serde_json::to_value(bs_dto).unwrap()))
         } else {
-            (StatusCode::NOT_FOUND, headers, Json(json!({ "error": "Balance sheet not found" })))
+            (StatusCode::OK, headers, Json(json!({ "message": "No balance sheet found for the agent" })))
         }
     } else {
         let err = ApiError { code: "NOT_INITIALIZED", message: "Simulation is not initialized." };
@@ -348,13 +342,19 @@ pub async fn get_employment_contracts(
     let headers = with_epoch_header(HeaderMap::new(), state.epoch);
     let guard = state.sim_engine.read().await;
     if let Some(engine) = guard.as_ref() {
-        let contracts: Vec<EmploymentContractDto> = engine.state.agents.firms.values()
-            .flat_map(|firm| firm.employees.iter().map(|emp| EmploymentContractDto {
-                employee_id: emp.0.to_string(),
-                firm_id: firm.id.to_string(),
-                wage_rate: emp.1.wage_rate,
-                hours: emp.1.hours,
-            }))
+        let contracts: Vec<EmploymentContractDto> = engine
+            .state
+            .agents
+            .firms
+            .values()
+            .flat_map(|firm| {
+                firm.employees.iter().map(|emp| EmploymentContractDto {
+                    employee_id: emp.0.to_string(),
+                    firm_id: firm.id.to_string(),
+                    wage_rate: emp.1.wage_rate,
+                    hours: emp.1.hours,
+                })
+            })
             .collect();
         (StatusCode::OK, headers, Json(serde_json::to_value(contracts).unwrap()))
     } else {
@@ -374,21 +374,17 @@ pub fn http_router(state: Arc<AppState>) -> Router {
         .route("/sim/analysis/effects", get(get_effects_history))
         .route("/sim/analysis/a2e/{tick_number}", get(get_actions_to_effects))
         .route("/sim/analysis/tick/{tick_number}", get(get_tick_details))
-
         .route("/agents/{agent_type}", get(get_agents))
         .route("/agents/{agent_type}/summary", get(get_agents_summary))
         .route("/agents/{agent_id}/balance_sheet", get(get_agent_balance_sheet))
         .route("/api/markets/overview", get(get_markets_overview))
-        
         .route("/api/markets/goods/cat", get(get_goods_catalogue))
         .route("/api/markets/goods/overview", get(get_market_goods_overview))
         .route("/api/markets/goods/{good_id}/orderbook", get(get_market_goods_orderbook))
         .route("/api/markets/goods/{good_id}/history", get(get_market_goods_history))
-        
         .route("/api/markets/financial/overview", get(get_market_financial_overview))
         .route("/api/markets/financial/{instrument_id}/orderbook", get(get_market_financial_orderbook))
         .route("/api/markets/financial/{instrument_id}/history", get(get_market_financial_history))
-
         .route("/api/markets/labour/overview", get(get_market_labour_overview))
         .route("/api/markets/labour/contracts", get(get_employment_contracts))
         .with_state(state)
