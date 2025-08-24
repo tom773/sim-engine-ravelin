@@ -362,6 +362,28 @@ pub async fn get_employment_contracts(
         (StatusCode::CONFLICT, headers, Json(json!({ "error": err })))
     }
 }
+pub async fn get_non_agent_balance_sheets(
+    State(state): State<Arc<AppState>>,
+) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
+    let headers = with_epoch_header(HeaderMap::new(), state.epoch);
+    let guard = state.sim_engine.read().await;
+    if let Some(engine) = guard.as_ref() {
+        let central_bank_bs = engine.state.financial_system.get_bs_by_id(&engine.state.financial_system.central_bank.id);
+        let government_bs = engine.state.financial_system.get_bs_by_id(&engine.state.financial_system.government.id);
+
+        #[derive(Serialize)]
+        struct NonAgentBalanceSheets<'a> {
+            central_bank: Option<&'a BalanceSheet>,
+            government: Option<&'a BalanceSheet>,
+        }
+
+        let response = NonAgentBalanceSheets { central_bank: central_bank_bs, government: government_bs };
+        (StatusCode::OK, headers, Json(serde_json::to_value(response).unwrap()))
+    } else {
+        let err = ApiError { code: "NOT_INITIALIZED", message: "Simulation is not initialized." };
+        (StatusCode::CONFLICT, headers, Json(json!({ "error": err })))
+    }
+}
 pub fn http_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
@@ -374,6 +396,7 @@ pub fn http_router(state: Arc<AppState>) -> Router {
         .route("/sim/analysis/effects", get(get_effects_history))
         .route("/sim/analysis/a2e/{tick_number}", get(get_actions_to_effects))
         .route("/sim/analysis/tick/{tick_number}", get(get_tick_details))
+        .route("/sim/non_agent_balance_sheets", get(get_non_agent_balance_sheets))
         .route("/agents/{agent_type}", get(get_agents))
         .route("/agents/{agent_type}/summary", get(get_agents_summary))
         .route("/agents/{agent_id}/balance_sheet", get(get_agent_balance_sheet))

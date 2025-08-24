@@ -29,13 +29,33 @@ pub enum EffectError {
 
 pub trait EffectApplicator {
     fn apply_effect(&mut self, effect: &StateEffect) -> Result<(), EffectError>;
+    
     fn apply_effects(&mut self, effects: &[StateEffect]) -> Result<(), EffectError> {
-        for effect in effects {
-            self.apply_effect(effect)?;
+        let mut errors = Vec::new();
+        
+        for (index, effect) in effects.iter().enumerate() {
+            match self.apply_effect(effect) {
+                Ok(()) => {
+                    println!("[EFFECTS] Applied State Effect {}", effect.name());
+                }
+                Err(e) => {
+                    errors.push(format!("Effect {}: {}", index, e));
+                    println!("[EFFECTS] ✗ Failed effect {}: {} - Error: {}", index, effect.name(), e);
+                }
+            }
         }
-        Ok(())
+        
+        if errors.len() == effects.len() && !errors.is_empty() {
+            Err(EffectError::InvalidState(format!("All {} effects failed: {:?}", errors.len(), errors)))
+        } else if !errors.is_empty() {
+            println!("[EFFECTS] WARNING: {} effects failed but continuing: {:?}", errors.len(), errors);
+            Ok(()) // Continue despite some failures
+        } else {
+            Ok(())
+        }
     }
 }
+
 
 pub struct StateEffectApplicator;
 

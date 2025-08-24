@@ -24,20 +24,19 @@ pub struct YieldCurve {
     pub date: chrono::NaiveDate,
     pub yields: HashMap<Tenor, f64>,
 }
-
 impl Default for FinancialSystem {
     fn default() -> Self {
-        let central_bank = CentralBank {
-            id: AgentId(Uuid::new_v4()),
-            policy_rate_bps: 425.0,
-            reserve_requirement: 0.1,
-        };
         let government = Government {
             id: AgentId(Uuid::new_v4()),
             tax_rates: TaxRates::default(),
             spending_targets: SpendingTargets::default(),
             debt_ceiling: Some(1_000_000_000.0),
             fiscal_policy: FiscalPolicy::default(),
+        };
+        let central_bank = CentralBank {
+            id: AgentId(Uuid::new_v4()),
+            policy_rate_bps: 425.0,
+            reserve_requirement: 0.1,
         };
         let mut balance_sheets = HashMap::new();
         balance_sheets.insert(central_bank.id, BalanceSheet::new(central_bank.id));

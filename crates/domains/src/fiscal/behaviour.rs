@@ -30,6 +30,46 @@ impl DecisionModel for BasicGovernmentDecisionModel {
                 }
             }
         }
+        self.handle_funding(government, state, &mut actions);
         actions
+    }
+}
+
+impl BasicGovernmentDecisionModel {
+    fn handle_funding(&self, government: &Government, state: &SimState, actions: &mut Vec<SimAction>) {
+        let fs = &state.financial_system;
+        let gbs = fs.balance_sheets.get(&government.id);
+        if gbs.is_none() {
+            return;
+        }
+        let gbs = gbs.unwrap();
+        let current_balance = gbs.liquid_assets(); 
+        let spending_target = 1_000_000.0 / 12.0; // 1m / 12
+        if current_balance < spending_target {
+            let deficit = spending_target - current_balance;
+            // Issuance distribution across different tenors
+            let issue_distribution = [
+                (Tenor::T2Y, 0.15), 
+                (Tenor::T5Y, 0.25), 
+                (Tenor::T10Y, 0.40), 
+                (Tenor::T30Y, 0.20)
+            ];
+            let face_value = 1000.0;
+            // Use the central bank policy rate as a proxy for the new coupon rate
+            let coupon_rate = fs.central_bank.policy_rate_bps;
+            for (tenor, percentage) in issue_distribution {
+                let amount_to_issue = deficit * percentage;
+                let quantity = (amount_to_issue / face_value).ceil() as u32;
+                if quantity > 0 {
+                    actions.push(SimAction::Fiscal(FiscalAction::IssueDebt {
+                        government_id: government.id,
+                        tenor,
+                        quantity,
+                        face_value,
+                        coupon_rate,
+                    }));
+                }
+            }
+        }
     }
 }

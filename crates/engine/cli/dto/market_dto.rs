@@ -1,6 +1,7 @@
 use serde::Serialize;
 use crate::*;
-
+use std::collections::HashMap;
+use ordered_float::NotNan;
 #[derive(Serialize, Clone)]
 pub struct LaborMarketStats {
     pub unemployment_rate: f64,
@@ -165,8 +166,10 @@ pub struct JobApplicationDto {
 pub struct DepthDto {
     pub bid_size_at_best: f64,
     pub ask_size_at_best: f64,
-    pub bid_levels: usize,
-    pub ask_levels: usize,
+    #[serde(serialize_with = "sim_core::notnan_map_as_f64")]
+    pub bid_levels: HashMap<NotNan<f64>, f64>,
+    #[serde(serialize_with = "sim_core::notnan_map_as_f64")]
+    pub ask_levels: HashMap<NotNan<f64>, f64>,
 }
 #[derive(Serialize, Clone)]
 pub struct EmploymentContractDto {

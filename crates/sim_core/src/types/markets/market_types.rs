@@ -1,7 +1,9 @@
+use std::collections::HashMap;
 use crate::*;
 use super::*;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use ordered_float::NotNan;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct MarketTick {
@@ -48,17 +50,19 @@ pub struct TimedTrade {
     pub trade: Trade,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize)]
 pub struct MarketDepthSummary {
     pub best_bid: Option<f64>,
     pub best_ask: Option<f64>,
     pub bid_size_at_best: f64,
     pub ask_size_at_best: f64,
-    pub bid_levels: usize,
-    pub ask_levels: usize,
+    #[serde(serialize_with = "crate::notnan_map_as_f64")]
+    pub bid_levels: HashMap<NotNan<f64>, f64>,
+    #[serde(serialize_with = "crate::notnan_map_as_f64")]
+    pub ask_levels: HashMap<NotNan<f64>, f64>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct MarketSummary {
     pub depth: MarketDepthSummary,
     pub mid: Option<f64>,
