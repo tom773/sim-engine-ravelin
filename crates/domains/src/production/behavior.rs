@@ -47,14 +47,14 @@ impl SimpleFirmDecisionModel {
     fn handle_hiring(&self, firm: &Firm, actions: &mut Vec<SimAction>) {
         let current_employees = firm.employees.len();
         let target_employees = 3;
-        
         if current_employees < target_employees {
             let positions_to_fill = target_employees - current_employees;
-            
+            println!("Firm {} needs to hire {} more employees", firm.name, positions_to_fill); 
             actions.push(SimAction::Production(ProductionAction::Hire { 
                 agent_id: firm.id, 
                 count: positions_to_fill as u32,
             }));
+            println!("{:#?}", actions.last().unwrap());
         }
     }
 

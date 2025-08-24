@@ -885,13 +885,13 @@ impl LabourMarket {
                 }
             }
         }
-        println!("{:#?}", filled_application_ids);
         effects.push(StateEffect::Market(MarketEffect::ClearLabourMarketOrders {
             market_id: self.market_id.clone(),
-            filled_applications: filled_application_ids,
+            filled_applications: filled_application_ids.clone(),
         }));
-
-        self.job_offers.clear();
+        self.job_applications.retain(|app| !filled_application_ids.contains(&app.application_id));
+        
+        self.job_offers = offers;
 
         effects
     }

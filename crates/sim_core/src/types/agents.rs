@@ -105,10 +105,17 @@ impl Consumer {
     }
 
     pub fn update_expectations(&mut self, state: &SimState, alpha: f64) {
-        let inflation_view = state.calculate_core_stats().cpi;
-        
+        let inflation_view = state.calculate_core_stats().cpi;   
         self.expectations.expected_inflation = alpha * inflation_view + (1.0 - alpha) * self.expectations.expected_inflation;
-        
+    }
+    pub fn update_employment(&mut self, firm_id: Option<AgentId>, hours_worked: f64) {
+        if firm_id.is_none() {
+            self.employed_by = None;
+            self.hours_worked = 0.0;
+            return;
+        }
+        self.employed_by = firm_id;
+        self.hours_worked = hours_worked;
     }
 }
 
@@ -141,6 +148,9 @@ impl Firm {
             net: net_profit,
             retained_earnings_ratio: 0.6,
         }
+    }
+    pub fn add_employee(&mut self, contract: EmploymentContract) {
+        self.employees.insert(contract.employee_id, contract);
     }
 }
 
