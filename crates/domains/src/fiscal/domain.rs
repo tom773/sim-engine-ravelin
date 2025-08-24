@@ -30,12 +30,11 @@ impl FiscalDomain {
                 let target_market_id = FinancialMarketId::Treasury { tenor: *tenor };
                 
                 if let Some(_market) = state.financial_system.exchange.financial_markets.get(&target_market_id) {
-                    let ask_price = *face_value; // Par value - could be refined further
-                    
+                    let ask_price = state.financial_system.exchange.financial_market(&target_market_id).and_then(|m| m.best_ask()); 
                     let ask_order = Order::Ask(Ask { 
                         agent_id: *government_id, 
                         quantity: *quantity as f64, 
-                        price: ask_price 
+                        price: ask_price.unwrap_or(*face_value*0.90),
                     });
 
                     effects.push(StateEffect::Market(MarketEffect::PlaceOrderInBook { 

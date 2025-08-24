@@ -28,14 +28,14 @@ pub struct Trade {
     pub price: f64,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 pub struct Bid {
     pub agent_id: AgentId,
     pub price: f64,
     pub quantity: f64,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 pub struct Ask {
     pub agent_id: AgentId,
     pub price: f64,

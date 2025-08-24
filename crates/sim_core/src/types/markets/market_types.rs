@@ -143,6 +143,8 @@ impl FinancialMarket {
             .or_else(|| self.order_book.best_bid().map(|b| b.price))
             .or_else(|| self.order_book.best_ask().map(|a| a.price))
     }
+    pub fn best_ask(&self) -> Option<f64> { self.order_book.best_ask().map(|a| a.price) }
+    pub fn best_bid(&self) -> Option<f64> { self.order_book.best_bid().map(|b| b.price) }
     pub fn spread_bps(&self) -> f64 {
         if let Some(spread) = self.order_book.spread() {
             if let Some(mid) = self.order_book.mid_price() {
