@@ -36,23 +36,41 @@ id = "global_oil"
 name = "Global Oil Corp"
 bank_id = "bank_a"
 recipe_name = "Oil Refining"
+desired_markup = 0.20
 initial_assets = [
     { type = "Deposit", bank_id = "bank_a", amount = 250000.0 },
     { type = "Inventory", good_slug = "oil", quantity = 1000.0, unit_cost = 50.0 }
 ]
 initial_liabilities = []
+[firms.decision_model]
+type = "SimpleFirmDecisionModel"
 
 [[firms]]
 id = "bread_petrol_yum"
 name = "Bread & Petrol Co."
 bank_id = "bank_b"
 recipe_name = "Bread Production"
+desired_markup = 0.15
 initial_assets = [
     { type = "Deposit", bank_id = "bank_b", amount = 150000.0 },
     { type = "Inventory", good_slug = "bread", quantity = 500.0, unit_cost = 2.0 },
     { type = "Inventory", good_slug = "petrol", quantity = 300.0, unit_cost = 3.0 }
 ]
 initial_liabilities = []
+[firms.decision_model]
+type = "SimpleFirmDecisionModel"
+
+[[firms]]
+id = "goldman_stanley"
+name = "Goldman Stanley"
+bank_id = "bank_a"
+initial_assets = [
+    { type = "Deposit", bank_id = "bank_a", amount = 100_000.0 },
+    { type = "Bond", tenor = "T10Y", quantity = 1000 },
+    { type = "Bond", tenor = "T30Y", quantity = 500 }
+]
+initial_liabilities = []
+decision_model = { type = "InvestmentFirmDecisionModel", min_liquidity = 20000.0, quote_qty = 5.0 }
 
 [[consumers]]
 id = "consumer_1"

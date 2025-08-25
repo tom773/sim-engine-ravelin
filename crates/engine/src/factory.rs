@@ -28,12 +28,14 @@ impl<'a> AgentFactory<'a> {
             self.create_liability_for_agent(bank.id, liability, cb_id, &HashMap::new())
                 .unwrap_or_else(|e| println!("[ERROR] Failed to create liability for bank {}: {}", bank.id, e));
         }
-        
+
         self.state.agents.banks.insert(bank.id, bank.clone());
         bank
     }
 
-    pub fn create_consumer(&mut self, config: &ConsumerConfig, bank_id: AgentId, cb_id: AgentId, agent_ids: &HashMap<String, AgentId>) -> Consumer {
+    pub fn create_consumer(
+        &mut self, config: &ConsumerConfig, bank_id: AgentId, cb_id: AgentId, agent_ids: &HashMap<String, AgentId>,
+    ) -> Consumer {
         let personality =
             *vec![PersonalityArchetype::Balanced, PersonalityArchetype::Saver, PersonalityArchetype::Spender]
                 .choose(self.rng)
@@ -42,7 +44,7 @@ impl<'a> AgentFactory<'a> {
         consumer.income = config.income;
 
         self.state.financial_system.balance_sheets.insert(consumer.id, BalanceSheet::new(consumer.id));
-        
+
         for asset in &config.initial_assets {
             self.create_asset_for_agent(consumer.id, asset, cb_id, agent_ids)
                 .unwrap_or_else(|e| println!("[ERROR] Failed to create asset for consumer {}: {}", consumer.id, e));
@@ -57,12 +59,20 @@ impl<'a> AgentFactory<'a> {
         consumer
     }
 
-    pub fn create_firm(&mut self, config: &FirmConfig, bank_id: AgentId, cb_id: AgentId, agent_ids: &HashMap<String, AgentId>) -> Firm {
-        let recipe_id = self.state.financial_system.goods.get_recipe_id_by_name(&config.recipe_name);
-        let firm = Firm::new(bank_id, config.name.clone(), recipe_id, 25.0); // Set a default wage rate
+    pub fn create_firm(
+        &mut self, config: &FirmConfig, bank_id: AgentId, cb_id: AgentId, agent_ids: &HashMap<String, AgentId>,
+    ) -> Firm {
+        let recipe_id =
+            config.recipe_name.as_ref().and_then(|name| self.state.financial_system.goods.get_recipe_id_by_name(name));
+
+        let mut firm = Firm::new(bank_id, config.name.clone(), recipe_id, 25.0);
+
+        if let Some(markup) = config.desired_markup {
+            firm.desired_markup = markup;
+        }
 
         self.state.financial_system.balance_sheets.insert(firm.id, BalanceSheet::new(firm.id));
-        
+
         for asset in &config.initial_assets {
             match asset {
                 AssetConfig::Inventory { good_slug, quantity, unit_cost } => {
@@ -90,47 +100,58 @@ impl<'a> AgentFactory<'a> {
     }
 
     fn create_asset_for_agent(
-        &mut self, 
-        agent_id: AgentId, 
-        asset: &AssetConfig, 
-        cb_id: AgentId, 
-        agent_ids: &HashMap<String, AgentId>
+        &mut self, agent_id: AgentId, asset: &AssetConfig, cb_id: AgentId, agent_ids: &HashMap<String, AgentId>,
     ) -> Result<(), String> {
         match asset {
             AssetConfig::Cash { amount } => {
                 let cash = cash!(agent_id, *amount, cb_id, self.state.current_date);
-                self.state.financial_system.create_or_consolidate_instrument(cash)
+                self.state
+                    .financial_system
+                    .create_or_consolidate_instrument(cash)
                     .map_err(|e| format!("Failed to create cash: {}", e))?;
             }
-            
+
             AssetConfig::Deposit { bank_id, amount } => {
-                let bank_agent_id = agent_ids.get(bank_id)
-                    .ok_or_else(|| format!("Bank ID {} not found", bank_id))?;
-                
-                let bank = self.state.agents.get_bank(bank_agent_id)
+                let bank_agent_id = agent_ids.get(bank_id).ok_or_else(|| format!("Bank ID {} not found", bank_id))?;
+
+                let bank = self
+                    .state
+                    .agents
+                    .get_bank(bank_agent_id)
                     .ok_or_else(|| format!("Bank not found for ID {}", bank_agent_id))?;
                 let policy_rate_bps = self.state.financial_system.central_bank.policy_rate_bps;
                 let deposit_rate_bps = (policy_rate_bps + bank.deposit_spread_bps).max(0.0);
-                
+
                 let deposit = deposit!(agent_id, *bank_agent_id, *amount, deposit_rate_bps, self.state.current_date);
-                self.state.financial_system.create_or_consolidate_instrument(deposit)
+                self.state
+                    .financial_system
+                    .create_or_consolidate_instrument(deposit)
                     .map_err(|e| format!("Failed to create deposit: {}", e))?;
-                
-                let reserves = reserves!(*bank_agent_id, cb_id, *amount, self.state.current_date, policy_rate_bps + 15.0);
-                self.state.financial_system.create_or_consolidate_instrument(reserves)
+
+                let reserves =
+                    reserves!(*bank_agent_id, cb_id, *amount, self.state.current_date, policy_rate_bps + 15.0);
+                self.state
+                    .financial_system
+                    .create_or_consolidate_instrument(reserves)
                     .map_err(|e| format!("Failed to create reserves for deposit: {}", e))?;
             }
-            
+
             AssetConfig::Reserves { amount } => {
-                let reserves = reserves!(agent_id, cb_id, *amount, self.state.current_date, 
-                    self.state.financial_system.central_bank.policy_rate_bps + 15.0);
-                self.state.financial_system.create_or_consolidate_instrument(reserves)
+                let reserves = reserves!(
+                    agent_id,
+                    cb_id,
+                    *amount,
+                    self.state.current_date,
+                    self.state.financial_system.central_bank.policy_rate_bps + 15.0
+                );
+                self.state
+                    .financial_system
+                    .create_or_consolidate_instrument(reserves)
                     .map_err(|e| format!("Failed to create reserves: {}", e))?;
             }
-            
+
             AssetConfig::Bond { tenor, quantity } => {
-                let tenor_enum = Tenor::from_str(tenor)
-                    .map_err(|e| format!("Invalid tenor {}: {}", tenor, e))?;
+                let tenor_enum = Tenor::from_str(tenor).map_err(|e| format!("Invalid tenor {}: {}", tenor, e))?;
                 let maturity_date = tenor_enum.add_to_date(self.state.current_date);
                 let coupon_rate_bps = self.state.financial_system.central_bank.policy_rate_bps;
                 let government_id = self.state.financial_system.government.id;
@@ -154,11 +175,13 @@ impl<'a> AgentFactory<'a> {
                     accrued_interest: 0.0,
                     last_accrual_date: self.state.current_date,
                 };
-                
-                self.state.financial_system.create_or_consolidate_instrument(bond_instrument)
+
+                self.state
+                    .financial_system
+                    .create_or_consolidate_instrument(bond_instrument)
                     .map_err(|e| format!("Failed to create bond: {}", e))?;
             }
-            
+
             AssetConfig::Inventory { .. } => {
                 return Err("Inventory assets should be handled in create_firm only".to_string());
             }
@@ -167,37 +190,35 @@ impl<'a> AgentFactory<'a> {
     }
 
     fn create_liability_for_agent(
-        &mut self, 
-        agent_id: AgentId, 
-        liability: &LiabilityConfig, 
-        _cb_id: AgentId, 
-        agent_ids: &HashMap<String, AgentId>
+        &mut self, agent_id: AgentId, liability: &LiabilityConfig, _cb_id: AgentId,
+        agent_ids: &HashMap<String, AgentId>,
     ) -> Result<(), String> {
         match liability {
             LiabilityConfig::Deposit { creditor_id, amount, rate_bps } => {
-                let creditor_agent_id = agent_ids.get(creditor_id)
-                    .ok_or_else(|| format!("Creditor ID {} not found", creditor_id))?;
-                
+                let creditor_agent_id =
+                    agent_ids.get(creditor_id).ok_or_else(|| format!("Creditor ID {} not found", creditor_id))?;
+
                 let deposit_rate = rate_bps.unwrap_or_else(|| {
                     let policy_rate_bps = self.state.financial_system.central_bank.policy_rate_bps;
                     let bank = self.state.agents.get_bank(&agent_id);
                     let spread = bank.map(|b| b.deposit_spread_bps).unwrap_or(-50.0);
                     (policy_rate_bps + spread).max(0.0)
                 });
-                
+
                 let deposit = deposit!(*creditor_agent_id, agent_id, *amount, deposit_rate, self.state.current_date);
-                self.state.financial_system.create_or_consolidate_instrument(deposit)
+                self.state
+                    .financial_system
+                    .create_or_consolidate_instrument(deposit)
                     .map_err(|e| format!("Failed to create liability deposit: {}", e))?;
             }
-            
+
             LiabilityConfig::Loan { creditor_id, amount, rate_bps, maturity_days } => {
-                let creditor_agent_id = agent_ids.get(creditor_id)
-                    .ok_or_else(|| format!("Creditor ID {} not found", creditor_id))?;
-                
-                let maturity_date = maturity_days.map(|days| {
-                    self.state.current_date + chrono::Duration::days(days as i64)
-                });
-                
+                let creditor_agent_id =
+                    agent_ids.get(creditor_id).ok_or_else(|| format!("Creditor ID {} not found", creditor_id))?;
+
+                let maturity_date =
+                    maturity_days.map(|days| self.state.current_date + chrono::Duration::days(days as i64));
+
                 let loan = FinancialInstrument {
                     id: InstrumentId(uuid::Uuid::new_v4()),
                     creditor: *creditor_agent_id,
@@ -206,17 +227,17 @@ impl<'a> AgentFactory<'a> {
                     details: Box::new(LoanDetails {
                         loan_type: LoanType::Personal,
                         interest_rate_bps: *rate_bps,
-                        maturity_date: maturity_date.unwrap_or(
-                            self.state.current_date + chrono::Duration::days(365)
-                        ),
+                        maturity_date: maturity_date.unwrap_or(self.state.current_date + chrono::Duration::days(365)),
                         collateral: None,
                     }),
                     originated_date: self.state.current_date,
                     accrued_interest: 0.0,
                     last_accrual_date: self.state.current_date,
                 };
-                
-                self.state.financial_system.create_or_consolidate_instrument(loan)
+
+                self.state
+                    .financial_system
+                    .create_or_consolidate_instrument(loan)
                     .map_err(|e| format!("Failed to create loan: {}", e))?;
             }
         }

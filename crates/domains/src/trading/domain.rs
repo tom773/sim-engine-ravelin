@@ -1,3 +1,4 @@
+
 use serde::{Deserialize, Serialize};
 use sim_core::*;
 use crate::{Any, inventory, Domain, DomainResult, DomainValidator, ResolutionContext, ResolutionResult, ResolutionPhase};
@@ -73,6 +74,16 @@ impl Domain for TradingDomain {
                 self.execute_post_ask(*agent_id, market_id.clone(), *quantity, *price)
             },
         }
+    }
+
+    fn settle_trade(&self, trade: &Trade, state: &SimState) -> DomainResult {
+        
+        let settlement_effects = self.create_settlement_effects(trade, state);
+        
+        let mut all_effects = settlement_effects;
+        all_effects.push(StateEffect::Market(MarketEffect::ExecuteTrade(trade.clone())));
+        
+        DomainResult::success(all_effects)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -200,6 +211,230 @@ impl TradingDomain {
         }
 
         actions
+    }
+    
+    fn create_settlement_effects(&self, trade: &Trade, state: &SimState) -> Vec<StateEffect> {
+        let mut effects = vec![];
+        
+        match &trade.market_id {
+            MarketId::Goods(good_id) => {
+                effects.extend(self.settle_goods_trade(trade, *good_id));
+            }
+            MarketId::Financial(FinancialMarketId::Treasury { tenor }) => {
+                effects.extend(self.settle_treasury_trade(trade, *tenor, state));
+            }
+            MarketId::Financial(FinancialMarketId::FederalFundsOvernight) => {
+                effects.extend(self.settle_fed_funds_trade(trade, state));
+            }
+            MarketId::Financial(FinancialMarketId::TreasuryRepoOvernight) => {
+                effects.extend(self.settle_repo_trade(trade, state));
+            }
+            MarketId::Financial(FinancialMarketId::DiscountWindow)
+            | MarketId::Financial(FinancialMarketId::StandingRepoFacility)
+            | MarketId::Financial(FinancialMarketId::OvernightReverseRepo) => {
+                println!("[TRADING] Central bank facility trade executed (settlement logic TBD): {:?}", trade.market_id);
+            }
+            _ => {
+                println!("[TRADING] Unknown market type for settlement: {:?}", trade.market_id);
+            }
+        }
+        
+        effects
+    }
+    
+    fn settle_goods_trade(&self, trade: &Trade, good_id: GoodId) -> Vec<StateEffect> {
+        let mut effects = vec![];
+        let total_payment = trade.price * trade.quantity;
+        
+        effects.extend(self.create_payment_transfer_effects(trade.buyer, trade.seller, total_payment));
+        
+        effects.push(StateEffect::Inventory(InventoryEffect::RemoveInventory {
+            owner: trade.seller,
+            good_id,
+            quantity: trade.quantity,
+        }));
+        
+        effects.push(StateEffect::Inventory(InventoryEffect::AddInventory {
+            owner: trade.buyer,
+            good_id,
+            quantity: trade.quantity,
+            unit_cost: trade.price,
+        }));
+        
+        effects
+    }
+    
+    fn settle_treasury_trade(&self, trade: &Trade, tenor: Tenor, state: &SimState) -> Vec<StateEffect> {
+        let mut effects = vec![];
+        
+        if trade.seller == state.financial_system.government.id {
+            effects.extend(self.settle_primary_treasury_issuance(trade, tenor, state));
+        } else {
+            effects.extend(self.settle_secondary_treasury_trade(trade, tenor, state));
+        }
+        
+        effects
+    }
+    
+    fn settle_primary_treasury_issuance(&self, trade: &Trade, tenor: Tenor, state: &SimState) -> Vec<StateEffect> {
+        let mut effects = vec![];
+        let total_cost = trade.price * trade.quantity;
+        
+        effects.extend(self.create_payment_transfer_effects(trade.buyer, trade.seller, total_cost));
+        
+        const FACE_VALUE: f64 = 1000.0;
+        let coupon_rate = state.financial_system.central_bank.policy_rate_bps;
+        let maturity_date = tenor.add_to_date(state.current_date);
+        let principal = total_cost;
+
+        let mut new_bond = bond!(
+            trade.buyer,
+            trade.seller,
+            principal,
+            coupon_rate,
+            maturity_date,
+            FACE_VALUE,
+            BondType::Government,
+            2,
+            tenor,
+            state.current_date
+        );
+
+        if let Some(details) = new_bond.details.as_any_mut().downcast_mut::<BondDetails>() {
+            details.quantity = trade.quantity as u64;
+        }
+
+        effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(new_bond)));
+        
+        effects
+    }
+    
+    fn settle_secondary_treasury_trade(&self, trade: &Trade, tenor: Tenor, state: &SimState) -> Vec<StateEffect> {
+        let mut effects = vec![];
+        
+        if let Some(seller_bs) = state.financial_system.get_bs_by_id(&trade.seller) {
+            for (inst_id, inst) in &seller_bs.assets {
+                if let Some(bond_details) = inst.details.as_any().downcast_ref::<BondDetails>() {
+                    if bond_details.bond_type == BondType::Government
+                        && bond_details.tenor == tenor
+                        && bond_details.quantity >= trade.quantity as u64
+                    {
+                        effects.push(StateEffect::Financial(FinancialEffect::SplitAndTransferInstrument {
+                            id: *inst_id,
+                            buyer: trade.buyer,
+                            quantity: trade.quantity as u64,
+                        }));
+                        
+                        let total_payment = trade.price * trade.quantity;
+                        effects.extend(self.create_payment_transfer_effects(trade.buyer, trade.seller, total_payment));
+                        
+                        break;
+                    }
+                }
+            }
+        }
+        
+        effects
+    }
+    
+    fn settle_fed_funds_trade(&self, trade: &Trade, state: &SimState) -> Vec<StateEffect> {
+        let mut effects = vec![];
+        let loan_amount = trade.quantity;
+        let overnight_rate_bps = state.financial_system.central_bank.policy_rate_bps;
+        
+        effects.extend(self.create_reserves_transfer_effects(trade.seller, trade.buyer, loan_amount, state));
+        
+        let fed_funds_loan = FinancialInstrument {
+            id: InstrumentId(uuid::Uuid::new_v4()),
+            creditor: trade.seller,
+            debtor: trade.buyer,
+            principal: loan_amount,
+            details: Box::new(LoanDetails {
+                loan_type: LoanType::FederalFunds,
+                interest_rate_bps: overnight_rate_bps,
+                maturity_date: state.current_date + chrono::Duration::days(1),
+                collateral: None,
+            }),
+            originated_date: state.current_date,
+            accrued_interest: 0.0,
+            last_accrual_date: state.current_date,
+        };
+        
+        effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(fed_funds_loan)));
+        
+        println!("[TRADING] Federal funds trade executed: ${:.2} from {} to {}", 
+                loan_amount, trade.seller, trade.buyer);
+        
+        effects
+    }
+    
+    fn settle_repo_trade(&self, trade: &Trade, state: &SimState) -> Vec<StateEffect> {
+        let mut effects = vec![];
+        let repo_amount = trade.quantity;
+        let repo_rate_bps = state.financial_system.central_bank.policy_rate_bps - 10.0;
+        
+        effects.extend(self.create_payment_transfer_effects(trade.seller, trade.buyer, repo_amount));
+        
+        let repo_agreement = FinancialInstrument {
+            id: InstrumentId(uuid::Uuid::new_v4()),
+            creditor: trade.seller,
+            debtor: trade.buyer,
+            principal: repo_amount,
+            details: Box::new(LoanDetails {
+                loan_type: LoanType::Repo,
+                interest_rate_bps: repo_rate_bps,
+                maturity_date: state.current_date + chrono::Duration::days(1),
+                collateral: Some(CollateralInfo {
+                    collateral_type: "US Treasury".to_string(),
+                    value: repo_amount * 1.02,
+                }),
+            }),
+            originated_date: state.current_date,
+            accrued_interest: 0.0,
+            last_accrual_date: state.current_date,
+        };
+        
+        effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(repo_agreement)));
+        
+        println!("[TRADING] Treasury repo trade executed: ${:.2} from {} to {}", 
+                repo_amount, trade.seller, trade.buyer);
+        
+        effects
+    }
+    
+    fn create_reserves_transfer_effects(&self, from: AgentId, to: AgentId, amount: f64, state: &SimState) -> Vec<StateEffect> {
+        let mut effects = vec![];
+        let cb_id = state.financial_system.central_bank.id;
+        
+        if let Some(from_bs) = state.financial_system.get_bs_by_id(&from) {
+            if let Some((reserves_id, reserves_inst)) =
+                from_bs.assets.iter().find(|(_, inst)| inst.details.as_any().is::<CentralBankReservesDetails>())
+            {
+                let new_reserves = reserves_inst.principal - amount;
+                if new_reserves < 1e-6 {
+                    effects.push(StateEffect::Financial(FinancialEffect::RemoveInstrument(*reserves_id)));
+                } else {
+                    effects.push(StateEffect::Financial(FinancialEffect::UpdateInstrument {
+                        id: *reserves_id,
+                        new_principal: new_reserves,
+                    }));
+                }
+            }
+        }
+        
+        effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(reserves!(
+            to,
+            cb_id,
+            amount,
+            state.current_date,
+            state.financial_system.central_bank.policy_rate_bps + 15.0
+        ))));
+        
+        effects
+    }
+    
+    fn create_payment_transfer_effects(&self, from: AgentId, to: AgentId, amount: f64) -> Vec<StateEffect> {
+        vec![StateEffect::Financial(FinancialEffect::TransferFunds { from, to, amount })]
     }
 }
 

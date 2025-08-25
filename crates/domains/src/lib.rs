@@ -1,3 +1,5 @@
+// crates/domains/src/lib.rs - Updated Domain trait
+
 pub use std::any::Any;
 use sim_core::*;
 extern crate inventory;
@@ -12,6 +14,11 @@ pub trait Domain: Send + Sync {
     
     fn resolution_phase(&self, _intention: &SimIntention) -> Option<ResolutionPhase> {
         None
+    }
+    
+    /// Optional method for settling trades. Only the TradingDomain implements this.
+    fn settle_trade(&self, _trade: &Trade, _state: &SimState) -> DomainResult {
+        DomainResult::failure(vec![format!("Trade settlement not supported by {}", self.name())])
     }
     
     fn as_any(&self) -> &dyn Any;
@@ -157,7 +164,7 @@ pub mod prelude {
     pub use crate::consumption::{ConsumptionDomain, SimpleConsumerDecisionModel, CESConsumerDecisionModel};
     pub use crate::fiscal::{FiscalDomain, BasicGovernmentDecisionModel};
     pub use crate::labour::LabourDomain;
-    pub use crate::production::{ProductionDomain, SimpleFirmDecisionModel};
+    pub use crate::production::{ProductionDomain, ProductionFirmDecisionModel, InvestmentFirmDecisionModel};
     pub use crate::settlement::SettlementDomain;
     pub use crate::trading::TradingDomain;
     

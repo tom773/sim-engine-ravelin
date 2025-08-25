@@ -36,6 +36,7 @@ pub struct AgentSummaryDto {
     pub id: String,
     pub name: String,
     pub agent_type: String,
+    pub decision_model: String,
     pub balance_sheet: BalanceSheetSummary,
 }
 

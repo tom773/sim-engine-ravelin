@@ -9,6 +9,7 @@ pub struct BasicBankDecisionModel;
 
 #[typetag::serde]
 impl DecisionModel for BasicBankDecisionModel {
+    fn name (&self) -> &str { "Bank" }
     fn decide(&self, agent: &dyn Any, state: &SimState, rng: &mut dyn RngCore) -> Vec<SimIntention> {
         let bank = match agent.downcast_ref::<Bank>() {
             Some(b) => b,

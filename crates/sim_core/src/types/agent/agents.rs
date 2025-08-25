@@ -86,6 +86,9 @@ impl Bank {
             deposit_spread_bps, 
         }
     }
+    pub fn whoami(&self) -> &str {
+        "Bank"
+    }
 }
 
 impl Consumer {
@@ -104,7 +107,9 @@ impl Consumer {
             hours_worked: 0.0,
         }
     }
-
+    pub fn whoami(&self) -> &str {
+        "Consumer"
+    }
     pub fn update_expectations(&mut self, state: &SimState, alpha: f64) {
         let inflation_view = state.calculate_core_stats().cpi;   
         self.expectations.expected_inflation = alpha * inflation_view + (1.0 - alpha) * self.expectations.expected_inflation;
@@ -134,6 +139,9 @@ impl Firm {
             capital_stock: 10000.0,
             desired_markup: 0.20,
         }
+    }
+    pub fn whoami(&self) -> &str {
+        "Firm"
     }
     pub fn get_employees(&self) -> Vec<AgentId> {
         self.employees.keys().cloned().collect()
@@ -169,7 +177,11 @@ pub struct CentralBank {
     pub policy_rate_bps: BasisPoints,
     pub reserve_requirement: f64,
 }
-
+impl CentralBank {
+    pub fn whoami(&self) -> &str {
+        "CentralBank"
+    }
+}
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum PersonalityArchetype {
     Balanced,
@@ -186,6 +198,9 @@ impl Government {
             debt_ceiling: None,
             fiscal_policy,
         }
+    }
+    pub fn whoami(&self) -> &str {
+        "Government"
     }
     pub fn get_id(&self) -> &AgentId {
         &self.id

@@ -1,7 +1,9 @@
+
 use std::collections::HashMap;
 use sim_core::*;
 use domains::*;
 extern crate inventory;
+
 pub struct DomainRegistry {
     domains: HashMap<String, Box<dyn Domain>>,
 }
@@ -33,6 +35,25 @@ impl DomainRegistry {
         } else {
             Err(result.errors.join("; "))
         }
+    }
+    
+    pub fn settle_trade(&self, trade: &Trade, state: &SimState) -> Result<Vec<StateEffect>, String> {
+        if let Some(trading_domain) = self.domains.get("Trading") {
+            let result = trading_domain.settle_trade(trade, state);
+            if result.success {
+                return Ok(result.effects);
+            }
+        }
+        
+        for (domain_name, domain) in &self.domains {
+            let result = domain.settle_trade(trade, state);
+            if result.success {
+                println!("[REGISTRY] Trade settled by domain: {}", domain_name);
+                return Ok(result.effects);
+            }
+        }
+        
+        Err(format!("No domain could settle trade for market: {:?}", trade.market_id))
     }
 
     pub fn categorize_intentions_by_phase(

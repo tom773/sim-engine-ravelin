@@ -7,6 +7,7 @@ use std::fmt::Debug;
 #[typetag::serde(tag = "type")]
 pub trait DecisionModel: DynClone + Send + Sync {
     fn decide(&self, agent: &dyn Any, state: &SimState, rng: &mut dyn RngCore) -> Vec<SimIntention>;
+    fn name(&self) -> &str;
 }
 
 clone_trait_object!(DecisionModel);

@@ -18,6 +18,7 @@ impl Default for SimpleConsumerDecisionModel {
 
 #[typetag::serde]
 impl DecisionModel for SimpleConsumerDecisionModel {
+    fn name(&self) -> &str { "Simple Consumer" }
     fn decide(&self, agent: &dyn Any, state: &SimState, _rng: &mut dyn RngCore) -> Vec<SimIntention> {
         let consumer = match agent.downcast_ref::<Consumer>() {
             Some(c) => c,
@@ -127,6 +128,7 @@ impl Default for CESConsumerDecisionModel {
 
 #[typetag::serde]
 impl DecisionModel for CESConsumerDecisionModel {
+    fn name (&self) -> &str { "CES Consumer" }
     fn decide(&self, agent: &dyn Any, state: &SimState, _rng: &mut dyn RngCore) -> Vec<SimIntention> {
         let consumer = match agent.downcast_ref::<Consumer>() {
             Some(c) => c,

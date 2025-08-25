@@ -48,9 +48,16 @@ impl SimulationEngine {
     pub fn tick(&mut self, rng: &mut dyn RngCore) -> TickResult {
         self.run_upkeep();
 
+        let labour_effects = self.state.financial_system.exchange.clear_labour_markets(&self.state.clone());
+
         let intentions = self.gather_intentions(rng);
-        let (action_records, action_to_effect_indices, all_effects, trades) =
+
+        let (action_records, action_to_effect_indices, other_effects, trades) =
             self.resolve_and_execute_intentions(intentions);
+
+        let mut all_effects = labour_effects;
+        all_effects.extend(other_effects);
+
         self.state.financial_system.update_yield_curve(self.state.current_date);
 
         let tick_record = TickRecord {
@@ -206,6 +213,7 @@ impl SimulationEngine {
 
     fn run_upkeep(&mut self) {
         self.state.advance_time();
+        println!("\n\n[DATE] {}", self.state.current_date);
         self.update_agent_expectations();
 
         let upkeep_actions = self.process_financial_updates();
@@ -359,293 +367,20 @@ impl SimulationEngine {
 
     fn settle_trades(&self, trades: Vec<Trade>) -> Vec<StateEffect> {
         let mut all_effects = Vec::new();
+
         for trade in trades {
-            println!("[INFO] Settling trade: {:?}", trade);
-            let settlement_effects = self.create_settlement_effects(&trade);
-            all_effects.extend(settlement_effects);
-            all_effects.push(StateEffect::Market(MarketEffect::ExecuteTrade(trade.clone())));
+            match self.domain_registry.settle_trade(&trade, &self.state) {
+                Ok(settlement_effects) => {
+                    all_effects.extend(settlement_effects);
+                }
+                Err(e) => {
+                    println!("[ERROR] Failed to settle trade: {}", e);
+                    all_effects.push(StateEffect::Market(MarketEffect::ExecuteTrade(trade)));
+                }
+            }
         }
+
         all_effects
-    }
-
-    fn create_settlement_effects(&self, trade: &Trade) -> Vec<StateEffect> {
-        let mut effects = vec![];
-        match &trade.market_id {
-            MarketId::Goods(good_id) => {
-                let total_payment = trade.price * trade.quantity;
-                effects.extend(self.create_payment_transfer_effects(trade.buyer, trade.seller, total_payment));
-                effects.push(StateEffect::Inventory(InventoryEffect::RemoveInventory {
-                    owner: trade.seller,
-                    good_id: *good_id,
-                    quantity: trade.quantity,
-                }));
-                effects.push(StateEffect::Inventory(InventoryEffect::AddInventory {
-                    owner: trade.buyer,
-                    good_id: *good_id,
-                    quantity: trade.quantity,
-                    unit_cost: trade.price,
-                }));
-            }
-            MarketId::Financial(FinancialMarketId::Treasury { tenor }) => {
-                if trade.seller == self.state.financial_system.government.id {
-                    let total_cost = trade.price * trade.quantity;
-                    effects.extend(self.create_payment_transfer_effects(trade.buyer, trade.seller, total_cost));
-                    const FACE_VALUE: f64 = 1000.0;
-                    let coupon_rate = self.state.financial_system.central_bank.policy_rate_bps;
-                    let maturity_date = tenor.add_to_date(self.state.current_date);
-
-                    let principal = total_cost;
-
-                    let mut new_bond = bond!(
-                        trade.buyer,
-                        trade.seller,
-                        principal,
-                        coupon_rate,
-                        maturity_date,
-                        FACE_VALUE,
-                        BondType::Government,
-                        2,
-                        *tenor,
-                        self.state.current_date
-                    );
-
-                    if let Some(details) = new_bond.details.as_any_mut().downcast_mut::<BondDetails>() {
-                        details.quantity = trade.quantity as u64;
-                    }
-
-                    effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(new_bond)));
-                } else {
-                    if let Some(seller_bs) = self.state.financial_system.get_bs_by_id(&trade.seller) {
-                        for (inst_id, inst) in &seller_bs.assets {
-                            if let Some(bond_details) = inst.details.as_any().downcast_ref::<BondDetails>() {
-                                if bond_details.bond_type == BondType::Government
-                                    && bond_details.tenor == *tenor
-                                    && bond_details.quantity >= trade.quantity as u64
-                                {
-                                    effects.push(StateEffect::Financial(FinancialEffect::SplitAndTransferInstrument {
-                                        id: *inst_id,
-                                        buyer: trade.buyer,
-                                        quantity: trade.quantity as u64,
-                                    }));
-                                    let total_payment = trade.price * trade.quantity;
-                                    effects.extend(self.create_payment_transfer_effects(
-                                        trade.buyer,
-                                        trade.seller,
-                                        total_payment,
-                                    ));
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            MarketId::Financial(FinancialMarketId::FederalFundsOvernight) => {
-                let loan_amount = trade.quantity;
-                let overnight_rate_bps = self.state.financial_system.central_bank.policy_rate_bps;
-                effects.extend(self.create_reserves_transfer_effects(trade.seller, trade.buyer, loan_amount));
-                let fed_funds_loan = FinancialInstrument {
-                    id: InstrumentId(uuid::Uuid::new_v4()),
-                    creditor: trade.seller,
-                    debtor: trade.buyer,
-                    principal: loan_amount,
-                    details: Box::new(LoanDetails {
-                        loan_type: LoanType::FederalFunds,
-                        interest_rate_bps: overnight_rate_bps,
-                        maturity_date: self.state.current_date + chrono::Duration::days(1),
-                        collateral: None,
-                    }),
-                    originated_date: self.state.current_date,
-                    accrued_interest: 0.0,
-                    last_accrual_date: self.state.current_date,
-                };
-                effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(fed_funds_loan)));
-                println!(
-                    "[INFO] Federal funds trade executed: ${:.2} from {} to {}",
-                    loan_amount, trade.seller, trade.buyer
-                );
-            }
-            MarketId::Financial(FinancialMarketId::TreasuryRepoOvernight) => {
-                let repo_amount = trade.quantity;
-                let repo_rate_bps = self.state.financial_system.central_bank.policy_rate_bps - 10.0;
-                effects.extend(self.create_payment_transfer_effects(trade.seller, trade.buyer, repo_amount));
-                let repo_agreement = FinancialInstrument {
-                    id: InstrumentId(uuid::Uuid::new_v4()),
-                    creditor: trade.seller,
-                    debtor: trade.buyer,
-                    principal: repo_amount,
-                    details: Box::new(LoanDetails {
-                        loan_type: LoanType::Repo,
-                        interest_rate_bps: repo_rate_bps,
-                        maturity_date: self.state.current_date + chrono::Duration::days(1),
-                        collateral: Some(CollateralInfo {
-                            collateral_type: "US Treasury".to_string(),
-                            value: repo_amount * 1.02,
-                        }),
-                    }),
-                    originated_date: self.state.current_date,
-                    accrued_interest: 0.0,
-                    last_accrual_date: self.state.current_date,
-                };
-                effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(repo_agreement)));
-                println!(
-                    "[INFO] Treasury repo trade executed: ${:.2} from {} to {}",
-                    repo_amount, trade.seller, trade.buyer
-                );
-            }
-            MarketId::Financial(FinancialMarketId::DiscountWindow)
-            | MarketId::Financial(FinancialMarketId::StandingRepoFacility)
-            | MarketId::Financial(FinancialMarketId::OvernightReverseRepo) => {
-                println!("[INFO] Central bank facility trade executed (settlement logic TBD): {:?}", trade.market_id);
-            }
-            _ => {}
-        }
-        effects
-    }
-
-    fn create_reserves_transfer_effects(&self, from: AgentId, to: AgentId, amount: f64) -> Vec<StateEffect> {
-        let mut effects = vec![];
-        let cb_id = self.state.financial_system.central_bank.id;
-        if let Some(from_bs) = self.state.financial_system.get_bs_by_id(&from) {
-            if let Some((reserves_id, reserves_inst)) =
-                from_bs.assets.iter().find(|(_, inst)| inst.details.as_any().is::<CentralBankReservesDetails>())
-            {
-                let new_reserves = reserves_inst.principal - amount;
-                if new_reserves < 1e-6 {
-                    effects.push(StateEffect::Financial(FinancialEffect::RemoveInstrument(*reserves_id)));
-                } else {
-                    effects.push(StateEffect::Financial(FinancialEffect::UpdateInstrument {
-                        id: *reserves_id,
-                        new_principal: new_reserves,
-                    }));
-                }
-            }
-        }
-        effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(reserves!(
-            to,
-            cb_id,
-            amount,
-            self.state.current_date,
-            self.state.financial_system.central_bank.policy_rate_bps + 15.0
-        ))));
-        effects
-    }
-
-    fn create_payment_transfer_effects(&self, from: AgentId, to: AgentId, amount: f64) -> Vec<StateEffect> {
-        let mut effects = vec![];
-        let cb_id = self.state.financial_system.central_bank.id;
-        let from_bs = match self.state.financial_system.get_bs_by_id(&from) {
-            Some(bs) => bs,
-            None => return vec![],
-        };
-        let (cash_id, cash_on_hand) = from_bs
-            .assets
-            .iter()
-            .find(|(_, inst)| inst.details.as_any().is::<CashDetails>())
-            .map(|(id, inst)| (Some(*id), inst.principal))
-            .unwrap_or((None, 0.0));
-
-        let amount_from_cash = cash_on_hand.min(amount);
-        let amount_remaining_for_deposit = amount - amount_from_cash;
-
-        if amount_from_cash > 1e-6 {
-            if let Some(id) = cash_id {
-                let new_principal = cash_on_hand - amount_from_cash;
-                if new_principal < 1e-6 {
-                    effects.push(StateEffect::Financial(FinancialEffect::RemoveInstrument(id)));
-                } else {
-                    effects.push(StateEffect::Financial(FinancialEffect::UpdateInstrument { id, new_principal }));
-                }
-                if self.state.agents.banks.contains_key(&to) {
-                    effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(reserves!(
-                        to,
-                        cb_id,
-                        amount_from_cash,
-                        self.state.current_date,
-                        self.state.financial_system.central_bank.policy_rate_bps + 15.0
-                    ))));
-                } else {
-                    effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(cash!(
-                        to,
-                        amount_from_cash,
-                        cb_id,
-                        self.state.current_date
-                    ))));
-                }
-            }
-        }
-        if amount_remaining_for_deposit > 1e-6 {
-            if let Some((dep_id, dep_inst)) =
-                from_bs.assets.iter().find(|(_, inst)| inst.details.as_any().is::<DemandDepositDetails>())
-            {
-                let payer_bank_id = dep_inst.debtor;
-                let new_deposit_principal = dep_inst.principal - amount_remaining_for_deposit;
-                if new_deposit_principal < 1e-6 {
-                    effects.push(StateEffect::Financial(FinancialEffect::RemoveInstrument(*dep_id)));
-                } else {
-                    effects.push(StateEffect::Financial(FinancialEffect::UpdateInstrument {
-                        id: *dep_id,
-                        new_principal: new_deposit_principal,
-                    }));
-                }
-                if let Some((res_id, res_inst)) =
-                    self.state.financial_system.get_bs_by_id(&payer_bank_id).and_then(|bs| {
-                        bs.assets.iter().find(|(_, i)| i.details.as_any().is::<CentralBankReservesDetails>())
-                    })
-                {
-                    let new_reserves = res_inst.principal - amount_remaining_for_deposit;
-                    if new_reserves < 1e-6 {
-                        effects.push(StateEffect::Financial(FinancialEffect::RemoveInstrument(*res_id)));
-                    } else {
-                        effects.push(StateEffect::Financial(FinancialEffect::UpdateInstrument {
-                            id: *res_id,
-                            new_principal: new_reserves,
-                        }));
-                    }
-                }
-                let payee_bank_id = if self.state.agents.banks.contains_key(&to) {
-                    to
-                } else if let Some(c) = self.state.agents.get_consumer(&to) {
-                    c.bank_id
-                } else if let Some(f) = self.state.agents.get_firm(&to) {
-                    f.bank_id
-                } else {
-                    AgentId::default()
-                };
-
-                if payee_bank_id != AgentId::default() {
-                    effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(reserves!(
-                        payee_bank_id,
-                        cb_id,
-                        amount_remaining_for_deposit,
-                        self.state.current_date,
-                        self.state.financial_system.central_bank.policy_rate_bps + 15.0
-                    ))));
-
-                    if !self.state.agents.banks.contains_key(&to) && payee_bank_id != AgentId::default() {
-                        let bank_spread_bps =
-                            self.state.agents.get_bank(&payee_bank_id).map(|b| b.deposit_spread_bps).unwrap_or(-50.0);
-                        let policy_rate_bps = self.state.financial_system.central_bank.policy_rate_bps;
-                        let dep_rate_bps = (policy_rate_bps + bank_spread_bps).max(0.0);
-                        effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(deposit!(
-                            to,
-                            payee_bank_id,
-                            amount_remaining_for_deposit,
-                            dep_rate_bps,
-                            self.state.current_date
-                        ))));
-                    }
-                } else {
-                    effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(cash!(
-                        to,
-                        amount_remaining_for_deposit,
-                        cb_id,
-                        self.state.current_date
-                    ))));
-                }
-            }
-        }
-        effects
     }
 
     fn process_financial_updates(&self) -> Vec<SimAction> {
