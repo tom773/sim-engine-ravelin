@@ -39,7 +39,7 @@ Thumbs.db
 # Vite
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
-
+domains.md
 code.md
 .npmrc
 package-lock.json
