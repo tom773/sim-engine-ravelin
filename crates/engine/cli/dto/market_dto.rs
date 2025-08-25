@@ -57,7 +57,7 @@ pub struct RecipiesDto {
     pub id: String,
     pub name: String,
     pub inputs: Vec<GoodsDto>,
-    pub output: GoodsDto,
+    pub outputs: Vec<GoodsDto>, // Changed from single output to multiple outputs
     pub efficiency: f64,
     pub labour_hours: f64,
 }

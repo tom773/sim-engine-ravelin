@@ -1,168 +1,213 @@
 use serde::{Deserialize, Serialize};
 use sim_core::*;
-use sim_macros::SimDomain;
+use crate::{Any, inventory, Domain, DomainResult, DomainValidator, ResolutionContext, ResolutionResult, ResolutionPhase};
 use uuid::Uuid;
 
-#[derive(Clone, Debug, Serialize, Deserialize, SimDomain)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProductionDomain {}
-
-#[derive(Debug, Clone)]
-pub struct ProductionResult {
-    pub success: bool,
-    pub effects: Vec<StateEffect>,
-    pub errors: Vec<String>,
-}
 
 impl ProductionDomain {
     pub fn new() -> Self {
         Self {}
     }
+}
 
-    pub fn can_handle(&self, action: &ProductionAction) -> bool {
-        matches!(action, ProductionAction::Hire { .. } | ProductionAction::Produce { .. })
+impl Domain for ProductionDomain {
+    fn name(&self) -> &'static str { 
+        "Production" 
     }
 
-    pub fn validate(&self, action: &ProductionAction, state: &SimState) -> Result<(), String> {
-        match action {
-            ProductionAction::Hire { agent_id, count } => self.validate_hire(*agent_id, *count, state),
-            ProductionAction::Produce { agent_id, recipe_id, batches } => {
-                self.validate_produce(*agent_id, *recipe_id, *batches, state)
-            }
+    fn resolve_intention(&self, intention: &SimIntention, _context: &ResolutionContext) -> Option<ResolutionResult> {
+        let actions = match intention {
+            SimIntention::Produce { agent_id, recipe_id, batches } => {
+                vec![SimAction::Production(ProductionAction::Produce { 
+                    agent_id: *agent_id, recipe_id: *recipe_id, batches: *batches 
+                })]
+            },
+            
+            SimIntention::HireWorkers { agent_id, count, wage_rate } => {
+                vec![SimAction::Labour(LabourAction::PostJobOffer { 
+                    market_id: LabourMarketId::GeneralLabour, 
+                    offer: JobOffer {
+                        offer_id: Uuid::new_v4(), 
+                        firm_id: *agent_id,
+                        quantity: *count,
+                        wage_rate: *wage_rate,
+                        hours_required: 40.0,
+                    } 
+                })]
+            },
+            
+            _ => return None,
+        };
+        
+        Some(ResolutionResult::success(actions))
+    }
+
+    fn resolution_phase(&self, intention: &SimIntention) -> Option<ResolutionPhase> {
+        match intention {
+            SimIntention::Produce { .. } => Some(ResolutionPhase::Independent),
+            SimIntention::HireWorkers { .. } => Some(ResolutionPhase::Independent),
+            _ => None,
         }
     }
 
-    fn validate_hire(&self, firm_id: AgentId, count: u32, state: &SimState) -> Result<(), String> {
-        Validator::positive_integer(count, "hire count")?;
-        if !state.agents.firms.contains_key(&firm_id) {
-            return Err(format!("Firm {:?} not found", firm_id));
-        }
-        Ok(())
-    }
+    fn execute(&self, action: &SimAction, state: &SimState) -> DomainResult {
+        let production_action = match action {
+            SimAction::Production(action) => action,
+            _ => return DomainResult::failure(vec!["Not a production action".to_string()]),
+        };
 
-    fn validate_produce(
-        &self, firm_id: AgentId, recipe_id: RecipeId, batches: u32, state: &SimState,
-    ) -> Result<(), String> {
-        Validator::positive_integer(batches, "production batches")?;
-        let firm = state.agents.firms.get(&firm_id).ok_or(format!("Firm {:?} not found", firm_id))?;
-        let recipe =
-            state.financial_system.goods.recipes.get(&recipe_id).ok_or(format!("Recipe {:?} not found", recipe_id))?;
-
-        let bs = state.financial_system.balance_sheets.get(&firm_id).ok_or("Firm has no balance sheet")?;
-        let inventory = bs.get_inventory().ok_or("Firm has no inventory")?;
-
-        for (input_good, required_qty) in &recipe.inputs {
-            let available = inventory.get(input_good).map_or(0.0, |item| item.quantity);
-            let total_needed = *required_qty * batches as f64;
-            if available < total_needed {
-                return Err(format!(
-                    "Insufficient input {:?}: have {:.2}, need {:.2}",
-                    input_good, available, total_needed
-                ));
-            }
+        if let Err(error) = self.validate(production_action, state) {
+            return DomainResult::failure(vec![error]);
         }
 
-        if firm.employees.is_empty() {
-            return Err("Firm has no employees to produce".to_string());
-        }
-        Ok(())
-    }
-
-    pub fn execute(&self, action: &ProductionAction, state: &SimState) -> ProductionResult {
-        if let Err(error) = self.validate(action, state) {
-            return ProductionResult { success: false, effects: vec![], errors: vec![error] };
-        }
-
-        match action {
-            ProductionAction::Hire { agent_id, count } => self.execute_hire(*agent_id, *count, state),
+        match production_action {
+            ProductionAction::Hire { agent_id, count } => {
+                self.execute_hire(*agent_id, *count)
+            },
             ProductionAction::Produce { agent_id, recipe_id, batches } => {
                 self.execute_produce(*agent_id, *recipe_id, *batches, state)
-            }
+            },
+            ProductionAction::Fire { agent_id, employee_id } => {
+                self.execute_fire(*agent_id, *employee_id)
+            },
         }
     }
-    pub fn execute_hire(&self, firm_id: AgentId, count: u32, state: &SimState) -> ProductionResult {
-        let firm = match state.agents.firms.get(&firm_id) {
-            Some(f) => f,
-            None => {
-                return ProductionResult {
-                    success: false,
-                    effects: vec![],
-                    errors: vec![format!("Firm {:?} not found", firm_id)],
-                };
-            }
-        };
 
-        let offer = JobOffer {
-            offer_id: Uuid::new_v4(),
-            firm_id,
-            wage_rate: firm.wage_rate,
-            hours_required: 40.0,
-            quantity: count,
-        };
-
-        let effect = StateEffect::Market(MarketEffect::UpdateLabourMarket {
-            market_id: LabourMarketId::GeneralLabour,
-            update: LabourMarketUpdate::AddOffer(offer),
-        });
-
-        ProductionResult { success: true, effects: vec![effect], errors: vec![] }
-    }
-
-    pub fn execute_produce(
-        &self, firm_id: AgentId, recipe_id: RecipeId, batches: u32, state: &SimState,
-    ) -> ProductionResult {
-        let recipe = match state.financial_system.goods.recipes.get(&recipe_id) {
-            Some(r) => r,
-            None => {
-                return ProductionResult {
-                    success: false,
-                    effects: vec![],
-                    errors: vec![format!("Recipe {:?} not found", recipe_id)],
-                };
-            }
-        };
-
-        let mut effects = vec![];
-        let total_batches = batches as f64;
-
-        for (input_good, required_qty) in &recipe.inputs {
-            effects.push(StateEffect::Inventory(InventoryEffect::RemoveInventory {
-                owner: firm_id,
-                good_id: *input_good,
-                quantity: *required_qty * total_batches,
-            }));
-        }
-
-        // Compute total input cost using current moving-average costs from inventory, then convert to per-unit output.
-        let bs = state.financial_system.get_bs_by_id(&firm_id).ok_or("Firm has no balance sheet").unwrap();
-        let inv = bs.get_inventory().ok_or("Firm has no inventory").unwrap();
-
-        let (output_good, output_qty) = &recipe.output;
-        let total_output = output_qty * total_batches * recipe.efficiency;
-
-        let total_input_cost: f64 = recipe
-            .inputs
-            .iter()
-            .map(|(gid, req)| {
-                let unit = inv.get(gid).map(|it| it.unit_cost).unwrap_or(0.0);
-                unit * (*req) * total_batches
-            })
-            .sum();
-
-        let unit_cost = if total_output > 0.0 { total_input_cost / total_output } else { 0.0 };
-
-        effects.push(StateEffect::Inventory(InventoryEffect::AddInventory {
-            owner: firm_id,
-            good_id: *output_good,
-            quantity: total_output,
-            unit_cost,
-        }));
-
-        ProductionResult { success: true, effects, errors: vec![] }
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 
-impl Default for ProductionDomain {
-    fn default() -> Self {
-        Self::new()
+impl ProductionDomain {
+    fn validate(&self, action: &ProductionAction, state: &SimState) -> Result<(), String> {
+        match action {
+            ProductionAction::Hire { agent_id, count } => {
+                if *count == 0 {
+                    Err("Cannot hire zero workers".to_string())
+                } else {
+                    DomainValidator::firm_exists(*agent_id, state)
+                }
+            },
+            ProductionAction::Produce { agent_id, recipe_id, batches } => {
+                if *batches == 0 {
+                    return Err("Cannot produce zero batches".to_string());
+                }
+                
+                DomainValidator::firm_exists(*agent_id, state)?;
+                
+                if !state.financial_system.goods.recipes.contains_key(recipe_id) {
+                    return Err("Recipe not found".to_string());
+                }
+                
+                if let Some(recipe) = state.financial_system.goods.recipes.get(recipe_id) {
+                    if let Some(inventory) = state.financial_system.get_bs_by_id(agent_id)
+                        .and_then(|bs| bs.get_inventory()) {
+                        
+                        for input in &recipe.inputs {
+                            let available = inventory.get(&input.good_id)
+                                .map_or(0.0, |item| item.quantity);
+                            let required = input.quantity * (*batches as f64);
+                            
+                            if available < required {
+                                return Err(format!(
+                                    "Insufficient {} for production: need {:.2}, have {:.2}",
+                                    input.good_id, required, available
+                                ));
+                            }
+                        }
+                    } else {
+                        return Err("Firm has no inventory".to_string());
+                    }
+                }
+                
+                Ok(())
+            },
+            ProductionAction::Fire { agent_id, employee_id } => {
+                if let Some(firm) = state.agents.firms.get(agent_id) {
+                    if firm.employees.iter().any(|(id, _)| id == employee_id) {
+                        Ok(())
+                    } else {
+                        Err("Employee not found in firm's employee list".to_string())
+                    }
+                } else {
+                    Err("Firm not found".to_string())
+                }
+            }
+        }
+    }
+
+    fn execute_hire(&self, agent_id: AgentId, count: u32) -> DomainResult {
+        let effects = vec![
+            StateEffect::Market(MarketEffect::UpdateLabourMarket {
+                market_id: LabourMarketId::GeneralLabour,
+                update: LabourMarketUpdate::AddOffer(JobOffer {
+                    offer_id: Uuid::new_v4(),
+                    firm_id: agent_id,
+                    quantity: count,
+                    wage_rate: 25.0,
+                    hours_required: 40.0,
+                }),
+            })
+        ];
+        
+        DomainResult::success(effects)
+    }
+
+    fn execute_produce(&self, agent_id: AgentId, recipe_id: RecipeId, batches: u32, state: &SimState) -> DomainResult {
+        if let Some(recipe) = state.financial_system.goods.recipes.get(&recipe_id) {
+            let mut effects = Vec::new();
+            
+            for input in &recipe.inputs {
+                effects.push(StateEffect::Inventory(InventoryEffect::RemoveInventory {
+                    owner: agent_id,
+                    good_id: input.good_id,
+                    quantity: input.quantity * batches as f64,
+                }));
+            }
+            
+            for output in &recipe.outputs {
+                let input_cost: f64 = recipe.inputs.iter()
+                    .map(|input| {
+                        state.financial_system.get_bs_by_id(&agent_id)
+                            .and_then(|bs| bs.get_inventory())
+                            .and_then(|inv| inv.get(&input.good_id))
+                            .map_or(1.0, |item| item.unit_cost) * input.quantity
+                    })
+                    .sum();
+                
+                let labor_cost = recipe.labour_hours * 25.0;
+                let total_output_quantity: f64 = recipe.outputs.iter().map(|o| o.quantity).sum();
+                let unit_cost = (input_cost + labor_cost) / total_output_quantity;
+                
+                effects.push(StateEffect::Inventory(InventoryEffect::AddInventory {
+                    owner: agent_id,
+                    good_id: output.good_id,
+                    quantity: output.quantity * batches as f64,
+                    unit_cost,
+                }));
+            }
+            
+            DomainResult::success(effects)
+        } else {
+            DomainResult::failure(vec!["Recipe not found".to_string()])
+        }
+    }
+
+    fn execute_fire(&self, firm_id: AgentId, employee_id: AgentId) -> DomainResult {
+        let effect = StateEffect::Agent(AgentEffect::TerminateEmployment {
+            firm_id,
+            consumer_id: employee_id,
+        });
+        
+        DomainResult::success(vec![effect])
+    }
+}
+
+inventory::submit! {
+    crate::DomainRegistration {
+        name: "Production",
+        constructor: || Box::new(ProductionDomain::new()),
     }
 }

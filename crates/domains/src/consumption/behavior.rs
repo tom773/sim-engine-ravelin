@@ -12,23 +12,21 @@ pub struct SimpleConsumerDecisionModel {
 
 impl Default for SimpleConsumerDecisionModel {
     fn default() -> Self {
-        Self {
-            mpc: 0.7,
-        }
+        Self { mpc: 0.7 }
     }
 }
 
 #[typetag::serde]
 impl DecisionModel for SimpleConsumerDecisionModel {
-    fn decide(&self, agent: &dyn Any, state: &SimState, rng: &mut dyn RngCore) -> Vec<SimAction> {
+    fn decide(&self, agent: &dyn Any, state: &SimState, _rng: &mut dyn RngCore) -> Vec<SimIntention> {
         let consumer = match agent.downcast_ref::<Consumer>() {
             Some(c) => c,
             None => return vec![],
         };
 
-        let mut actions = Vec::new();
+        let mut intentions = Vec::new();
 
-        self.handle_employment(consumer, state, &mut actions);
+        self.handle_employment(consumer, &mut intentions);
 
         let fs = &state.financial_system;
         let weekly_income = consumer.income / 52.0;
@@ -36,28 +34,28 @@ impl DecisionModel for SimpleConsumerDecisionModel {
         let total_resources = weekly_income + liquid_assets;
         
         if total_resources < 1.0 {
-            return actions;
+            return intentions;
         }
 
         let budget = total_resources * self.mpc;
         let save_amount = total_resources - budget;
 
-        self.make_simple_purchases(consumer, budget, state, &mut actions, rng);
+        self.make_purchases(consumer, budget, &mut intentions);
 
         if save_amount > 1.0 {
-            actions.push(SimAction::Banking(BankingAction::Deposit {
+            intentions.push(SimIntention::DepositFunds {
                 agent_id: consumer.id,
                 bank: consumer.bank_id,
                 amount: save_amount,
-            }));
+            });
         }
 
-        actions
+        intentions
     }
 }
 
 impl SimpleConsumerDecisionModel {
-    fn handle_employment(&self, consumer: &Consumer, _state: &SimState, actions: &mut Vec<SimAction>) {
+    fn handle_employment(&self, consumer: &Consumer, intentions: &mut Vec<SimIntention>) {
         if consumer.employed_by.is_none() {
             let expected_hourly_wage = match consumer.personality {
                 PersonalityArchetype::Balanced => 25.0,
@@ -72,54 +70,35 @@ impl SimpleConsumerDecisionModel {
                 hours_desired: 40.0,
             };
 
-            actions.push(SimAction::Labour(LabourAction::ApplyForJob {
+            intentions.push(SimIntention::ApplyForJob {
+                agent_id: consumer.id,
                 market_id: LabourMarketId::GeneralLabour,
                 application,
-            }));
+            });
         }
     }
 
-    fn make_simple_purchases(&self, consumer: &Consumer, budget: f64, state: &SimState, actions: &mut Vec<SimAction>, rng: &mut dyn RngCore) {
-
-        let consumption_basket = vec![
+    fn make_purchases(&self, consumer: &Consumer, budget: f64, intentions: &mut Vec<SimIntention>) {
+        let consumption_basket = [
             ("bread", 0.4, 3.0),
             ("petrol", 0.6, 4.0),
         ];
 
-        for (good_slug, budget_share, fallback_price) in consumption_basket {
-            let good_id = match goods::CATALOGUE.get_good_id_by_slug(good_slug) {
-                Some(id) => id,
-                None => {
-                    println!("Warning: Good '{}' not found in catalogue", good_slug);
-                    continue;
+        for (good_slug, budget_share, _fallback_price) in consumption_basket {
+            if let Some(good_id) = goods::CATALOGUE.get_good_id_by_slug(good_slug) {
+                let allocation = budget * budget_share;
+                
+                if allocation > 0.01 {
+                    intentions.push(SimIntention::SpendOnGood {
+                        agent_id: consumer.id,
+                        good_id,
+                        max_notional: allocation,
+                    });
                 }
-            };
-
-            let allocation = budget * budget_share;
-            
-
-            let price = state.market_view(&MarketId::Goods(good_id))
-                .and_then(|view| view.last_or_mid())
-                .unwrap_or(fallback_price);
-
-
-            let bid_price = price * rng.random_range(0.95..1.05);
-            let max_quantity = allocation / bid_price;
-
-            if allocation > 0.01 && max_quantity > 0.01 {
-                actions.push(SimAction::Trading(TradingAction::PostBid {
-                    agent_id: consumer.id,
-                    market_id: MarketId::Goods(good_id),
-                    quantity: max_quantity,
-                    price: bid_price,
-                }));
             }
         }
     }
 }
-
-
-
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CESConsumerDecisionModel {
@@ -133,7 +112,9 @@ impl Default for CESConsumerDecisionModel {
         let mut weights = HashMap::new();
         if let Some(petrol_id) = goods::CATALOGUE.get_good_id_by_slug("petrol") {
             weights.insert(petrol_id, 0.2);
-            weights.insert(goods::CATALOGUE.get_good_id_by_slug("bread").unwrap(), 0.5);
+        }
+        if let Some(bread_id) = goods::CATALOGUE.get_good_id_by_slug("bread") {
+            weights.insert(bread_id, 0.5);
         }
 
         Self {
@@ -146,15 +127,15 @@ impl Default for CESConsumerDecisionModel {
 
 #[typetag::serde]
 impl DecisionModel for CESConsumerDecisionModel {
-    fn decide(&self, agent: &dyn Any, state: &SimState, _rng: &mut dyn RngCore) -> Vec<SimAction> {
+    fn decide(&self, agent: &dyn Any, state: &SimState, _rng: &mut dyn RngCore) -> Vec<SimIntention> {
         let consumer = match agent.downcast_ref::<Consumer>() {
             Some(c) => c,
             None => return vec![],
         };
-        println!("Consumer {} making decisions", consumer.id);
-        let mut actions = Vec::new();
 
-        self.handle_employment(consumer, state, &mut actions);
+        let mut intentions = Vec::new();
+
+        self.handle_employment(consumer, &mut intentions);
 
         let nominal_rate_bps = state.financial_system.central_bank.policy_rate_bps;
         let nominal_rate = bps_to_decimal(nominal_rate_bps);
@@ -168,74 +149,27 @@ impl DecisionModel for CESConsumerDecisionModel {
         let weekly_income = consumer.income / 52.0;
         let liquid_assets = fs.get_liquid_assets(&consumer.id);
         let total_resources = weekly_income + liquid_assets;
-
         let budget = total_resources * mpc;
         let save_amount = total_resources - budget;
 
         if budget < 1.0 {
-            self.handle_savings(consumer, save_amount, &mut actions);
-            return actions;
+            self.handle_savings(consumer, save_amount, &mut intentions);
+            return intentions;
         }
 
-        let mut market_data = Vec::new();
-
-        for (good_id, weight) in &self.weights {
-            if let Some(view) = state.market_view(&MarketId::Goods(*good_id)) {
-                if let Some(price) = view.last_or_mid() {
-                     if price > 1e-6 {
-                        market_data.push((*good_id, price, *weight));
-                     }
-                }
-            }
-        }
-        println!("Consumer {} market data: {:#?}", consumer.id, market_data.clone());
-        if market_data.is_empty() {
-            self.handle_savings(consumer, save_amount, &mut actions);
-            return actions;
+        let market_data = self.collect_market_data(state);
+        if !market_data.is_empty() {
+            self.optimize_ces_consumption(consumer, budget, &market_data, &mut intentions);
         }
 
-        let denominator: f64 = market_data.iter().map(|(_, price, weight)| {
-            weight * price.powf(1.0 - self.sigma)
-        }).sum();
+        self.handle_savings(consumer, save_amount, &mut intentions);
 
-        if denominator <= 1e-9 {
-            self.handle_savings(consumer, save_amount, &mut actions);
-            return actions;
-        }
-
-        for (good_id, price, weight) in market_data {
-            let share = (weight * price.powf(1.0 - self.sigma)) / denominator;
-
-            let notional = share * budget;
-
-            if notional > 0.01 {
-                actions.push(SimAction::Consumption(ConsumptionAction::PurchaseAtBest {
-                    agent_id: consumer.id,
-                    good_id,
-                    max_notional: notional,
-                }));
-            }
-        }
-        let bread_id = goods::CATALOGUE.get_good_id_by_slug("bread").unwrap();
-        self.handle_savings(consumer, save_amount, &mut actions);
-        self.handle_purchase(consumer, bread_id, 1.0, &mut actions);
-        
-        actions
+        intentions
     }
 }
 
 impl CESConsumerDecisionModel {
-    fn handle_savings(&self, consumer: &Consumer, save_amount: f64, actions: &mut Vec<SimAction>) {
-        if save_amount > 1.0 {
-            actions.push(SimAction::Banking(BankingAction::Deposit {
-                agent_id: consumer.id,
-                bank: consumer.bank_id,
-                amount: save_amount
-            }));
-        }
-    }
-
-    fn handle_employment(&self, consumer: &Consumer, _state: &SimState, actions: &mut Vec<SimAction>) {
+    fn handle_employment(&self, consumer: &Consumer, intentions: &mut Vec<SimIntention>) {
         if consumer.employed_by.is_none() {
             let expected_hourly_wage = match consumer.personality {
                 PersonalityArchetype::Balanced => 25.0,
@@ -250,28 +184,66 @@ impl CESConsumerDecisionModel {
                 hours_desired: 40.0,
             };
 
-            actions.push(SimAction::Labour(LabourAction::ApplyForJob {
+            intentions.push(SimIntention::ApplyForJob {
+                agent_id: consumer.id,
                 market_id: LabourMarketId::GeneralLabour,
                 application,
-            }));
+            });
         }
     }
 
-    fn handle_purchase(
+    fn collect_market_data(&self, state: &SimState) -> Vec<(GoodId, f64, f64)> {
+        let mut market_data = Vec::new();
+
+        for (good_id, weight) in &self.weights {
+            if let Some(view) = state.market_view(&MarketId::Goods(*good_id)) {
+                if let Some(price) = view.last_or_mid() {
+                    if price > 1e-6 {
+                        market_data.push((*good_id, price, *weight));
+                    }
+                }
+            }
+        }
+
+        market_data
+    }
+
+    fn optimize_ces_consumption(
         &self,
         consumer: &Consumer,
-        good_id: GoodId,
-        amount: f64,
-        actions: &mut Vec<SimAction>,
+        budget: f64,
+        market_data: &[(GoodId, f64, f64)],
+        intentions: &mut Vec<SimIntention>,
     ) {
-        println!("Consumer {} attempting to purchase {} units of good {}", consumer.id, amount, good_id);
-        if amount > 0.0 {
-            actions.push(SimAction::Consumption(ConsumptionAction::Purchase {
+        let denominator: f64 = market_data.iter()
+            .map(|(_, price, weight)| weight * price.powf(1.0 - self.sigma))
+            .sum();
+
+        if denominator <= 1e-9 {
+            return;
+        }
+
+        for (good_id, price, weight) in market_data {
+            let share = (weight * price.powf(1.0 - self.sigma)) / denominator;
+            let notional = share * budget;
+
+            if notional > 0.01 {
+                intentions.push(SimIntention::SpendOnGood {
+                    agent_id: consumer.id,
+                    good_id: *good_id,
+                    max_notional: notional,
+                });
+            }
+        }
+    }
+
+    fn handle_savings(&self, consumer: &Consumer, save_amount: f64, intentions: &mut Vec<SimIntention>) {
+        if save_amount > 1.0 {
+            intentions.push(SimIntention::DepositFunds {
                 agent_id: consumer.id,
-                seller: consumer.id,
-                good_id,
-                amount,
-            }));
+                bank: consumer.bank_id,
+                amount: save_amount,
+            });
         }
     }
 }

@@ -28,7 +28,7 @@ cpi_weight = 0.05
 
 [[recipes]]
 name = "Oil Refining"
-output = { slug = "petrol", qty = 19.5 }
+output = [{ slug = "petrol", qty = 19.5 }]
 inputs = [
   { slug = "oil",   qty = 1.0 }
 ]
@@ -38,7 +38,7 @@ efficiency = 0.85
 
 [[recipes]]
 name = "Bread Production"
-output = { slug = "bread", qty = 1.0 }
+output = [{ slug = "bread", qty = 1.0 }]
 inputs = [
   { slug = "wheat", qty = 0.5 }
 ]

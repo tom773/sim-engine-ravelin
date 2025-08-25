@@ -1,107 +1,232 @@
 use serde::{Deserialize, Serialize};
 use sim_core::*;
-use sim_macros::SimDomain;
+use crate::{Any, Domain, DomainResult, DomainValidator, ResolutionContext, ResolutionResult, ResolutionPhase};
+extern crate inventory;
 
-#[derive(Clone, Debug, Serialize, Deserialize, SimDomain)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BankingDomain {}
-
-#[derive(Debug, Clone)]
-pub struct BankingResult {
-    pub success: bool,
-    pub effects: Vec<StateEffect>,
-    pub errors: Vec<String>,
-}
 
 impl BankingDomain {
     pub fn new() -> Self {
         Self {}
     }
+}
 
-    pub fn execute(&self, action: &BankingAction, state: &SimState) -> BankingResult {
-        if let Err(error) = self.basic_validate(action, state) {
-            return BankingResult { success: false, effects: vec![], errors: vec![error] };
-        }
+impl Domain for BankingDomain {
+    fn name(&self) -> &'static str { 
+        "Banking" 
+    }
 
-        match action {
-            BankingAction::Deposit { agent_id, bank, amount } => self.execute_deposit(*agent_id, *bank, *amount),
-            BankingAction::Withdraw { agent_id, bank, amount } => self.execute_withdraw(*agent_id, *bank, *amount),
-            BankingAction::Transfer { from, to, amount } => self.execute_transfer(*from, *to, *amount),
-            BankingAction::PayWages { agent_id, employee, amount } => {
-                self.execute_pay_wages(*agent_id, *employee, *amount)
-            }
-            BankingAction::UpdateReserves { bank: _, amount_change: _ } => {
-                BankingResult {
-                    success: false,
-                    effects: vec![],
-                    errors: vec!["Reserve updates not yet implemented with semantic effects".to_string()],
-                }
-            }
-            BankingAction::InjectLiquidity => self.execute_inject_liquidity(state),
+    fn resolve_intention(&self, intention: &SimIntention, _context: &ResolutionContext) -> Option<ResolutionResult> {
+        let actions = match intention {
+            SimIntention::DepositFunds { agent_id, bank, amount } => {
+                vec![SimAction::Banking(BankingAction::Deposit { 
+                    agent_id: *agent_id, bank: *bank, amount: *amount 
+                })]
+            },
+            
+            SimIntention::WithdrawFunds { agent_id, bank, amount } => {
+                vec![SimAction::Banking(BankingAction::Withdraw { 
+                    agent_id: *agent_id, bank: *bank, amount: *amount 
+                })]
+            },
+            
+            SimIntention::PayWages { employer, employee, amount } => {
+                vec![SimAction::Banking(BankingAction::PayWages { 
+                    agent_id: *employer, employee: *employee, amount: *amount 
+                })]
+            },
+            
+            SimIntention::CollectTaxes { government_id, target, amount } => {
+                vec![SimAction::Banking(BankingAction::Transfer { 
+                    from: *target, to: *government_id, amount: *amount 
+                })]
+            },
+            
+            SimIntention::InjectLiquidity => {
+                vec![SimAction::Banking(BankingAction::InjectLiquidity)]
+            },
+            
+            SimIntention::LendExcessReserves { agent_id, amount, target_rate_bps } => {
+                self.resolve_reserve_lending(*agent_id, *amount, *target_rate_bps)
+            },
+
+            SimIntention::BorrowReserves { agent_id, amount, target_rate_bps } => {
+                self.resolve_reserve_borrowing(*agent_id, *amount, *target_rate_bps)
+            },
+            
+            _ => return None,
+        };
+        
+        Some(ResolutionResult::success(actions))
+    }
+
+    fn resolution_phase(&self, intention: &SimIntention) -> Option<ResolutionPhase> {
+        match intention {
+            SimIntention::DepositFunds { .. } |
+            SimIntention::WithdrawFunds { .. } |
+            SimIntention::PayWages { .. } |
+            SimIntention::CollectTaxes { .. } |
+            SimIntention::InjectLiquidity => Some(ResolutionPhase::Independent),
+            
+            SimIntention::LendExcessReserves { .. } |
+            SimIntention::BorrowReserves { .. } => Some(ResolutionPhase::Market),
+            
+            _ => None,
         }
     }
 
-    fn basic_validate(&self, action: &BankingAction, state: &SimState) -> Result<(), String> {
+    fn execute(&self, action: &SimAction, state: &SimState) -> DomainResult {
+        let banking_action = match action {
+            SimAction::Banking(action) => action,
+            _ => return DomainResult::failure(vec!["Not a banking action".to_string()]),
+        };
+
+        if let Err(error) = self.validate(banking_action, state) {
+            return DomainResult::failure(vec![error]);
+        }
+
+        match banking_action {
+            BankingAction::Deposit { agent_id, bank, amount } => {
+                self.execute_deposit(*agent_id, *bank, *amount)
+            },
+            BankingAction::Withdraw { agent_id, bank, amount } => {
+                self.execute_withdraw(*agent_id, *bank, *amount)
+            },
+            BankingAction::Transfer { from, to, amount } => {
+                self.execute_transfer(*from, *to, *amount)
+            },
+            BankingAction::PayWages { agent_id, employee, amount } => {
+                self.execute_pay_wages(*agent_id, *employee, *amount)
+            },
+            BankingAction::UpdateReserves { bank: _, amount_change: _ } => {
+                DomainResult::failure(vec!["Reserve updates not yet implemented".to_string()])
+            },
+            BankingAction::InjectLiquidity => {
+                self.execute_inject_liquidity(state)
+            },
+        }
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+impl BankingDomain {
+    fn resolve_reserve_lending(&self, agent_id: AgentId, amount: f64, target_rate_bps: BasisPoints) -> Vec<SimAction> {
+        let market_id = FinancialMarketId::FederalFundsOvernight;
+        let daily_rate = market_id.annual_bps_to_daily_rate(target_rate_bps);
+        let price = 1.0 / (1.0 + daily_rate);
+
+        vec![SimAction::Trading(TradingAction::PostAsk {
+            agent_id,
+            market_id: MarketId::Financial(market_id),
+            quantity: amount,
+            price,
+        })]
+    }
+
+    fn resolve_reserve_borrowing(&self, agent_id: AgentId, amount: f64, target_rate_bps: BasisPoints) -> Vec<SimAction> {
+        let market_id = FinancialMarketId::FederalFundsOvernight;
+        let daily_rate = market_id.annual_bps_to_daily_rate(target_rate_bps);
+        let price = 1.0 / (1.0 + daily_rate);
+
+        vec![SimAction::Trading(TradingAction::PostBid {
+            agent_id,
+            market_id: MarketId::Financial(market_id),
+            quantity: amount,
+            price,
+        })]
+    }
+}
+
+impl BankingDomain {
+    fn validate(&self, action: &BankingAction, state: &SimState) -> Result<(), String> {
         match action {
-            BankingAction::Deposit { agent_id, bank, amount }
-            | BankingAction::Withdraw { agent_id , bank, amount } => {
-                Validator::positive_amount(*amount)?;
-                self.validate_agent_exists(*agent_id, state)?;
-                self.validate_bank_exists(*bank, state)?;
+            BankingAction::Deposit { agent_id, bank, amount } => {
+                DomainValidator::positive_amount(*amount)?;
+                DomainValidator::agent_exists(*agent_id, state)?;
+                DomainValidator::bank_exists(*bank, state)?;
+
+                let available_cash = state.financial_system.get_cash_assets(agent_id);
+                if available_cash < *amount {
+                    return Err(format!(
+                        "Insufficient cash for deposit: agent has ${:.2}, needs ${:.2}",
+                        available_cash, amount
+                    ));
+                }
+                Ok(())
+            }
+            BankingAction::Withdraw { agent_id, bank, amount } => {
+                DomainValidator::positive_amount(*amount)?;
+                DomainValidator::agent_exists(*agent_id, state)?;
+                DomainValidator::bank_exists(*bank, state)?;
+                
+                let available_deposits = state.financial_system.get_deposits_at_bank(agent_id, bank);
+                if available_deposits < *amount {
+                    return Err(format!(
+                        "Insufficient deposits for withdrawal: agent has ${:.2}, needs ${:.2}",
+                        available_deposits, amount
+                    ));
+                }
                 Ok(())
             }
             BankingAction::Transfer { from, to, amount }
             | BankingAction::PayWages { agent_id: from, employee: to, amount } => {
-                Validator::positive_amount(*amount)?;
-                self.validate_agent_exists(*from, state)?;
-                self.validate_agent_exists(*to, state)?;
+                DomainValidator::positive_amount(*amount)?;
+                DomainValidator::agent_exists(*from, state)?;
+                DomainValidator::agent_exists(*to, state)?;
+                let available_funds = state.financial_system.get_liquid_assets(from);
+                if available_funds < *amount {
+                     return Err(format!(
+                        "Insufficient liquid assets for transfer: agent has ${:.2}, needs ${:.2}",
+                        available_funds, amount
+                    ));
+                }
                 Ok(())
             }
-            BankingAction::UpdateReserves { bank, amount_change: _ } => self.validate_bank_exists(*bank, state),
+            BankingAction::UpdateReserves { bank, amount_change: _ } => {
+                DomainValidator::bank_exists(*bank, state)
+            }
             BankingAction::InjectLiquidity => Ok(()),
         }
     }
+}
 
-    fn validate_agent_exists(&self, agent_id: AgentId, state: &SimState) -> Result<(), String> {
-        if state.financial_system.balance_sheets.contains_key(&agent_id) {
-            Ok(())
-        } else {
-            Err(format!("Agent {} does not exist", agent_id.0))
-        }
-    }
-
-    fn validate_bank_exists(&self, bank_id: AgentId, state: &SimState) -> Result<(), String> {
-        if state.agents.banks.contains_key(&bank_id) {
-            Ok(())
-        } else {
-            Err("Target is not a valid commercial bank".to_string())
-        }
-    }
-
-    pub fn execute_deposit(&self, depositor: AgentId, bank: AgentId, amount: f64) -> BankingResult {
+impl BankingDomain {
+    fn execute_deposit(&self, depositor: AgentId, bank: AgentId, amount: f64) -> DomainResult {
         let effect = StateEffect::Financial(FinancialEffect::DepositFunds { depositor, bank, amount });
-        BankingResult { success: true, effects: vec![effect], errors: vec![] }
+        DomainResult::success(vec![effect])
     }
 
-    pub fn execute_withdraw(&self, account_holder: AgentId, bank: AgentId, amount: f64) -> BankingResult {
+    fn execute_withdraw(&self, account_holder: AgentId, bank: AgentId, amount: f64) -> DomainResult {
         let effect = StateEffect::Financial(FinancialEffect::WithdrawFunds { account_holder, bank, amount });
-        BankingResult { success: true, effects: vec![effect], errors: vec![] }
+        DomainResult::success(vec![effect])
     }
 
-    pub fn execute_transfer(&self, from: AgentId, to: AgentId, amount: f64) -> BankingResult {
+    fn execute_transfer(&self, from: AgentId, to: AgentId, amount: f64) -> DomainResult {
         let effect = StateEffect::Financial(FinancialEffect::TransferFunds { from, to, amount });
-        BankingResult { success: true, effects: vec![effect], errors: vec![] }
+        DomainResult::success(vec![effect])
     }
 
-    pub fn execute_pay_wages(&self, employer: AgentId, employee: AgentId, amount: f64) -> BankingResult {
+    fn execute_pay_wages(&self, employer: AgentId, employee: AgentId, amount: f64) -> DomainResult {
         let effect = StateEffect::Financial(FinancialEffect::PayWages { employer, employee, amount });
-        BankingResult { success: true, effects: vec![effect], errors: vec![] }
+        DomainResult::success(vec![effect])
     }
 
-    pub fn execute_inject_liquidity(&self, state: &SimState) -> BankingResult {
+    fn execute_inject_liquidity(&self, state: &SimState) -> DomainResult {
         let recipients: Vec<AgentId> = state.agents.consumers.keys().cloned().collect();
         let amount_per_recipient = 1000.0;
 
         let effect = StateEffect::Financial(FinancialEffect::InjectLiquidity { recipients, amount_per_recipient });
-        BankingResult { success: true, effects: vec![effect], errors: vec![] }
+        DomainResult::success(vec![effect])
+    }
+}
+
+inventory::submit! {
+    crate::DomainRegistration {
+        name: "Banking",
+        constructor: || Box::new(BankingDomain::new()),
     }
 }

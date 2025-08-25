@@ -36,7 +36,6 @@ pub trait EffectApplicator {
         for (index, effect) in effects.iter().enumerate() {
             match self.apply_effect(effect) {
                 Ok(()) => {
-                    println!("[EFFECTS] Applied State Effect {}", effect.name());
                 }
                 Err(e) => {
                     errors.push(format!("Effect {}: {}", index, e));
@@ -44,14 +43,10 @@ pub trait EffectApplicator {
                 }
             }
         }
-        
-        if errors.len() == effects.len() && !errors.is_empty() {
-            Err(EffectError::InvalidState(format!("All {} effects failed: {:?}", errors.len(), errors)))
-        } else if !errors.is_empty() {
-            println!("[EFFECTS] WARNING: {} effects failed but continuing: {:?}", errors.len(), errors);
-            Ok(()) // Continue despite some failures
-        } else {
+        if errors.is_empty() {
             Ok(())
+        } else {
+            Err(EffectError::InvalidState(errors.join("; ")))
         }
     }
 }

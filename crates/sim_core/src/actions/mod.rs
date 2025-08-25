@@ -1,34 +1,3 @@
-//! # Simulation Actions Crate (`sim_actions`)
-//!
-//! This crate defines the fundamental "verbs" of the simulation. It establishes a unified
-//! system for representing all possible actions that agents can decide to take within the
-//! economic model.
-//!
-//! ## Crate Structure and Purpose
-//!
-//! The primary purpose of this crate is to aggregate all domain-specific actions into a single,
-//! top-level enum, `SimAction`. This design allows the simulation engine to handle actions
-//! generically during the decision-making phase, before dispatching them to the appropriate
-//! domain for execution.
-//!
-//! The crate is structured into several modules, each corresponding to a specific economic domain:
-//!
-//! - **`banking.rs`**: Defines `BankingAction` for deposits, withdrawals, and transfers.
-//! - **`consumption.rs`**: Defines `ConsumptionAction` for purchasing and consuming goods.
-//! - **`fiscal.rs`**: Defines `FiscalAction` for government-related activities like taxation.
-//! - **`production.rs`**: Defines `ProductionAction` for firm activities like producing goods and hiring.
-//! - **`settlement.rs`**: Defines `SettlementAction` for financial processes like paying interest.
-//! - **`trading.rs`**: Defines `TradingAction` for market activities like placing bids and asks.
-//! - **`validation.rs`**: Provides helper functions for validating action parameters (e.g., ensuring amounts are positive).
-//!
-//! ## Key Components
-//!
-//! - **`SimAction` (enum)**: This is the core enum of the crate. It wraps all the domain-specific action enums.
-//!   An instance of `SimAction` represents a single, concrete intention from an agent.
-//!
-//! - **`agent_id()` (method)**: A common method on all action types that returns the `AgentId` of the
-//!   agent who initiated the action. This is crucial for logging, validation, and execution routing.
-
 pub mod banking;
 pub mod consumption;
 pub mod fiscal;
@@ -62,7 +31,6 @@ pub enum SimAction {
 }
 
 impl SimAction {
-    /// Returns a string slice representing the name of the action variant.
     pub fn name(&self) -> String {
         match self {
             SimAction::Banking(action) => format!("Banking::{}", action.name()),
@@ -75,7 +43,6 @@ impl SimAction {
         }
     }
 
-    /// Returns the `AgentId` of the agent performing the action.
     pub fn agent_id(&self) -> AgentId {
         match self {
             SimAction::Banking(action) => action.agent_id(),
@@ -85,6 +52,54 @@ impl SimAction {
             SimAction::Settlement(action) => action.agent_id(),
             SimAction::Trading(action) => action.agent_id(),
             SimAction::Labour(action) => action.agent_id(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum SimIntention {
+    SpendOnGood { agent_id: AgentId, good_id: GoodId, max_notional: f64 },
+    PurchaseInputs { agent_id: AgentId, good_id: GoodId, quantity: f64, max_price: f64 },
+    ConsumeGood { agent_id: AgentId, good_id: GoodId, quantity: f64 },
+    SellInventory { agent_id: AgentId, good_id: GoodId, quantity: f64, desired_markup: f64 },
+    Produce { agent_id: AgentId, recipe_id: RecipeId, batches: u32 },
+
+    ApplyForJob { agent_id: AgentId, market_id: LabourMarketId, application: JobApplication },
+    HireWorkers { agent_id: AgentId, count: u32, wage_rate: f64 },
+
+    IssueDebtToRaise { government_id: AgentId, tenor: Tenor, amount_to_raise: f64, coupon_rate: BasisPoints },
+    CollectTaxes { government_id: AgentId, target: AgentId, amount: f64 },
+    
+    LendExcessReserves { agent_id: AgentId, amount: f64, target_rate_bps: BasisPoints },
+    BorrowReserves { agent_id: AgentId, amount: f64, target_rate_bps: BasisPoints },
+    MarketMakeTreasuries { agent_id: AgentId, tenor: Tenor, quantity: f64, bid_yield_bps: BasisPoints, ask_yield_bps: BasisPoints },
+
+    DepositFunds { agent_id: AgentId, bank: AgentId, amount: f64 },
+    WithdrawFunds { agent_id: AgentId, bank: AgentId, amount: f64 },
+    PayWages { employer: AgentId, employee: AgentId, amount: f64 },
+
+    InjectLiquidity,
+}
+
+impl SimIntention {
+    pub fn agent_id(&self) -> AgentId {
+        match self {
+            SimIntention::SpendOnGood { agent_id, .. } => *agent_id,
+            SimIntention::PurchaseInputs { agent_id, .. } => *agent_id,
+            SimIntention::ConsumeGood { agent_id, .. } => *agent_id,
+            SimIntention::SellInventory { agent_id, .. } => *agent_id,
+            SimIntention::Produce { agent_id, .. } => *agent_id,
+            SimIntention::ApplyForJob { agent_id, .. } => *agent_id,
+            SimIntention::HireWorkers { agent_id, .. } => *agent_id,
+            SimIntention::IssueDebtToRaise { government_id, .. } => *government_id,
+            SimIntention::CollectTaxes { government_id, .. } => *government_id,
+            SimIntention::LendExcessReserves { agent_id, .. } => *agent_id,
+            SimIntention::BorrowReserves { agent_id, .. } => *agent_id,
+            SimIntention::MarketMakeTreasuries { agent_id, .. } => *agent_id,
+            SimIntention::DepositFunds { agent_id, .. } => *agent_id,
+            SimIntention::WithdrawFunds { agent_id, .. } => *agent_id,
+            SimIntention::PayWages { employer, .. } => *employer,
+            SimIntention::InjectLiquidity => AgentId::default(),
         }
     }
 }

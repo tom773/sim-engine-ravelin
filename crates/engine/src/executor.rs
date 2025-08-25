@@ -1,9 +1,9 @@
 use crate::broadcast::SurrealDbWriter;
 use crate::*;
 use chrono::{Datelike, NaiveDate};
+use domains::prelude::*;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use sim_core::*;
 use std::collections::HashMap;
 
 pub struct SimulationEngine {
@@ -26,51 +26,33 @@ impl SimulationEngine {
 
     pub fn run_initialization(&mut self) {}
 
-    fn collect_actions(&self, rng: &mut dyn RngCore) -> Vec<SimAction> {
-        let mut all_actions = Vec::new();
+    fn gather_intentions(&self, rng: &mut dyn RngCore) -> Vec<SimIntention> {
+        let mut all_intentions = Vec::new();
+
         for agent_id in self.state.agents.all_agent_ids() {
             if let Some(model) = self.decision_models.get(&agent_id) {
                 if let Some(agent) = self.state.agents.get_agent_as_any(&agent_id) {
-                    all_actions.extend(model.decide(agent, &self.state, rng));
+                    all_intentions.extend(model.decide(agent, &self.state, rng));
                 }
             }
         }
+
         let government = &self.state.financial_system.government;
         if let Some(model) = self.decision_models.get(&government.id) {
-            all_actions.extend(model.decide(government, &self.state, rng));
+            all_intentions.extend(model.decide(government, &self.state, rng));
         }
-        all_actions
+
+        all_intentions
     }
 
     pub fn tick(&mut self, rng: &mut dyn RngCore) -> TickResult {
-        self.state.advance_time();
-        self.update_agent_expectations();
-        let mut actions = self.process_financial_updates();
-        actions.extend(self.collect_actions(rng));
+        self.run_upkeep();
 
-        let (action_records, action_to_effect_indices, effects_from_actions) = self.execute_actions(&actions);
-
-        if let Err(e) = self.state.apply_effects(&effects_from_actions) {
-            println!("[ERROR] applying action effects: {}", e);
-        }
-
-        let (trades, snapshots) = self.state.financial_system.exchange.clear_markets(self.state.ticknum as i64);
-
-        self.update_market_history(&trades, &snapshots);
+        let intentions = self.gather_intentions(rng);
+        let (action_records, action_to_effect_indices, all_effects, trades) =
+            self.resolve_and_execute_intentions(intentions);
         self.state.financial_system.update_yield_curve(self.state.current_date);
-        let labour_effects = self.state.financial_system.exchange.clear_labour_markets(&self.state.clone());
-        if let Err(e) = self.state.apply_effects(&labour_effects) {
-            println!("[ERROR] applying labour market effects: {}", e);
-        }
-        let settlement_effects = self.settle_trades(trades.clone());
-        if let Err(e) = self.state.apply_effects(&settlement_effects) {
-            println!("[ERROR] applying settlement effects: {}", e);
-        }
-        let all_effects = {
-            let mut combined = effects_from_actions;
-            combined.extend(settlement_effects);
-            combined
-        };
+
         let tick_record = TickRecord {
             tick_number: self.state.ticknum,
             date: self.state.current_date,
@@ -95,7 +77,159 @@ impl SimulationEngine {
 
         self.state.history.add_tick_record(tick_record);
         self.state.ticknum += 1;
-        TickResult { tick_number: self.state.ticknum, actions, effects: all_effects, trades }
+
+        TickResult {
+            tick_number: self.state.ticknum,
+            actions: action_records.iter().map(|r| r.action.clone()).collect(),
+            effects: all_effects,
+            trades,
+        }
+    }
+
+    fn resolve_and_execute_intentions(
+        &mut self, intentions: Vec<SimIntention>,
+    ) -> (Vec<ActionRecord>, HashMap<usize, Vec<usize>>, Vec<StateEffect>, Vec<Trade>) {
+        let categorized = self.domain_registry.categorize_intentions_by_phase(intentions);
+
+        let mut all_action_records = Vec::new();
+        let mut all_action_to_effect_indices = HashMap::new();
+        let mut all_effects = Vec::new();
+
+        for phase in [ResolutionPhase::Independent, ResolutionPhase::Market, ResolutionPhase::Dependent] {
+            if let Some(phase_intentions) = categorized.get(&phase) {
+                let (phase_records, phase_indices, phase_effects) = {
+                    let context = ResolutionContext { state: &self.state, current_tick: self.state.ticknum };
+                    self.resolve_and_execute_phase(
+                        phase_intentions,
+                        &context,
+                        all_action_records.len(),
+                        all_effects.len(),
+                    )
+                };
+
+                if phase == ResolutionPhase::Market {
+                    self.apply_market_effects_for_price_discovery(&phase_effects);
+                }
+
+                all_action_records.extend(phase_records);
+                for (k, v) in phase_indices {
+                    all_action_to_effect_indices.insert(k, v);
+                }
+                all_effects.extend(phase_effects);
+            }
+        }
+
+        let (trades, snapshots) = self.state.financial_system.exchange.clear_markets(self.state.ticknum as i64);
+        self.update_market_history(&trades, &snapshots);
+
+        let settlement_effects = self.settle_trades(trades.clone());
+        all_effects.extend(settlement_effects);
+
+        let labour_effects = self.state.financial_system.exchange.clear_labour_markets(&self.state.clone());
+        all_effects.extend(labour_effects);
+
+        if let Err(e) = self.state.apply_effects(&all_effects) {
+            println!("[ERROR] applying all effects: {}", e);
+        }
+
+        (all_action_records, all_action_to_effect_indices, all_effects, trades)
+    }
+
+    fn resolve_and_execute_phase(
+        &self, intentions: &[SimIntention], context: &ResolutionContext, action_offset: usize, effect_offset: usize,
+    ) -> (Vec<ActionRecord>, HashMap<usize, Vec<usize>>, Vec<StateEffect>) {
+        let mut phase_actions = Vec::new();
+
+        for intention in intentions {
+            let result = self.domain_registry.resolve_intention(intention, context);
+
+            if !result.success {
+                println!("[WARNING] Failed to resolve intention: {:?}", result.errors);
+                continue;
+            }
+
+            phase_actions.extend(result.actions);
+        }
+        let (action_records, mut action_to_effect_indices, effects) = self.execute_actions(&phase_actions);
+
+        for indices in action_to_effect_indices.values_mut() {
+            for index in indices {
+                *index += effect_offset;
+            }
+        }
+
+        let adjusted_indices: HashMap<usize, Vec<usize>> =
+            action_to_effect_indices.into_iter().map(|(k, v)| (k + action_offset, v)).collect();
+
+        (action_records, adjusted_indices, effects)
+    }
+
+    fn apply_market_effects_for_price_discovery(&mut self, effects: &[StateEffect]) {
+        let market_effects: Vec<StateEffect> =
+            effects.iter().filter(|e| matches!(e, StateEffect::Market(_))).cloned().collect();
+
+        if !market_effects.is_empty() {
+            if let Err(e) = self.state.apply_effects(&market_effects) {
+                println!("[ERROR] applying market effects for price discovery: {}", e);
+            }
+        }
+    }
+
+    fn execute_actions(
+        &self, actions: &[SimAction],
+    ) -> (Vec<ActionRecord>, HashMap<usize, Vec<usize>>, Vec<StateEffect>) {
+        let mut all_effects = Vec::new();
+        let mut action_records = Vec::with_capacity(actions.len());
+        let mut action_to_effect_indices = HashMap::new();
+
+        for (action_idx, action) in actions.iter().enumerate() {
+            let agent_id = action.agent_id();
+            let (agent_type, agent_name) = self.get_agent_info(&agent_id);
+            action_records.push(ActionRecord { action: action.clone(), agent_id, agent_type, agent_name });
+
+            let effects = match self.domain_registry.execute_action(action, &self.state) {
+                Ok(effects) => effects,
+                Err(e) => {
+                    println!("[FAILED ACTION] - {:?}: {}", action.name(), e);
+                    vec![]
+                }
+            };
+            if !effects.is_empty() {
+                let effect_start_idx = all_effects.len();
+                let effect_indices: Vec<usize> = (effect_start_idx..effect_start_idx + effects.len()).collect();
+                action_to_effect_indices.insert(action_idx, effect_indices);
+                all_effects.extend(effects);
+            }
+        }
+        (action_records, action_to_effect_indices, all_effects)
+    }
+
+    fn run_upkeep(&mut self) {
+        self.state.advance_time();
+        self.update_agent_expectations();
+
+        let upkeep_actions = self.process_financial_updates();
+        let (_, _, upkeep_effects) = self.execute_actions(&upkeep_actions);
+
+        if let Err(e) = self.state.apply_effects(&upkeep_effects) {
+            println!("[ERROR] applying upkeep effects: {}", e);
+        }
+    }
+
+    fn get_agent_info(&self, agent_id: &AgentId) -> (String, Option<String>) {
+        if let Some(bank) = self.state.agents.banks.get(agent_id) {
+            ("Bank".to_string(), Some(bank.name.clone()))
+        } else if let Some(_consumer) = self.state.agents.consumers.get(agent_id) {
+            ("Consumer".to_string(), Some(format!("Consumer {}", &agent_id.to_string()[..8])))
+        } else if let Some(firm) = self.state.agents.firms.get(agent_id) {
+            ("Firm".to_string(), Some(firm.name.clone()))
+        } else if *agent_id == self.state.financial_system.government.id {
+            ("Government".to_string(), Some("Government".to_string()))
+        } else if *agent_id == self.state.financial_system.central_bank.id {
+            ("CentralBank".to_string(), Some("Central Bank".to_string()))
+        } else {
+            ("Unknown".to_string(), None)
+        }
     }
 
     async fn persist_tick_batch(
@@ -221,29 +355,6 @@ impl SimulationEngine {
                 history.market_ticks.entry(market_id.clone()).or_default().push_back(tick);
             }
         }
-    }
-
-    fn execute_actions(
-        &self, actions: &[SimAction],
-    ) -> (Vec<ActionRecord>, HashMap<usize, Vec<usize>>, Vec<StateEffect>) {
-        let mut all_effects = Vec::new();
-        let mut action_records = Vec::with_capacity(actions.len());
-        let mut action_to_effect_indices = HashMap::new();
-
-        for (action_idx, action) in actions.iter().enumerate() {
-            let agent_id = action.agent_id();
-            let (agent_type, agent_name) = self.get_agent_info(&agent_id);
-            action_records.push(ActionRecord { action: action.clone(), agent_id, agent_type, agent_name });
-
-            let effects = self.domain_registry.execute(action, &self.state);
-            if !effects.is_empty() {
-                let effect_start_idx = all_effects.len();
-                let effect_indices: Vec<usize> = (effect_start_idx..effect_start_idx + effects.len()).collect();
-                action_to_effect_indices.insert(action_idx, effect_indices);
-                all_effects.extend(effects);
-            }
-        }
-        (action_records, action_to_effect_indices, all_effects)
     }
 
     fn settle_trades(&self, trades: Vec<Trade>) -> Vec<StateEffect> {
@@ -578,93 +689,6 @@ impl SimulationEngine {
         instrument.originated_date.day() == date.day()
             && months_since_origination > 0
             && months_since_origination as u32 % months_between_payments == 0
-    }
-
-    fn get_agent_info(&self, agent_id: &AgentId) -> (String, Option<String>) {
-        if let Some(bank) = self.state.agents.banks.get(agent_id) {
-            ("Bank".to_string(), Some(bank.name.clone()))
-        } else if let Some(_consumer) = self.state.agents.consumers.get(agent_id) {
-            ("Consumer".to_string(), Some(format!("Consumer {}", &agent_id.to_string()[..8])))
-        } else if let Some(firm) = self.state.agents.firms.get(agent_id) {
-            ("Firm".to_string(), Some(firm.name.clone()))
-        } else if *agent_id == self.state.financial_system.government.id {
-            ("Government".to_string(), Some("Government".to_string()))
-        } else if *agent_id == self.state.financial_system.central_bank.id {
-            ("CentralBank".to_string(), Some("Central Bank".to_string()))
-        } else {
-            ("Unknown".to_string(), None)
-        }
-    }
-    pub fn debug_market_state(&self) {
-        println!("\n=== MARKET DEBUG STATE ===");
-
-        // Debug Treasury markets
-        for (market_id, market) in &self.state.financial_system.exchange.financial_markets {
-            if let FinancialMarketId::Treasury { tenor } = market_id {
-                println!("\n--- Treasury Market {:?} ---", tenor);
-                println!("Bids ({}): ", market.order_book.bids.len());
-                for (i, bid) in market.order_book.bids.iter().enumerate() {
-                    println!("  Bid {}: Agent {} - {} @ {:.2}", i, bid.agent_id, bid.quantity, bid.price);
-                }
-                println!("Asks ({}): ", market.order_book.asks.len());
-                for (i, ask) in market.order_book.asks.iter().enumerate() {
-                    println!("  Ask {}: Agent {} - {} @ {:.2}", i, ask.agent_id, ask.quantity, ask.price);
-                }
-
-                if let (Some(best_bid), Some(best_ask)) = (market.order_book.best_bid(), market.order_book.best_ask()) {
-                    println!(
-                        "  Best Bid: {:.2}, Best Ask: {:.2}, Spread: {:.2}",
-                        best_bid.price,
-                        best_ask.price,
-                        best_ask.price - best_bid.price
-                    );
-                } else {
-                    println!("  No best bid/ask available");
-                }
-            }
-        }
-
-        // Debug government balance sheet
-        let gov_id = self.state.financial_system.government.id;
-        if let Some(gov_bs) = self.state.financial_system.get_bs_by_id(&gov_id) {
-            println!("\n--- Government Balance Sheet ---");
-            println!("Liquid Assets: {:.2}", gov_bs.liquid_assets());
-            println!("Total Assets: {:.2}", gov_bs.total_assets());
-            println!("Total Liabilities: {:.2}", gov_bs.total_liabilities());
-            println!("Net Worth: {:.2}", gov_bs.net_worth());
-        }
-
-        println!("=== END MARKET DEBUG ===\n");
-    }
-
-    // Call this method after applying effects but before clearing markets
-    pub fn debug_effects_application(&self, effects: &[StateEffect]) {
-        println!("\n=== EFFECTS DEBUG ===");
-        for (i, effect) in effects.iter().enumerate() {
-            match effect {
-                StateEffect::Market(MarketEffect::PlaceOrderInBook { market_id, order }) => match order {
-                    Order::Ask(ask) => {
-                        println!(
-                            "Effect {}: Placing ASK - Agent {} selling {} @ {:.2} in {:?}",
-                            i, ask.agent_id, ask.quantity, ask.price, market_id
-                        );
-                    }
-                    Order::Bid(bid) => {
-                        println!(
-                            "Effect {}: Placing BID - Agent {} buying {} @ {:.2} in {:?}",
-                            i, bid.agent_id, bid.quantity, bid.price, market_id
-                        );
-                    }
-                },
-                StateEffect::Financial(fin_effect) => {
-                    println!("Effect {}: Financial - {}", i, fin_effect.name());
-                }
-                _ => {
-                    println!("Effect {}: {}", i, effect.name());
-                }
-            }
-        }
-        println!("=== END EFFECTS DEBUG ===\n");
     }
 }
 
