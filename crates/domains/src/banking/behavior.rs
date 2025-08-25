@@ -1,33 +1,34 @@
-
 use rand::RngCore;
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 use sim_core::*;
 use std::any::Any;
-use std::collections::HashMap;
 
 #[derive(Clone, Debug, Serialize, Default, Deserialize)]
 pub struct BasicBankDecisionModel;
 
 #[typetag::serde]
 impl DecisionModel for BasicBankDecisionModel {
-    fn decide(&self, agent: &dyn Any, state: &SimState, rng: &mut dyn RngCore) -> Vec<SimAction> {
+    fn name (&self) -> &str { "Bank" }
+    fn decide(&self, agent: &dyn Any, state: &SimState, rng: &mut dyn RngCore) -> Vec<SimIntention> {
         let bank = match agent.downcast_ref::<Bank>() {
             Some(b) => b,
             None => return vec![],
         };
-        let mut actions = Vec::new();
+        
+        let mut intentions = Vec::new();
         let fs = &state.financial_system;
 
-        self.manage_reserves(bank, fs, &mut actions);
-        self.market_make_treasuries(bank, fs, &mut actions, rng);
+        self.assess_liquidity_needs(bank, fs, &mut intentions);
+        self.consider_treasury_market_making(bank, fs, &mut intentions, rng);
+        self.evaluate_lending_opportunities(bank, fs, &mut intentions);
 
-        actions
+        intentions
     }
 }
 
 impl BasicBankDecisionModel {
-    fn manage_reserves(&self, bank: &Bank, fs: &FinancialSystem, actions: &mut Vec<SimAction>) {
+    fn assess_liquidity_needs(&self, bank: &Bank, fs: &FinancialSystem, intentions: &mut Vec<SimIntention>) {
         let total_deposits = fs.get_total_liabilities(&bank.id);
         let required_reserves = total_deposits * fs.central_bank.reserve_requirement;
         let desired_buffer = total_deposits * 0.02;
@@ -36,159 +37,84 @@ impl BasicBankDecisionModel {
         let current_reserves = fs.get_bank_reserves(&bank.id).unwrap_or(0.0);
         let reserve_surplus_or_shortfall = current_reserves - target_reserve_level;
 
-        let fed_funds_market_id = FinancialMarketId::FederalFundsOvernight;
-
-        let floor_rate_bps = fs.central_bank.policy_rate_bps;
-        let ceiling_rate_bps = floor_rate_bps + 25.0;
-        let target_rate_bps = (floor_rate_bps + ceiling_rate_bps) / 2.0;
-
-        let daily_rate = fed_funds_market_id.annual_bps_to_daily_rate(target_rate_bps);
-        let price = 1.0 / (1.0 + daily_rate);
+        let policy_rate_bps = fs.central_bank.policy_rate_bps;
+        let acceptable_rate_range = 25.0;
+        let target_rate_bps = policy_rate_bps + (acceptable_rate_range / 2.0);
 
         if reserve_surplus_or_shortfall < -1.0 {
             let amount_needed = -reserve_surplus_or_shortfall;
-
-            actions.push(SimAction::Trading(TradingAction::PostBid {
+            intentions.push(SimIntention::BorrowReserves {
                 agent_id: bank.id,
-                market_id: MarketId::Financial(fed_funds_market_id.clone()),
-                quantity: amount_needed,
-                price,
-            }));
+                amount: amount_needed,
+                target_rate_bps,
+            });
         } else if reserve_surplus_or_shortfall > 1.0 {
             let amount_to_lend = reserve_surplus_or_shortfall * 0.75;
             if amount_to_lend > 100.0 {
-                actions.push(SimAction::Trading(TradingAction::PostAsk {
+                intentions.push(SimIntention::LendExcessReserves {
                     agent_id: bank.id,
-                    market_id: MarketId::Financial(fed_funds_market_id.clone()),
-                    quantity: amount_to_lend,
-                    price,
-                }));
+                    amount: amount_to_lend,
+                    target_rate_bps,
+                });
             }
         }
     }
 
-    fn market_make_treasuries(&self, bank: &Bank, fs: &FinancialSystem, actions: &mut Vec<SimAction>, _rng: &mut dyn RngCore) {
-        let bs = fs.get_bs_by_id(&bank.id).expect("Bank must have BS");
-
-        let mut holdings_by_tenor: HashMap<Tenor, u64> = HashMap::new();
-        for inst in bs.assets.values() {
-            if let Some(bond_details) = inst.details.as_any().downcast_ref::<BondDetails>() {
-                if bond_details.bond_type == BondType::Government {
-                    *holdings_by_tenor.entry(bond_details.tenor).or_insert(0) += bond_details.quantity;
-                }
-            }
+    fn consider_treasury_market_making(&self, bank: &Bank, fs: &FinancialSystem, intentions: &mut Vec<SimIntention>, rng: &mut dyn RngCore) {
+        let liquidity = fs.get_liquid_assets(&bank.id);
+        if liquidity < 10000.0 {
+            return;
         }
-        let quantity_to_quote = 5.0;
-        const FACE_VALUE: f64 = 1000.0;
-        let frequency = 2;
 
-        for (market_id, _) in &fs.exchange.financial_markets {
+        let quantity_per_tenor = 5.0;
+
+        for (market_id, _market) in &fs.exchange.financial_markets {
             if let FinancialMarketId::Treasury { tenor } = market_id {
-                let term_premium = match tenor {
-                    Tenor::T2Y => 13.0,
-                    Tenor::T5Y => 31.0,
-                    Tenor::T10Y => 42.0,
-                    Tenor::T30Y => 50.0,
-                };
-                let bid_ask_spread_bps = rand::rng().random_range(13.0..32.0); 
-                let target_yield_bps = fs.central_bank.policy_rate_bps;
-
-                let bid_yield_bps = term_premium + target_yield_bps + (bid_ask_spread_bps / 2.0);
-                let ask_yield_bps = term_premium + target_yield_bps - (bid_ask_spread_bps / 2.0);
-
-                let benchmark_coupon_bps = fs.central_bank.policy_rate_bps;
-                
-                let bid_price =
-                    self.calculate_bond_price(FACE_VALUE, benchmark_coupon_bps, bid_yield_bps, *tenor, frequency);
-
-                let ask_price =
-                    self.calculate_bond_price(FACE_VALUE, benchmark_coupon_bps, ask_yield_bps, *tenor, frequency);
-
-                actions.push(SimAction::Trading(TradingAction::PostBid {
-                    agent_id: bank.id,
-                    market_id: MarketId::Financial(market_id.clone()),
-                    quantity: quantity_to_quote,
-                    price: bid_price,
-                }));
-
-                let holdings = holdings_by_tenor.get(tenor).cloned().unwrap_or(0) as f64;
-                if holdings >= quantity_to_quote {
-                    actions.push(SimAction::Trading(TradingAction::PostAsk {
+                if self.should_make_market_for_tenor(tenor, bank, fs) {
+                    let (bid_yield, ask_yield) = self.calculate_yield_quotes(*tenor, fs, rng);
+                    
+                    intentions.push(SimIntention::MarketMakeTreasuries {
                         agent_id: bank.id,
-                        market_id: MarketId::Financial(market_id.clone()),
-                        quantity: quantity_to_quote,
-                        price: ask_price,
-                    }));
+                        tenor: *tenor,
+                        quantity: quantity_per_tenor,
+                        bid_yield_bps: bid_yield,
+                        ask_yield_bps: ask_yield,
+                    });
                 }
             }
         }
     }
 
-    fn calculate_bond_price(
-        &self, face_value: f64, coupon_rate_bps: BasisPoints, ytm_bps: BasisPoints, tenor: Tenor, frequency: usize,
-    ) -> f64 {
-        let k = frequency as f64;
-        let n = tenor.periods(frequency);
-
-        if n == 0 {
-            return face_value;
+    fn should_make_market_for_tenor(&self, tenor: &Tenor, _bank: &Bank, _fs: &FinancialSystem) -> bool {
+        match tenor {
+            Tenor::T2Y | Tenor::T5Y | Tenor::T10Y => true,
+            Tenor::T30Y => false,
         }
-
-        let coupon_rate = bps_to_decimal(coupon_rate_bps);
-        let ytm = bps_to_decimal(ytm_bps);
-
-        let c = coupon_rate * face_value / k;
-        let y = ytm / k;
-
-        let mut price = 0.0;
-        let n_f64 = n as f64;
-
-        if (y).abs() > 1e-9 {
-            price += c * (1.0 - (1.0 + y).powf(-n_f64)) / y;
-        } else {
-            price += c * n_f64;
-        }
-
-        price += face_value / (1.0 + y).powf(n_f64);
-
-        price
-    }
-}
-
-#[cfg(test)]
-mod banking_tests {
-    use super::*;
-    use chrono::naive;
-    use uuid::Uuid;
-
-    #[test]
-    fn test_reserves_management() {
-        let target = 442.5;
-        let daily_rate = FinancialMarketId::FederalFundsOvernight.annual_bps_to_daily_rate(target);
-        let price = 1.0 / (1.0 + daily_rate);
-        println!("Price: {}", price);
-        println!("Daily Rate: {}", daily_rate*10000.0);
-        assert!(daily_rate > 0.0, "Daily rate should be positive"); 
     }
 
-    #[test]
-    fn test_bond_price_calculation() {
-        let debtor = AgentId(Uuid::new_v4());
-        let creditor = AgentId(Uuid::new_v4());
-        let n_date = naive::NaiveDate::from_ymd_opt(2036, 1, 1).unwrap();
-        let o_date = naive::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
-        let _bond = bond!(
-            creditor,
-            debtor,
-            1000.0,
-            400.0,
-            n_date,
-            1000.0,
-            BondType::Government,
-            2,
-            Tenor::T10Y,
-            o_date
-        );
+    fn calculate_yield_quotes(&self, tenor: Tenor, fs: &FinancialSystem, rng: &mut dyn RngCore) -> (BasisPoints, BasisPoints) {
+        let policy_rate_bps = fs.central_bank.policy_rate_bps;
+        
+        let term_premium = match tenor {
+            Tenor::T2Y => 15.0,
+            Tenor::T5Y => 35.0,
+            Tenor::T10Y => 50.0,
+            Tenor::T30Y => 65.0,
+        };
 
-    } 
+        let bid_ask_spread_bps = rng.random_range(15.0..30.0);
+        
+        let base_yield = policy_rate_bps + term_premium;
+        let bid_yield_bps = base_yield + (bid_ask_spread_bps / 2.0);
+        let ask_yield_bps = base_yield - (bid_ask_spread_bps / 2.0);
+
+        (bid_yield_bps, ask_yield_bps)
+    }
+
+    fn evaluate_lending_opportunities(&self, bank: &Bank, fs: &FinancialSystem, _intentions: &mut Vec<SimIntention>) {
+        let available_capital = fs.get_liquid_assets(&bank.id) - 5000.0;
+        
+        if available_capital > 1000.0 {
+        }
+    }
 }

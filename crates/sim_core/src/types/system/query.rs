@@ -235,3 +235,10 @@ impl InstrumentManager for FinancialSystem {
         Ok(())
     }
 }
+
+impl AgentQuery for FinancialSystem {
+    fn get_government(&self) -> Option<&Government> { Some(&self.government) }
+    fn get_government_mut(&mut self) -> Option<&mut Government> { Some(&mut self.government) }
+    fn get_central_bank(&self) -> Option<&CentralBank> { Some(&self.central_bank) }
+    fn get_central_bank_mut(&mut self) -> Option<&mut CentralBank> { Some(&mut self.central_bank) }
+}

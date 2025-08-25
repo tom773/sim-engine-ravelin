@@ -78,8 +78,13 @@ pub async fn get_goods_catalogue(
             .goods
             .goods
             .values()
-            .map(|good| GoodsDto { id: good.id.to_string(), name: good.name.clone(), unit: good.unit.clone() })
+            .map(|good| GoodsDto { 
+                id: good.id.to_string(), 
+                name: good.name.clone(), 
+                unit: good.unit.clone() 
+            })
             .collect::<Vec<_>>();
+        
         let recipies = engine
             .state
             .financial_system
@@ -92,19 +97,32 @@ pub async fn get_goods_catalogue(
                 inputs: recipe
                     .inputs
                     .iter()
-                    .map(|(good_id, _)| {
-                        let good = engine.state.financial_system.goods.get_good_by_id(good_id).unwrap();
-                        GoodsDto { id: good.id.to_string(), name: good.name.clone(), unit: good.unit.clone() }
+                    .map(|recipe_item| {
+                        let good = engine.state.financial_system.goods.get_good_by_id(&recipe_item.good_id).unwrap();
+                        GoodsDto { 
+                            id: good.id.to_string(), 
+                            name: good.name.clone(), 
+                            unit: good.unit.clone() 
+                        }
                     })
                     .collect(),
-                output: engine.state.financial_system.goods.get_good_by_id(&recipe.output.0).map_or_else(
-                    || GoodsDto { id: String::new(), name: String::new(), unit: String::new() },
-                    |good| GoodsDto { id: good.id.to_string(), name: good.name.clone(), unit: good.unit.clone() },
-                ),
+                outputs: recipe
+                    .outputs
+                    .iter()
+                    .map(|recipe_item| {
+                        let good = engine.state.financial_system.goods.get_good_by_id(&recipe_item.good_id).unwrap();
+                        GoodsDto { 
+                            id: good.id.to_string(), 
+                            name: good.name.clone(), 
+                            unit: good.unit.clone() 
+                        }
+                    })
+                    .collect(),
                 efficiency: recipe.efficiency,
                 labour_hours: recipe.labour_hours,
             })
             .collect::<Vec<_>>();
+        
         let goods_page = GoodsPageDto { goods, recipies };
         (StatusCode::OK, headers, Json(serde_json::to_value(goods_page).unwrap()))
     } else {

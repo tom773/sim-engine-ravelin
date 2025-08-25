@@ -1,73 +1,72 @@
-use sim_core::*;
-use std::any::Any;
+use chrono::Datelike;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use chrono::Datelike;
+use sim_core::*;
+use std::any::Any;
 
 #[derive(Clone, Debug, Serialize, Default, Deserialize)]
 pub struct BasicGovernmentDecisionModel;
 
 #[typetag::serde]
 impl DecisionModel for BasicGovernmentDecisionModel {
-    fn decide(&self, agent: &dyn Any, state: &SimState, _rng: &mut dyn RngCore) -> Vec<SimAction> {
+    fn name(&self) -> &str {
+        "Government"
+    }
+    fn decide(&self, agent: &dyn Any, state: &SimState, _rng: &mut dyn RngCore) -> Vec<SimIntention> {
         let government = match agent.downcast_ref::<Government>() {
             Some(g) => g,
             None => return vec![],
         };
 
-        let mut actions = Vec::new();
-        if state.current_date.ordinal() % 30 == 0{ // Every 30 days, collect taxes 
-            let tax_rate = government.tax_rates.income_tax;
+        let mut intentions = Vec::new();
+        self.collect_taxes(government, state, &mut intentions);
+        self.handle_funding(government, state, &mut intentions);
 
-            for consumer in state.agents.consumers.values() {
-                let tax_liability = (consumer.income/12.0) * tax_rate; // Monthly income tax
-                if tax_liability > 0.0 {
-                    actions.push(SimAction::Banking(BankingAction::Transfer {
-                        from: consumer.id,
-                        to: government.id,
-                        amount: tax_liability,
-                    }));
-                }
-            }
-        }
-        self.handle_funding(government, state, &mut actions);
-        actions
+        intentions
     }
 }
 
 impl BasicGovernmentDecisionModel {
-    fn handle_funding(&self, government: &Government, state: &SimState, actions: &mut Vec<SimAction>) {
-        let fs = &state.financial_system;
-        let gbs = fs.balance_sheets.get(&government.id);
-        if gbs.is_none() {
+    fn collect_taxes(&self, government: &Government, state: &SimState, intentions: &mut Vec<SimIntention>) {
+        if (state.current_date.day() == 15) == false {
             return;
         }
-        let gbs = gbs.unwrap();
-        let current_balance = gbs.liquid_assets(); 
-        let spending_target = 1_000_000.0 / 12.0; // 1m / 12
-        if current_balance < spending_target {
-            let deficit = spending_target - current_balance;
-            // Issuance distribution across different tenors
-            let issue_distribution = [
-                (Tenor::T2Y, 0.15), 
-                (Tenor::T5Y, 0.25), 
-                (Tenor::T10Y, 0.40), 
-                (Tenor::T30Y, 0.20)
-            ];
-            let face_value = 1000.0;
-            // Use the central bank policy rate as a proxy for the new coupon rate
+        let tax_rate = government.tax_rates.income_tax;
+
+        for consumer in state.agents.consumers.values() {
+            let monthly_tax_liability = (consumer.income / 12.0) * tax_rate;
+            if monthly_tax_liability > 0.0 {
+                intentions.push(SimIntention::CollectTaxes {
+                    government_id: government.id,
+                    target: consumer.id,
+                    amount: monthly_tax_liability,
+                });
+            }
+        }
+    }
+
+    fn handle_funding(&self, government: &Government, state: &SimState, intentions: &mut Vec<SimIntention>) {
+        let fs = &state.financial_system;
+        let current_balance = fs.get_liquid_assets(&government.id);
+        let monthly_spending_target = 1_000_000.0 / 12.0;
+
+        if current_balance < monthly_spending_target {
+            let deficit = monthly_spending_target - current_balance;
+
+            let issue_distribution = [(Tenor::T2Y, 0.15), (Tenor::T5Y, 0.25), (Tenor::T10Y, 0.40), (Tenor::T30Y, 0.20)];
+
             let coupon_rate = fs.central_bank.policy_rate_bps;
+
             for (tenor, percentage) in issue_distribution {
-                let amount_to_issue = deficit * percentage;
-                let quantity = (amount_to_issue / face_value).ceil() as u32;
-                if quantity > 0 {
-                    actions.push(SimAction::Fiscal(FiscalAction::IssueDebt {
+                let amount_to_raise = deficit * percentage;
+
+                if amount_to_raise > 0.0 {
+                    intentions.push(SimIntention::IssueDebtToRaise {
                         government_id: government.id,
                         tenor,
-                        quantity,
-                        face_value,
+                        amount_to_raise,
                         coupon_rate,
-                    }));
+                    });
                 }
             }
         }

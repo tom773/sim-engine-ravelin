@@ -15,6 +15,13 @@ pub trait BalanceSheetQuery {
     fn get_bank_reserves(&self, agent_id: &AgentId) -> Option<f64>;
 }
 
+pub trait AgentQuery {
+    fn get_government(&self) -> Option<&Government>;
+    fn get_government_mut(&mut self) -> Option<&mut Government>;
+    fn get_central_bank(&self) -> Option<&CentralBank>;
+    fn get_central_bank_mut(&mut self) -> Option<&mut CentralBank>;
+}
+
 pub trait InstrumentManager {
     fn create_instrument(&mut self, instrument: FinancialInstrument) -> Result<(), String>;
     fn transfer_instrument(&mut self, instrument_id: &InstrumentId, new_creditor: AgentId) -> Result<(), String>;

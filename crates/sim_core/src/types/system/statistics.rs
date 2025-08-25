@@ -108,9 +108,9 @@ impl FinancialSystem {
         let effr = calculate_rate(FinancialMarketId::FederalFundsOvernight);
         let sofr = calculate_rate(FinancialMarketId::TreasuryRepoOvernight);
 
-        let iorb = policy_rate_bps;
-        let discount_rate = policy_rate_bps + 50.0;
-        let overnight_rrp = (policy_rate_bps - 10.0).max(0.0);
+        let iorb = policy_rate_bps + 15.0;
+        let discount_rate = policy_rate_bps + 25.0;
+        let overnight_rrp = policy_rate_bps;
 
         OvernightRates { effr, sofr, iorb, discount_rate, overnight_rrp }
     }

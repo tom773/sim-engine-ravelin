@@ -1,10 +1,10 @@
+use crate::*;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use serde_with::{DisplayFromStr, serde_as};
 use std::collections::HashMap;
 use toml;
 use uuid::Uuid;
-use serde_with::{serde_as, DisplayFromStr};
-use crate::*;
 
 const GOODS_NAMESPACE: Uuid = Uuid::from_u128(0x4A8B382D22C14A4C8F1A2E3D4B5C6F7A);
 
@@ -31,11 +31,17 @@ pub enum GoodCategory {
 pub struct ProductionRecipe {
     pub id: RecipeId,
     pub name: String,
-    pub inputs: Vec<(GoodId, f64)>,
-    pub output: (GoodId, f64),
+    pub inputs: Vec<RecipeItem>, // Changed to use RecipeItem struct
+    pub outputs: Vec<RecipeItem>, // Changed from single output to multiple outputs
     pub labour_hours: f64,
     pub capital_required: f64,
     pub efficiency: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RecipeItem {
+    pub good_id: GoodId,
+    pub quantity: f64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -76,7 +82,7 @@ struct TomlGood {
 #[serde(rename_all = "camelCase")]
 struct TomlRecipe {
     name: String,
-    output: TomlRecipeItem,
+    output: Vec<TomlRecipeItem>, // Support multiple outputs
     inputs: Vec<TomlRecipeItem>,
     labour_hours: f64,
     capital_required: f64,
@@ -125,7 +131,13 @@ impl GoodsRegistry {
         for good_def in config.goods {
             let id = GoodId::from_slug(&good_def.slug);
             let cpi_weight = good_def.cpi_weight.unwrap_or(0.0);
-            let good = Good { id, name: good_def.name, unit: good_def.unit, category: good_def.category, cpi_weight };
+            let good = Good { 
+                id, 
+                name: good_def.name, 
+                unit: good_def.unit, 
+                category: good_def.category, 
+                cpi_weight 
+            };
             registry.goods.insert(id, good);
             registry.slug_to_id.insert(good_def.slug, id);
         }
@@ -133,18 +145,31 @@ impl GoodsRegistry {
         for recipe_def in config.recipes {
             let recipe_id = RecipeId::from_name(&recipe_def.name);
 
-            let output_good_id = registry.get_good_id_by_slug(&recipe_def.output.slug).unwrap_or_else(|| {
-                panic!("Output good '{}' for recipe '{}' not found", recipe_def.output.slug, recipe_def.name)
-            });
+            let outputs: Vec<RecipeItem> = recipe_def
+                .output
+                .iter()
+                .map(|output_def| {
+                    let output_good_id = registry.get_good_id_by_slug(&output_def.slug).unwrap_or_else(|| {
+                        panic!("Output good '{}' for recipe '{}' not found", output_def.slug, recipe_def.name)
+                    });
+                    RecipeItem {
+                        good_id: output_good_id,
+                        quantity: output_def.qty,
+                    }
+                })
+                .collect();
 
-            let inputs = recipe_def
+            let inputs: Vec<RecipeItem> = recipe_def
                 .inputs
                 .iter()
                 .map(|input_def| {
                     let input_good_id = registry.get_good_id_by_slug(&input_def.slug).unwrap_or_else(|| {
                         panic!("Input good '{}' for recipe '{}' not found", input_def.slug, recipe_def.name)
                     });
-                    (input_good_id, input_def.qty)
+                    RecipeItem {
+                        good_id: input_good_id,
+                        quantity: input_def.qty,
+                    }
                 })
                 .collect();
 
@@ -152,12 +177,13 @@ impl GoodsRegistry {
                 id: recipe_id,
                 name: recipe_def.name.clone(),
                 inputs,
-                output: (output_good_id, recipe_def.output.qty),
+                outputs,
                 labour_hours: recipe_def.labour_hours,
                 capital_required: recipe_def.capital_required,
                 efficiency: recipe_def.efficiency,
             };
-            registry.recipes.insert(recipe_id, recipe.clone());
+
+            registry.recipes.insert(recipe_id, recipe);
             registry.name_to_recipe_id.insert(recipe_def.name, recipe_id);
         }
 
@@ -175,14 +201,17 @@ impl GoodsRegistry {
     pub fn get_good_name(&self, id: &GoodId) -> Option<&str> {
         self.goods.get(id).map(|good| good.name.as_str())
     }
+    
     pub fn get_good_by_id(&self, id: &GoodId) -> Option<&Good> {
         self.goods.get(id)
     }
+    
     pub fn get_recipe(&self, id: &RecipeId) -> Option<&ProductionRecipe> {
         self.recipes.get(id)
     }
 }
 
 pub static CATALOGUE: Lazy<GoodsRegistry> = Lazy::new(|| {
-    GoodsRegistry::from_toml(include_str!("../../../../../config/goods.toml")).expect("failed to parse goods catalogue")
+    GoodsRegistry::from_toml(include_str!("../../../../../config/goods.toml"))
+        .expect("failed to parse goods catalogue")
 });

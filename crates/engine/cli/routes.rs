@@ -173,11 +173,18 @@ pub async fn get_agents_summary(
                         } else {
                             BalanceSheetSummary { assets: 0.0, liabilities: 0.0, equity: 0.0 }
                         };
+                        let decision_model = engine
+                            .decision_models
+                            .get(&bank.id)
+                            .map(|dm| dm.name().to_string())
+                            .unwrap_or_else(|| "Unknown".to_string());
+
                         AgentSummaryDto {
                             id: bank.id.to_string(),
                             name: bank.name.clone(),
                             agent_type: "Bank".to_string(),
                             balance_sheet,
+                            decision_model,
                         }
                     })
                     .collect();
@@ -201,11 +208,18 @@ pub async fn get_agents_summary(
                         } else {
                             BalanceSheetSummary { assets: 0.0, liabilities: 0.0, equity: 0.0 }
                         };
+                        let decision_model = engine
+                            .decision_models
+                            .get(&firm.id)
+                            .map(|dm| dm.name().to_string())
+                            .unwrap_or_else(|| "Unknown".to_string());
+
                         AgentSummaryDto {
                             id: firm.id.to_string(),
                             name: firm.name.clone(),
                             agent_type: "Firm".to_string(),
                             balance_sheet,
+                            decision_model,
                         }
                     })
                     .collect();
@@ -229,11 +243,18 @@ pub async fn get_agents_summary(
                         } else {
                             BalanceSheetSummary { assets: 0.0, liabilities: 0.0, equity: 0.0 }
                         };
+                        let decision_model = engine
+                            .decision_models
+                            .get(&consumer.id)
+                            .map(|dm| dm.name().to_string())
+                            .unwrap_or_else(|| "Unknown".to_string());
+                            
                         AgentSummaryDto {
                             id: consumer.id.to_string(),
                             name: format!("Consumer {}", &consumer.id.to_string()[..8]),
                             agent_type: "Consumer".to_string(),
                             balance_sheet,
+                            decision_model,
                         }
                     })
                     .collect();
