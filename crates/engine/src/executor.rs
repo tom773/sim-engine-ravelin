@@ -47,11 +47,10 @@ impl SimulationEngine {
 
     pub fn tick(&mut self, rng: &mut dyn RngCore) -> TickResult {
         self.run_upkeep();
-
         let labour_effects = self.state.financial_system.exchange.clear_labour_markets(&self.state.clone());
 
         let intentions = self.gather_intentions(rng);
-
+        let icl = intentions.clone();
         let (action_records, action_to_effect_indices, other_effects, trades) =
             self.resolve_and_execute_intentions(intentions);
 
@@ -63,12 +62,13 @@ impl SimulationEngine {
         let tick_record = TickRecord {
             tick_number: self.state.ticknum,
             date: self.state.current_date,
+            intentions: icl.clone(),
             actions: action_records.clone(),
             effects: all_effects.clone(),
             action_to_effect_indices: action_to_effect_indices.clone(),
             trades: trades.clone(),
         };
-
+        dbg_evt!(tick_record);
         if let Some(writer) = &self.db_writer {
             let _ = tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async {

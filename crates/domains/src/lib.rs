@@ -1,5 +1,16 @@
-// crates/domains/src/lib.rs - Updated Domain trait
-
+//! # Simulation Domains Crate
+//!  
+//!This crate includes a bunch of different "domains" that encapsulate various aspects of the simulation.
+//!Each domain is responsible for handling specific types of actions and decisions within the simulation.
+//! 
+//!   
+//! - **[`Domain`]:** A trait representing a service that handles a specific category of actions.
+//!   For example, [`BankingDomain`] handles all [`BankingAction`]s.
+//! - **Behavior (`behavior.rs`):** Each domain typically has a corresponding behavior module
+//!   that implements [`DecisionModel`] traits. These models contain the "AI" or logic that
+//!   agents use to generate intentions.
+//! - **Resolution:** The process of converting a high-level [`SimIntention`] (e.g., "borrow reserves")
+//!   into a concrete [`SimAction`] (e.g., "post a bid in the federal funds market").
 pub use std::any::Any;
 use sim_core::*;
 extern crate inventory;
@@ -7,16 +18,15 @@ extern crate inventory;
 pub trait Domain: Send + Sync {
     fn name(&self) -> &'static str;
     fn execute(&self, action: &SimAction, state: &SimState) -> DomainResult;
-    
+    /// Attempt to resolve a high-level intention into concrete actions. 
     fn resolve_intention(&self, _intention: &SimIntention, _context: &ResolutionContext) -> Option<ResolutionResult> {
         None
     }
-    
+    /// Determine the resolution phase for a given intention, if applicable.
     fn resolution_phase(&self, _intention: &SimIntention) -> Option<ResolutionPhase> {
         None
     }
     
-    /// Optional method for settling trades. Only the TradingDomain implements this.
     fn settle_trade(&self, _trade: &Trade, _state: &SimState) -> DomainResult {
         DomainResult::failure(vec![format!("Trade settlement not supported by {}", self.name())])
     }

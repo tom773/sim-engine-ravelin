@@ -9,6 +9,8 @@ use axum::{
 use tower_http::cors::{Any, CorsLayer};
 pub mod routes;
 pub mod dto;
+pub mod debug_ws;
+pub use debug_ws::*;
 pub mod market_routes;
 pub mod sim_history_routes;
 pub use sim_history_routes::*;
@@ -31,6 +33,11 @@ async fn main() -> anyhow::Result<()> {
     });
     let shutdown = CancellationToken::new();
     let http_server_fut = run_http(state.clone(), shutdown.clone());
+    tokio::spawn(async {
+        if let Err(e) = serve_ws("127.0.0.1:8066").await {
+            eprintln!("[debug-ws] server died: {e}");
+        }
+    });
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
             println!("↪ shutting down (ctrl-c)...");

@@ -27,6 +27,7 @@ crossbeam-channel = { workspace = true }
 fake = { workspace = true }
 typetag = { workspace = true }
 serde_with = { workspace = true }
+once_cell = { workspace = true }
 rand_chacha = "0.9.0"
 rand_core = "0.9.3"
 inventory = "0.3"

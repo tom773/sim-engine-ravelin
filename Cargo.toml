@@ -27,7 +27,7 @@ chrono = { version = "0.4.41", features = ["serde"] }
 sscanf = "0.4.3"
 
 tokio = { version = "1.46.1", features = ["rt-multi-thread", "time", "macros", "signal"] }
-axum = { version = "0.8", features = ["macros"] }
+axum = { version = "0.8", features = ["macros", "ws"] }
 tower-http = { version = "0.6", features = ["cors"] }
 
 crossbeam-channel = "0.5.15"
@@ -38,4 +38,9 @@ proc-macro2 = "1.0.101"
 quote = "1.0"
 syn = "2.0.106"
 
-
+bevy = { version = "0.16", default-features = false, features = [
+    "bevy_app",
+    "bevy_core",
+    "bevy_ecs",
+    "bevy_time",
+] }

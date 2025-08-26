@@ -36,6 +36,7 @@ Thumbs.db
 !.env.example
 !.env.test
 compact.sh
+target/doc
 # Vite
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
@@ -55,3 +56,5 @@ app/src/.svelte-kit/*
 /crates/api/**/* 
 ALL_README.md
 /crates/**/*.md
+target/doc/*
+target/doc/**/*

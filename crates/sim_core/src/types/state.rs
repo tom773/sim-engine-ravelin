@@ -363,6 +363,7 @@ impl SimHistory {
 pub struct TickRecord {
     pub tick_number: u32,
     pub date: chrono::NaiveDate,
+    pub intentions: Vec<SimIntention>,
     pub actions: Vec<ActionRecord>,
     pub effects: Vec<StateEffect>,
     pub action_to_effect_indices: HashMap<usize, Vec<usize>>, // Maps action index to effect indices
