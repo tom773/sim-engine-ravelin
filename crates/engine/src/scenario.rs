@@ -180,7 +180,7 @@ impl Scenario {
         
         state.financial_system.exchange.register_labour_market(LabourMarketId::GeneralLabour);
 
-        let mut engine = SimulationEngine::new(state);
+        let mut engine = SimulationEngine::new_with_scheduler(state);
         engine.decision_models = decision_models_map;
         engine.run_initialization();
         

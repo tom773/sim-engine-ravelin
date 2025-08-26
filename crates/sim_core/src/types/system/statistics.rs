@@ -23,7 +23,6 @@ pub struct CoreEconomicStats {
     pub job_openings: f64,
     pub capacity_utilization: f64,
     pub industrial_production: f64,
-    pub housing_starts: f64,
     pub trade_balance: f64,
     pub credit_growth: f64,
     pub household_debt: f64,

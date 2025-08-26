@@ -12,6 +12,7 @@
 //! - **Resolution:** The process of converting a high-level [`SimIntention`] (e.g., "borrow reserves")
 //!   into a concrete [`SimAction`] (e.g., "post a bid in the federal funds market").
 pub use std::any::Any;
+use serde::Serialize;
 use sim_core::*;
 extern crate inventory;
 
@@ -55,20 +56,20 @@ impl DomainResult {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ResolutionContext<'a> {
     pub state: &'a SimState,
     pub current_tick: u32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Clone)]
 pub struct ResolutionResult {
     pub actions: Vec<SimAction>,
     pub success: bool,
     pub errors: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ResolutionPhase {
     Independent = 0,
     Market = 1,

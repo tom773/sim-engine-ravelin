@@ -37,7 +37,7 @@ impl MarketView {
     pub fn last_or_mid(&self) -> Option<f64> { self.last.or(self.mid) }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MarketSnapshot {
     pub best_bid: Option<f64>,
     pub best_ask: Option<f64>,

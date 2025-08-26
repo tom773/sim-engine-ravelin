@@ -241,31 +241,92 @@ impl EconomicAnalytics for SimState {
         
         let detailed_stats = self.macro_stats();
         let fs = &self.financial_system;
+        let last_tick = self.history.tick_records.back();
 
-        let household_debt = self.agents.consumers.values()
+        let mut ppi = 0.0;
+        let mut ppi_total_weight = 0.0;
+        for (good_id, good) in &fs.goods.goods {
+            if matches!(good.category, GoodCategory::RawMaterial | GoodCategory::IntermediateGood) { //
+                if let Some(market_view) = self.market_view(&MarketId::Goods(*good_id)) {
+                    if let Some(price) = market_view.last_or_mid() {
+                        let weight = 1.0; // Simple average for now
+                        ppi += price * weight;
+                        ppi_total_weight += weight;
+                    }
+                }
+            }
+        }
+        if ppi_total_weight > 0.0 {
+            ppi /= ppi_total_weight;
+        }
+
+        let employed_count = self.agents.firms.values().map(|f| f.employees.len()).sum::<usize>(); //
+        let seeking_work_count: HashSet<AgentId> = fs.exchange.labour_markets.values()
+            .flat_map(|m| m.job_applications.iter().map(|app| app.consumer_id))
+            .collect();
+        let labor_force = (employed_count + seeking_work_count.len()) as f64;
+        let total_population = self.agents.consumers.len() as f64;
+        let labor_force_participation = if total_population > 0.0 { labor_force / total_population } else { 0.0 };
+
+        let job_openings: u32 = fs.exchange.labour_markets.values()
+            .flat_map(|m| &m.job_offers)
+            .map(|offer| offer.quantity)
+            .sum();
+
+        let mut industrial_production = 0.0;
+        let mut actual_batches_produced = 0;
+        if let Some(tick) = last_tick {
+            for effect in &tick.effects {
+                if let StateEffect::Agent(AgentEffect::Produce { firm: _, good_id, amount }) = effect { //
+                    if let Some(market_view) = self.market_view(&MarketId::Goods(*good_id)) {
+                        let price = market_view.last_or_mid().unwrap_or(1.0);
+                        industrial_production += amount * price;
+                    }
+                }
+            }
+            for action in &tick.actions {
+                if let SimAction::Production(ProductionAction::Produce { batches, .. }) = &action.action { //
+                    actual_batches_produced += batches;
+                }
+            }
+        }
+        let potential_batches = self.agents.firms.values().map(|f| f.employees.len()).sum::<usize>();
+        let capacity_utilization = if potential_batches > 0 { (actual_batches_produced as f64) / (potential_batches as f64) } else { 0.0 };
+
+        let household_debt: f64 = self.agents.consumers.values()
             .map(|c| fs.get_total_liabilities(&c.id)).sum();
-
-        let corporate_debt = self.agents.firms.values()
+        let corporate_debt: f64 = self.agents.firms.values()
             .map(|f| fs.get_total_liabilities(&f.id)).sum();
-            
         let government_debt = fs.get_total_liabilities(&fs.government.id);
+        let total_debt = household_debt + corporate_debt + government_debt;
+        
+        let mut new_credit_this_tick = 0.0;
+        if let Some(tick) = last_tick {
+            for effect in &tick.effects {
+                if let StateEffect::Financial(FinancialEffect::CreateInstrument(inst)) = effect { //
+                    if inst.details.as_any().is::<LoanDetails>() || inst.details.as_any().is::<BondDetails>() { //
+                        new_credit_this_tick += inst.principal;
+                    }
+                }
+            }
+        }
+        let credit_growth = if total_debt > 0.0 { new_credit_this_tick / total_debt } else { 0.0 };
 
-        let bank_liabilities = self.agents.banks.values()
-            .map(|b| fs.get_total_liabilities(&b.id)).sum::<f64>();
+        let bank_liabilities: f64 = self.agents.banks.values()
+            .map(|b| fs.get_total_liabilities(&b.id)).sum();
 
         CoreEconomicStats {
             gdp: detailed_stats.nominal_gdp_proxy,
             consumption: detailed_stats.consumer_spending_daily,
             cpi: detailed_stats.cpi,
-            ppi: 250.0, // Placeholder, as it wasn't in MacroStats
-            unemployment_rate: detailed_stats.unemployment_rate * 100.0, // Convert to percentage
-            labor_force_participation: 62.5, // Placeholder
-            job_openings: self.agents.firms.len() as f64, // Placeholder
-            capacity_utilization: 87.2, // Placeholder
-            industrial_production: 0.0, // Placeholder, not in MacroStats
-            housing_starts: 150_000.0, // Placeholder
+            ppi,
+            unemployment_rate: detailed_stats.unemployment_rate * 100.0,
+            labor_force_participation: labor_force_participation * 100.0,
+            job_openings: job_openings as f64,
+            capacity_utilization: capacity_utilization * 100.0,
+            industrial_production,
             trade_balance: detailed_stats.net_exports,
-            credit_growth: 0.05, // Placeholder
+            credit_growth,
             household_debt,
             corporate_debt,
             government_debt,

@@ -35,3 +35,5 @@ tokio-util = "0.7.16"
 anyhow = "1.0.98"
 surrealdb = "2.3.7"
 ordered-float = "5.0.0"
+petgraph = { workspace = true }
+rayon = { workspace = true }

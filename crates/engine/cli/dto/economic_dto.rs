@@ -81,7 +81,6 @@ pub struct CoreStats {
 
     pub capacity_utilization: f64,
     pub industrial_production: f64,
-    pub housing_starts: f64,
 
     pub retail_sales: f64,
     pub consumer_spending: f64,

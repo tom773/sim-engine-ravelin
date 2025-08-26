@@ -99,7 +99,6 @@ pub async fn get_dashboard(State(state): State<Arc<AppState>>) -> (StatusCode, H
             job_openings: core_stats_data.job_openings,
             capacity_utilization: core_stats_data.capacity_utilization,
             industrial_production: core_stats_data.industrial_production,
-            housing_starts: core_stats_data.housing_starts,
             retail_sales: core_stats_data.consumption * 0.6,
             consumer_spending: core_stats_data.consumption,
             trade_balance: core_stats_data.trade_balance,
@@ -298,7 +297,7 @@ pub async fn tick(State(state): State<Arc<AppState>>) -> (StatusCode, HeaderMap,
     let mut engine_guard = state.sim_engine.write().await;
     if let Some(engine) = engine_guard.as_mut() {
         let mut rng = ThreadRng::default();
-        let result = engine.tick(&mut rng);
+        let result = engine.tick_with_scheduler(&mut rng);
         (StatusCode::OK, headers, Json(json!({ "status": "Tick completed", "tick_number": result.tick_number })))
     } else {
         let err = ApiError { code: "NOT_INITIALIZED", message: "Simulation is not initialized." };

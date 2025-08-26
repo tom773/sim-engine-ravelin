@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use sim_core::*;
 use std::any::Any;
 use chrono::Datelike;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProductionFirmDecisionModel {
     pub target_markup: f64,
@@ -74,7 +75,6 @@ impl ProductionFirmDecisionModel {
     }
 
     fn handle_wages(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
-        println!("[WAGE PAYMENT] {} has emplyers {:#?}", firm.name, firm.employees);
         if (state.current_date.day() == 3 || state.current_date.day() == 17) == true {
             for (employee_id, contract) in &firm.employees {
                 let fortnightly_wage = (contract.wage_rate * contract.hours) * 2.0;
@@ -90,13 +90,14 @@ impl ProductionFirmDecisionModel {
     }
 
     fn handle_sales(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
+        
         if let Some(inventory) = state.financial_system.get_bs_by_id(&firm.id).and_then(|bs| bs.get_inventory()) {
             for (good_id, item) in inventory {
                 if item.quantity > 0.1 {
                     intentions.push(SimIntention::SellInventory {
                         agent_id: firm.id,
                         good_id: *good_id,
-                        quantity: item.quantity,
+                        quantity: item.quantity*0.2,
                         desired_markup: self.target_markup,
                     });
                 }

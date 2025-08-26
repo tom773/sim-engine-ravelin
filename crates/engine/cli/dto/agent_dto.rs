@@ -14,7 +14,6 @@ pub struct ProductionMetrics {
     pub industrial_production: f64,
     pub manufacturing_pmi: Option<f64>,
     pub services_pmi: Option<f64>,
-    pub housing_starts: f64,
     pub building_permits: Option<f64>,
     pub existing_home_sales: Option<f64>,
     pub new_home_sales: Option<f64>,
