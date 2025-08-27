@@ -85,6 +85,7 @@ impl SimulationEngine {
 
         self.scheduler = Some(scheduler);
         if execution_result.success{
+            self.state.ticknum += 1;
             return TickResult {
                 tick_number: self.state.ticknum,
                 success: true,
