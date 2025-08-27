@@ -4,7 +4,8 @@ pub mod registry;
 pub mod scenario;
 pub mod broadcast;
 pub mod debug_bus;
-
+pub mod scheduler;
+pub mod query_service;
 
 pub use debug_bus::*;
 pub use broadcast::*;
@@ -12,5 +13,5 @@ pub use executor::*;
 pub use factory::*;
 pub use registry::*;
 pub use scenario::*;
-pub mod scheduler;
 pub use scheduler::*;
+pub use query_service::*;

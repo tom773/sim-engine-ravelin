@@ -85,8 +85,6 @@ pub struct CoreStats {
     pub retail_sales: f64,
     pub consumer_spending: f64,
 
-    pub trade_balance: f64,
-
     pub credit_growth: f64,
     pub household_debt: f64,
     pub corporate_debt: f64,

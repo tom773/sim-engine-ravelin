@@ -75,7 +75,6 @@ impl SimulationEngine {
         if use_scheduler && self.scheduler.is_some() { self.tick_with_scheduler(rng) } else { self.tick_legacy(rng) }
     }
 
-
     pub fn tick_with_scheduler(&mut self, rng: &mut dyn RngCore) -> TickResult {
         let scheduler = self.scheduler.take().expect("Scheduler not initialized");
 
@@ -88,7 +87,6 @@ impl SimulationEngine {
         let execution_result = scheduler.execute_tick(self, rng);
 
         self.scheduler = Some(scheduler);
-
 
         self.convert_execution_result(execution_result)
     }
@@ -170,7 +168,6 @@ impl SimulationEngine {
             println!("No scheduler metrics available (scheduler not enabled)");
         }
     }
-
 
     pub fn gather_intentions(&self, rng: &mut dyn RngCore) -> Vec<SimIntention> {
         let mut all_intentions = Vec::new();
@@ -371,7 +368,6 @@ impl SimulationEngine {
         }
     }
 
-
     fn run_upkeep(&mut self) {
         self.state.advance_time();
         println!("\n\n[DATE] {}", self.state.current_date);
@@ -492,6 +488,31 @@ impl SimulationEngine {
         if let Some(bs) = self.state.financial_system.get_bs_by_id(&cb_id) {
             agent_snapshots.push((cb_id, "CentralBank".to_string(), bs));
         }
+        let macro_stats = self.state.macro_stats();
+
+        // Collect market snapshots from current state
+        let mut market_snapshots = Vec::new();
+        let exchange = &self.state.financial_system.exchange;
+
+        for (good_id, market) in &exchange.goods_markets {
+            let snapshot = market.snapshot();
+            market_snapshots.push((MarketId::Goods(*good_id), snapshot));
+        }
+
+        for (fin_id, market) in &exchange.financial_markets {
+            let snapshot = market.snapshot();
+            market_snapshots.push((MarketId::Financial(fin_id.clone()), snapshot));
+        }
+
+        // Get yield curve points
+        let yield_curve_points: Vec<(Tenor, f64)> = self
+            .state
+            .financial_system
+            .yield_curve
+            .yields
+            .iter()
+            .map(|(tenor, yield_val)| (*tenor, *yield_val))
+            .collect();
 
         writer
             .write_tick_batch(
@@ -502,6 +523,9 @@ impl SimulationEngine {
                 trades,
                 &instrument_snapshots,
                 &agent_snapshots,
+                Some(&macro_stats),  // NEW
+                &market_snapshots,   // NEW
+                &yield_curve_points, // NEW
             )
             .await?;
 

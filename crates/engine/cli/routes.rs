@@ -101,7 +101,6 @@ pub async fn get_dashboard(State(state): State<Arc<AppState>>) -> (StatusCode, H
             industrial_production: core_stats_data.industrial_production,
             retail_sales: core_stats_data.consumption * 0.6,
             consumer_spending: core_stats_data.consumption,
-            trade_balance: core_stats_data.trade_balance,
             credit_growth: core_stats_data.credit_growth,
             household_debt: core_stats_data.household_debt,
             corporate_debt: core_stats_data.corporate_debt,
