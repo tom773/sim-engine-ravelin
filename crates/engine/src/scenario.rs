@@ -10,7 +10,7 @@ const _SCENARIO_NAMESPACE: Uuid = uuid::uuid!("6E62B743-2623-404B-84C8-45F48A851
 pub struct Scenario {
     pub name: String,
     pub description: String,
-    config: ScenarioConfig,
+    pub config: ScenarioConfig,
     banks: Vec<BankConfig>,
     firms: Vec<FirmConfig>,
     consumers: Vec<ConsumerConfig>,
@@ -18,7 +18,7 @@ pub struct Scenario {
 
 #[derive(Debug, Deserialize)]
 pub struct ScenarioConfig {
-    iterations: u32,
+    pub iterations: u32,
     treasury_tenors_to_register: Vec<String>,
 }
 

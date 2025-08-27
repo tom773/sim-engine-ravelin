@@ -42,6 +42,7 @@ pub struct MarketSnapshot {
     pub best_bid: Option<f64>,
     pub best_ask: Option<f64>,
     pub spread: Option<f64>,
+    pub volume_24h: f64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -112,6 +113,7 @@ impl MarketSnapshotProvider for GoodsMarket {
             best_bid: self.order_book.best_bid().map(|b| b.price),
             best_ask: self.order_book.best_ask().map(|a| a.price),
             spread: self.order_book.spread(),
+            volume_24h: 0.0,
         }
     }
 }
@@ -201,6 +203,7 @@ impl MarketSnapshotProvider for FinancialMarket {
             best_bid: self.order_book.best_bid().map(|b| b.price),
             best_ask: self.order_book.best_ask().map(|a| a.price),
             spread: self.order_book.spread(),
+            volume_24h: 0.0,
         }
     }
 }

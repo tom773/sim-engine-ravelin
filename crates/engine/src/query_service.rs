@@ -1,4 +1,5 @@
 use crate::broadcast::*;
+use crate::dto::query_dto::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use surrealdb::engine::remote::ws::{Client as WsClient, Ws};
@@ -6,51 +7,6 @@ use surrealdb::{Result as SurrealResult, Surreal};
 
 pub struct QueryService {
     db: Surreal<WsClient>,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-pub struct DashboardData {
-    pub current_date: String,
-    pub tick_number: u32,
-    pub agent_counts: AgentCounts,
-    pub economic_stats: EconomicStats,
-    pub overnight_rates: OvernightRatesData,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-pub struct AgentCounts {
-    pub banks: usize,
-    pub firms: usize,
-    pub consumers: usize,
-    pub total: usize,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-pub struct EconomicStats {
-    pub nominal_gdp_proxy: f64,
-    pub consumer_spending_daily: f64,
-    pub cpi: f64,
-    pub unemployment_rate: f64,
-    pub m0: f64,
-    pub m1: f64,
-    pub m2: f64,
-
-    pub ppi: f64,
-    pub inflation_rate: f64,
-    pub labor_force_participation: f64,
-    pub job_openings: f64,
-    pub household_debt: f64,
-    pub corporate_debt: f64,
-    pub government_debt: f64,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-pub struct OvernightRatesData {
-    pub effr: Option<f64>,
-    pub sofr: Option<f64>,
-    pub iorb: Option<f64>,
-    pub discount_rate: Option<f64>,
-    pub overnight_rrp: Option<f64>,
 }
 
 impl QueryService {
@@ -61,7 +17,7 @@ impl QueryService {
         Ok(Self { db })
     }
 
-    pub async fn get_dashboard_data(&self) -> SurrealResult<Option<DashboardData>> {
+    pub async fn get_dashboard_data(&self) -> SurrealResult<Option<QueryServiceDashboardData>> {
         let latest_tick: Vec<TickRecordB> =
             self.db.query("SELECT * FROM tick ORDER BY tick_number DESC LIMIT 1").await?.take(0)?;
 
@@ -109,41 +65,100 @@ impl QueryService {
             }
         }
 
-        let dashboard = DashboardData {
-            current_date: tick.ts.to_string().split('T').next().unwrap_or("").to_string(),
+        let dashboard = QueryServiceDashboardData {
+            current_date: tick.sim_date.clone(), // Use the correct sim_date field
             tick_number: tick.tick_number,
-            agent_counts: AgentCounts {
+            agent_counts: QueryServiceAgentCounts {
                 banks: counts.get("Bank").copied().unwrap_or(0),
                 firms: counts.get("Firm").copied().unwrap_or(0),
                 consumers: counts.get("Consumer").copied().unwrap_or(0),
                 total: counts.values().sum(),
             },
-            economic_stats: EconomicStats {
+            economic_stats: QueryServiceEconomicStats {
                 nominal_gdp_proxy: stats.nominal_gdp_proxy,
                 consumer_spending_daily: stats.consumer_spending_daily,
                 cpi: stats.cpi,
-                unemployment_rate: stats.unemployment_rate,
-                m0: stats.m0,
-                m1: stats.m1,
-                m2: stats.m2,
                 ppi: stats.ppi,
                 inflation_rate: stats.inflation_rate,
+                unemployment_rate: stats.unemployment_rate,
                 labor_force_participation: stats.labor_force_participation,
                 job_openings: stats.job_openings,
                 household_debt: stats.household_debt,
                 corporate_debt: stats.corporate_debt,
                 government_debt: stats.government_debt,
-            },
-            overnight_rates: OvernightRatesData {
-                effr: None, // TODO: Query from market data
-                sofr: None,
-                iorb: None,
-                discount_rate: None,
-                overnight_rrp: None,
+                bank_reserves: stats.bank_reserves,
+                bank_credit: stats.bank_credit,
+                bank_liabilities: stats.bank_liabilities,
+                m0: stats.m0,
+                m1: stats.m1,
+                m2: stats.m2,
+                overnight_rates: QueryServiceOvernightRates {
+                    effr: stats.overnight_rates.effr,
+                    sofr: stats.overnight_rates.sofr,
+                    iorb: Some(stats.overnight_rates.iorb),
+                    discount_rate: Some(stats.overnight_rates.discount_rate),
+                    overnight_rrp: Some(stats.overnight_rates.overnight_rrp),
+                },
             },
         };
 
         Ok(Some(dashboard))
+    }
+
+    pub async fn get_stats_data(&self) -> SurrealResult<Option<QueryServiceStatsData>> {
+        let latest_tick: Vec<TickRecordB> =
+            self.db.query("SELECT * FROM tick ORDER BY tick_number DESC LIMIT 1").await?.take(0)?;
+
+        let tick = match latest_tick.first() {
+            Some(t) => t,
+            None => return Ok(None),
+        };
+
+        let tick_id_str = tick.id.as_ref().unwrap().to_string();
+
+        let macro_stats: Vec<MacroStatsRecord> = self
+            .db
+            .query("SELECT * FROM macro_stats WHERE tick = type::thing($tick_id) LIMIT 1")
+            .bind(("tick_id", tick_id_str))
+            .await?
+            .take(0)?;
+
+        let stats = match macro_stats.first() {
+            Some(s) => s,
+            None => return Ok(None),
+        };
+
+        let stats_data = QueryServiceStatsData {
+            tick_number: tick.tick_number,
+            economic_stats: QueryServiceEconomicStats {
+                nominal_gdp_proxy: stats.nominal_gdp_proxy,
+                consumer_spending_daily: stats.consumer_spending_daily,
+                cpi: stats.cpi,
+                ppi: stats.ppi,
+                inflation_rate: stats.inflation_rate,
+                unemployment_rate: stats.unemployment_rate,
+                labor_force_participation: stats.labor_force_participation,
+                job_openings: stats.job_openings,
+                household_debt: stats.household_debt,
+                corporate_debt: stats.corporate_debt,
+                government_debt: stats.government_debt,
+                bank_reserves: stats.bank_reserves,
+                bank_credit: stats.bank_credit,
+                bank_liabilities: stats.bank_liabilities,
+                overnight_rates: QueryServiceOvernightRates {
+                    effr: stats.overnight_rates.effr,
+                    sofr: stats.overnight_rates.sofr,
+                    iorb: Some(stats.overnight_rates.iorb),
+                    discount_rate: Some(stats.overnight_rates.discount_rate),
+                    overnight_rrp: Some(stats.overnight_rates.overnight_rrp),
+                },
+                m0: stats.m0,
+                m1: stats.m1,
+                m2: stats.m2,
+            },
+        };
+
+        Ok(Some(stats_data))
     }
 
     pub async fn get_agent_summaries(
@@ -268,6 +283,12 @@ impl QueryService {
             .collect();
 
         Ok(history)
+    }
+
+    pub async fn health_check(&self) -> SurrealResult<bool> {
+        let result: Result<Vec<serde_json::Value>, _> = 
+            self.db.query("SELECT count() FROM tick LIMIT 1").await?.take(0);
+        Ok(result.is_ok())
     }
 }
 

@@ -6,7 +6,9 @@ pub mod broadcast;
 pub mod debug_bus;
 pub mod scheduler;
 pub mod query_service;
+pub mod dto;
 
+pub use dto::*;
 pub use debug_bus::*;
 pub use broadcast::*;
 pub use executor::*;

@@ -5,7 +5,6 @@ use domains::{ResolutionContext, ResolutionPhase};
 use std::collections::HashMap;
 use std::time::Instant;
 
-/// Handler for the Upkeep step - advances time and processes financial updates
 pub struct UpkeepHandler;
 
 impl StepHandler for UpkeepHandler {
@@ -17,18 +16,14 @@ impl StepHandler for UpkeepHandler {
     ) -> StepResult {
         let start = Instant::now();
 
-        // Advance the simulation date
         engine.state.advance_time();
         println!("[UPKEEP] Advanced to date: {}", engine.state.current_date);
 
-        // Update agent expectations
         engine.update_agent_expectations();
 
-        // Process financial updates (interest accrual, coupon payments, etc.)
         let upkeep_actions = engine.process_financial_updates();
         let (_, _, upkeep_effects) = engine.execute_actions(&upkeep_actions);
 
-        // Apply upkeep effects
         if let Err(e) = engine.state.apply_effects(&upkeep_effects) {
             return StepResult::failure(
                 start.elapsed().as_millis() as u64,
@@ -51,7 +46,6 @@ impl StepHandler for UpkeepHandler {
     }
 }
 
-/// Handler for gathering intentions from all agents
 pub struct GatherIntentionsHandler;
 
 impl StepHandler for GatherIntentionsHandler {
@@ -63,13 +57,10 @@ impl StepHandler for GatherIntentionsHandler {
     ) -> StepResult {
         let start = Instant::now();
 
-        // Gather intentions from all agents
         let intentions = engine.gather_intentions(rng);
 
-        // Categorize intentions by resolution phase
         let categorized = engine.domain_registry.categorize_intentions_by_phase(intentions.clone());
 
-        // Store in context for later steps
         if let Err(e) = context.store_intentions(intentions.clone()) {
             return StepResult::failure(
                 start.elapsed().as_millis() as u64,
@@ -127,7 +118,6 @@ impl GatherIntentionsHandler {
     }
 }
 
-/// Handler for resolving a specific phase of intentions
 pub struct PhaseResolutionHandler {
     phase: ResolutionPhase,
 }
@@ -147,7 +137,6 @@ impl StepHandler for PhaseResolutionHandler {
     ) -> StepResult {
         let start = Instant::now();
 
-        // Get intentions for this phase
         let intentions = match context.get_intentions_for_phase(self.phase) {
             Ok(intents) => intents,
             Err(e) => {
@@ -168,21 +157,17 @@ impl StepHandler for PhaseResolutionHandler {
             return StepResult::success(start.elapsed().as_millis() as u64, metadata);
         }
 
-        // Create resolution context
         let resolution_context = ResolutionContext {
             state: &engine.state,
             current_tick: engine.state.ticknum,
         };
 
-        // Get current action and effect offsets
         let action_offset = context.get_all_actions().map(|a| a.len()).unwrap_or(0);
         let effect_offset = context.get_all_effects().map(|e| e.len()).unwrap_or(0);
 
-        // Resolve and execute this phase
         let (action_records, action_to_effect_indices, effects) = 
             engine.resolve_and_execute_phase(&intentions, &resolution_context, action_offset, effect_offset);
 
-        // Store phase results
         if let Err(e) = context.store_phase_actions(self.phase, action_records.clone()) {
             return StepResult::failure(
                 start.elapsed().as_millis() as u64,
@@ -197,7 +182,6 @@ impl StepHandler for PhaseResolutionHandler {
             );
         }
 
-        // Update accumulated actions and effects
         let mut all_actions = context.get_all_actions().unwrap_or_default();
         all_actions.extend(action_records.clone());
         let _ = context.store_all_actions(all_actions);
@@ -206,7 +190,6 @@ impl StepHandler for PhaseResolutionHandler {
         all_effects.extend(effects.clone());
         let _ = context.store_all_effects(all_effects);
 
-        // Update action to effect mapping
         let mut mapping = context.get_action_to_effect_indices().unwrap_or_default();
         for (action_idx, effect_indices) in action_to_effect_indices.clone() {
             mapping.insert(action_idx, effect_indices);
@@ -225,12 +208,10 @@ impl StepHandler for PhaseResolutionHandler {
     }
 
     fn validates_preconditions(&self, context: &StepContext) -> Result<(), String> {
-        // Ensure intentions have been gathered
         if !context.step_completed_successfully(TickStep::GatherIntentions) {
             return Err("GatherIntentions step must complete successfully first".to_string());
         }
 
-        // Check phase-specific preconditions
         match self.phase {
             ResolutionPhase::Market => {
                 if !context.step_completed_successfully(TickStep::ResolveIndependentPhase) {
@@ -257,7 +238,6 @@ impl StepHandler for PhaseResolutionHandler {
     }
 }
 
-/// Handler for applying market effects for price discovery
 pub struct ApplyMarketEffectsHandler;
 
 impl StepHandler for ApplyMarketEffectsHandler {
@@ -269,7 +249,6 @@ impl StepHandler for ApplyMarketEffectsHandler {
     ) -> StepResult {
         let start = Instant::now();
 
-        // Get market phase effects
         let market_effects = match context.get_phase_effects(ResolutionPhase::Market) {
             Ok(effects) => effects,
             Err(e) => {
@@ -280,13 +259,11 @@ impl StepHandler for ApplyMarketEffectsHandler {
             }
         };
 
-        // Filter to only market effects
         let market_state_effects: Vec<StateEffect> = market_effects
             .into_iter()
             .filter(|e| matches!(e, StateEffect::Market(_)))
             .collect();
 
-        // Apply market effects for price discovery
         if !market_state_effects.is_empty() {
             if let Err(e) = engine.state.apply_effects(&market_state_effects) {
                 return StepResult::failure(
@@ -315,7 +292,6 @@ impl StepHandler for ApplyMarketEffectsHandler {
     }
 }
 
-/// Handler for clearing all markets
 pub struct ClearMarketsHandler;
 
 impl StepHandler for ClearMarketsHandler {
@@ -327,10 +303,8 @@ impl StepHandler for ClearMarketsHandler {
     ) -> StepResult {
         let start = Instant::now();
 
-        // Clear markets and get trades + snapshots
         let (trades, snapshots) = engine.state.financial_system.exchange.clear_markets(engine.state.ticknum as i64);
 
-        // Store trades and snapshots in context
         if let Err(e) = context.store_trades(trades.clone()) {
             return StepResult::failure(
                 start.elapsed().as_millis() as u64,
@@ -367,7 +341,6 @@ impl StepHandler for ClearMarketsHandler {
     }
 }
 
-/// Handler for settling trades
 pub struct SettleTradesHandler;
 
 impl StepHandler for SettleTradesHandler {
@@ -379,7 +352,6 @@ impl StepHandler for SettleTradesHandler {
     ) -> StepResult {
         let start = Instant::now();
 
-        // Get trades from market clearing
         let trades = match context.get_trades() {
             Ok(trades) => trades,
             Err(e) => {
@@ -390,10 +362,8 @@ impl StepHandler for SettleTradesHandler {
             }
         };
 
-        // Settle all trades
         let settlement_effects = engine.settle_trades(trades.clone());
 
-        // Add settlement effects to accumulated effects
         let mut all_effects = context.get_all_effects().unwrap_or_default();
         all_effects.extend(settlement_effects.clone());
         let _ = context.store_all_effects(all_effects);
@@ -418,7 +388,6 @@ impl StepHandler for SettleTradesHandler {
     }
 }
 
-/// Handler for applying all accumulated effects
 pub struct ApplyAllEffectsHandler;
 
 impl StepHandler for ApplyAllEffectsHandler {
@@ -430,7 +399,6 @@ impl StepHandler for ApplyAllEffectsHandler {
     ) -> StepResult {
         let start = Instant::now();
 
-        // Get all accumulated effects
         let all_effects = match context.get_all_effects() {
             Ok(effects) => effects,
             Err(e) => {
@@ -441,12 +409,10 @@ impl StepHandler for ApplyAllEffectsHandler {
             }
         };
 
-        // Add labour effects (clear labour markets)
         let labour_effects = engine.state.financial_system.exchange.clear_labour_markets(&engine.state.clone());
         let mut final_effects = all_effects;
         final_effects.extend(labour_effects.clone());
 
-        // Apply all effects to the simulation state
         if let Err(e) = engine.state.apply_effects(&final_effects) {
             return StepResult::failure(
                 start.elapsed().as_millis() as u64,
@@ -454,7 +420,6 @@ impl StepHandler for ApplyAllEffectsHandler {
             );
         }
 
-        // Store final effects list
         let _ = context.store_all_effects(final_effects.clone());
 
         let metadata = serde_json::json!({
@@ -477,7 +442,6 @@ impl StepHandler for ApplyAllEffectsHandler {
     }
 }
 
-/// Handler for updating market history
 pub struct UpdateHistoryHandler;
 
 impl StepHandler for UpdateHistoryHandler {
@@ -489,17 +453,13 @@ impl StepHandler for UpdateHistoryHandler {
     ) -> StepResult {
         let start = Instant::now();
 
-        // Get trades and market snapshots
         let trades = context.get_trades().unwrap_or_default();
-        let snapshots = HashMap::new(); // TODO: Implement proper snapshot retrieval
+        let snapshots = HashMap::new();
 
-        // Update market history
         engine.update_market_history(&trades, &snapshots);
 
-        // Update yield curve
         engine.state.financial_system.update_yield_curve(engine.state.current_date);
 
-        // Create and store tick record
         let all_actions = context.get_all_actions().unwrap_or_default();
         let all_effects = context.get_all_effects().unwrap_or_default();
         let action_to_effect_indices = context.get_action_to_effect_indices().unwrap_or_default();
@@ -515,10 +475,8 @@ impl StepHandler for UpdateHistoryHandler {
             trades: trades.clone(),
         };
 
-        // Add to history
         engine.state.history.add_tick_record(tick_record.clone());
 
-        // Emit debug event
         crate::dbg_evt!(tick_record);
 
         let metadata = serde_json::json!({
@@ -541,7 +499,6 @@ impl StepHandler for UpdateHistoryHandler {
     }
 }
 
-/// Handler for persisting data to external systems
 pub struct PersistDataHandler;
 
 impl StepHandler for PersistDataHandler {
@@ -553,18 +510,17 @@ impl StepHandler for PersistDataHandler {
     ) -> StepResult {
         let start = Instant::now();
 
-        // Only persist if we have a database writer
         if let Some(writer) = &engine.db_writer {
             let all_actions = context.get_all_actions().unwrap_or_default();
             let all_effects = context.get_all_effects().unwrap_or_default();
             let action_to_effect_indices = context.get_action_to_effect_indices().unwrap_or_default();
             let trades = context.get_trades().unwrap_or_default();
 
-            // Persist data asynchronously
             let result = tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async {
                     engine.persist_tick_batch(
                         writer,
+                        engine.state.current_date,
                         &all_actions,
                         &all_effects,
                         &action_to_effect_indices,
@@ -574,7 +530,6 @@ impl StepHandler for PersistDataHandler {
             });
 
             if let Err(e) = result {
-                // Don't fail the tick for persistence errors
                 println!("[WARNING] Failed to persist tick data: {}", e);
                 let metadata = serde_json::json!({
                     "persisted": false,

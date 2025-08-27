@@ -1,4 +1,5 @@
-use crate::{AppState, dto::*, routes::*};
+use crate::{AppState, routes::*};
+use engine::dto::*; 
 use std::str::FromStr;
 use axum::{
     Json,
@@ -150,7 +151,7 @@ pub async fn get_market_goods_overview(
                 let depth = summary.depth;
                 let g = goods.get_good_by_id(good_id);
 
-                crate::dto::GoodsMarketSummaryDto {
+                GoodsMarketSummaryDto {
                     market_id: good_id.to_string(),
                     good_id: good_id.to_string(),
                     name: g.map_or_else(|| format!("{good_id}"), |x| x.name.clone()),
@@ -160,7 +161,7 @@ pub async fn get_market_goods_overview(
                     spread: summary.spread,
                     mid: summary.mid,
                     last: summary.last_price,
-                    depth: crate::dto::DepthDto {
+                    depth: DepthDto {
                         bid_size_at_best: depth.bid_size_at_best,
                         ask_size_at_best: depth.ask_size_at_best,
                         bid_levels: depth.bid_levels,
@@ -172,7 +173,7 @@ pub async fn get_market_goods_overview(
             })
             .collect::<Vec<_>>();
 
-        let page = crate::dto::GoodsMarketsPageDto { markets };
+        let page = GoodsMarketsPageDto { markets };
         (StatusCode::OK, headers, Json(serde_json::to_value(page).unwrap()))
     } else {
         let err = ApiError { code: "NOT_INITIALIZED", message: "Simulation is not initialized." };
@@ -193,7 +194,7 @@ pub async fn get_market_goods_orderbook(
             let bids = book
                 .bids
                 .iter()
-                .map(|b| crate::dto::MarketBidDto {
+                .map(|b| MarketBidDto {
                     agent_id: b.agent_id.to_string(),
                     quantity: b.quantity,
                     price: b.price,
@@ -203,14 +204,14 @@ pub async fn get_market_goods_orderbook(
             let asks = book
                 .asks
                 .iter()
-                .map(|a| crate::dto::MarketAskDto {
+                .map(|a| MarketAskDto {
                     agent_id: a.agent_id.to_string(),
                     quantity: a.quantity,
                     price: a.price,
                 })
                 .collect::<Vec<_>>();
 
-            let dto = crate::dto::OrderbookDto {
+            let dto = OrderbookDto {
                 market_id: format!("Goods({good_id})"),
                 market_name: market.name.clone(),
                 bids,
@@ -248,7 +249,7 @@ pub async fn get_market_goods_history(
         let limit = q.limit.unwrap_or(200);
         let trades = exchange.trade_tape.get(&market_id).cloned().unwrap_or_default()
             .iter().rev().take(limit).rev()
-            .map(|t| crate::dto::TradeDto {
+            .map(|t| TradeDto {
                 price: t.trade.price,
                 quantity: t.trade.quantity,
                 market_id: market_id.to_string(),
@@ -263,7 +264,7 @@ pub async fn get_market_goods_history(
             volume: c.volume, vwap: c.vwap, trades_count: Some(c.trades_count),
         }).collect();
 
-        let dto = crate::dto::MarketHistoryDto {
+        let dto = MarketHistoryDto {
             market_id: format!("Goods({good_id})"),
             good_id: good_id.to_string(),
             name: exchange.goods_markets.get(&good_id).unwrap().name.to_string(),
@@ -301,7 +302,7 @@ pub async fn get_market_financial_overview(
                 market.calculate_ytm_with_price(fs, depth.best_ask.unwrap_or(0.0)).or(Some(market.default_yield())).map(|y| y * 100.0)
             } else { None };
 
-            crate::dto::FinancialMarketSummaryDto {
+            FinancialMarketSummaryDto {
                 market_id: format!("Financial({})", instr_id),
                 instrument_id: instr_id.to_string(),
                 name: market.name.clone(),
@@ -312,7 +313,7 @@ pub async fn get_market_financial_overview(
                 spread: summary.spread,
                 mid: summary.mid,
                 last: summary.last_price,
-                depth: crate::dto::DepthDto {
+                depth: DepthDto {
                     bid_size_at_best: depth.bid_size_at_best,
                     ask_size_at_best: depth.ask_size_at_best,
                     bid_levels: depth.bid_levels,
@@ -322,7 +323,7 @@ pub async fn get_market_financial_overview(
             }
         }).collect::<Vec<_>>();
 
-        let page = crate::dto::FinancialMarketsPageDto { markets };
+        let page = FinancialMarketsPageDto { markets };
         (StatusCode::OK, headers, Json(serde_json::to_value(page).unwrap()))
     } else {
         let err = ApiError { code: "NOT_INITIALIZED", message: "Simulation is not initialized." };
@@ -347,19 +348,19 @@ pub async fn get_market_financial_orderbook(
         };
 
         if let Some(market) = engine.state.financial_system.exchange.financial_markets.get(&fm_id) {
-            let bids = market.order_book.bids.iter().map(|b| crate::dto::MarketBidDto {
+            let bids = market.order_book.bids.iter().map(|b| MarketBidDto {
                 agent_id: b.agent_id.to_string(),
                 quantity: b.quantity,
                 price: b.price,
             }).collect::<Vec<_>>();
 
-            let asks = market.order_book.asks.iter().map(|a| crate::dto::MarketAskDto {
+            let asks = market.order_book.asks.iter().map(|a| MarketAskDto {
                 agent_id: a.agent_id.to_string(),
                 quantity: a.quantity,
                 price: a.price,
             }).collect::<Vec<_>>();
 
-            let dto = crate::dto::OrderbookDto {
+            let dto = OrderbookDto {
                 market_id: format!("Financial({fm_id})"),
                 market_name: market.name.clone(),
                 bids,
@@ -406,7 +407,7 @@ pub async fn get_market_financial_history(
         let limit = q.limit.unwrap_or(200);
         let trades = exchange.trade_tape.get(&market_id).cloned().unwrap_or_default()
             .iter().rev().take(limit).rev()
-            .map(|t| crate::dto::TradeDto {
+            .map(|t| TradeDto {
                 market_id: market_id.to_string(), price: t.trade.price, quantity: t.trade.quantity,
                 buyer_id: t.trade.buyer.to_string(), seller_id: t.trade.seller.to_string(),
             }).collect();
@@ -422,7 +423,7 @@ pub async fn get_market_financial_history(
             .map(|m| m.name.clone())
             .unwrap_or_else(|| fm_id.to_string());
 
-        let dto = crate::dto::MarketHistoryDto {
+        let dto = MarketHistoryDto {
             market_id: format!("Financial({fm_id})"),
             good_id: fm_id.to_string(), name, trades, candles,
         };

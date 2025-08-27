@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use sim_core::*;
+use chrono::NaiveDate;
 use std::collections::HashMap;
 use surrealdb::engine::remote::ws::{Client as WsClient, Ws};
 use surrealdb::{Result as SurrealResult, Surreal};
@@ -9,6 +10,7 @@ pub struct TickRecordB {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<surrealdb::sql::Thing>,
     pub tick_number: u32,
+    pub sim_date: String, // Added simulation date
     pub ts: surrealdb::sql::Datetime,
 }
 
@@ -108,11 +110,15 @@ pub struct MacroStatsRecord {
     pub household_debt: f64,
     pub corporate_debt: f64,
     pub government_debt: f64,
-    pub employment: usize,
-    pub labour_force: usize,
+    pub employment: Option<usize>,
+    pub labour_force: Option<usize>,
+    pub bank_reserves: f64,
+    pub bank_credit: f64,
+    pub bank_liabilities: f64,
     pub m0: f64,
     pub m1: f64,
     pub m2: f64,
+    pub overnight_rates: OvernightRates,
     pub velocity: f64,
     pub ts: surrealdb::sql::Datetime,
 }
@@ -183,6 +189,7 @@ impl SurrealDbWriter {
     async fn setup_schema(&self) -> SurrealResult<()> {
         self.db.query("DEFINE TABLE tick SCHEMALESS;").await?;
         self.db.query("DEFINE FIELD tick_number ON tick TYPE int ASSERT $value >= 0;").await?;
+        self.db.query("DEFINE FIELD sim_date ON tick TYPE string;").await?; // Added schema for sim_date
         self.db.query("DEFINE FIELD ts ON tick TYPE datetime;").await?;
         self.db.query("DEFINE INDEX tick_number_unique ON TABLE tick FIELDS tick_number UNIQUE;").await?;
 
@@ -254,6 +261,10 @@ impl SurrealDbWriter {
         self.db.query("DEFINE FIELD m0 ON macro_stats TYPE number;").await?;
         self.db.query("DEFINE FIELD m1 ON macro_stats TYPE number;").await?;
         self.db.query("DEFINE FIELD m2 ON macro_stats TYPE number;").await?;
+        self.db.query("DEFINE FIELD bank_reserves ON macro_stats TYPE number;").await?;
+        self.db.query("DEFINE FIELD bank_credit ON macro_stats TYPE number;").await?;
+        self.db.query("DEFINE FIELD bank_liabilities ON macro_stats TYPE number;").await?;
+        self.db.query("DEFINE FIELD overnight_rates ON macro_stats TYPE object;").await?;
         self.db.query("DEFINE FIELD ts ON macro_stats TYPE datetime;").await?;
         self.db.query("DEFINE INDEX macro_stats_by_tick ON TABLE macro_stats FIELDS tick UNIQUE;").await?;
 
@@ -286,7 +297,7 @@ impl SurrealDbWriter {
     }
 
     pub async fn write_tick_batch(
-        &self, tick_number: u32, actions: &[ActionRecord], effects: &[StateEffect],
+        &self, tick_number: u32, sim_date: NaiveDate, actions: &[ActionRecord], effects: &[StateEffect],
         action_to_effect_indices: &HashMap<usize, Vec<usize>>, trades: &[Trade],
         instruments: &[(InstrumentId, &FinancialInstrument)], agents: &[(AgentId, String, &BalanceSheet)],
         macro_stats: Option<&MacroStats>, market_summaries: &[(MarketId, MarketSnapshot)],
@@ -296,8 +307,9 @@ impl SurrealDbWriter {
 
         let tick_results: Vec<TickRecordB> = self
             .db
-            .query("CREATE tick SET tick_number = $tick_number, ts = $ts RETURN *")
+            .query("CREATE tick SET tick_number = $tick_number, sim_date = $sim_date, ts = $ts RETURN *")
             .bind(("tick_number", tick_number as i64))
+            .bind(("sim_date", sim_date.format("%Y-%m-%d").to_string())) // Bind sim_date
             .bind(("ts", now.clone()))
             .await?
             .take(0)?;
@@ -393,7 +405,9 @@ impl SurrealDbWriter {
                 let details =
                     serde_json::json!({ "cash_assets": bs.liquid_assets(), "deposit_assets": bs.total_deposits() });
                 let _: Vec<AgentStateRecord> = self.db
-                    .query("CREATE agent_state SET agent = $agent, tick = type::thing($tick), agent_type = $agent_type, total_assets = $total_assets, total_liabilities = $total_liabilities, net_worth = $net_worth, liquid_assets = $liquid_assets, details = $details")
+                    .query("CREATE agent_state SET agent = $agent, tick = type::thing($tick), agent_type = $agent_type, 
+                        total_assets = $total_assets, total_liabilities = $total_liabilities, net_worth = $net_worth, liquid_assets = $liquid_assets, 
+                        details = $details")
                     .bind(("agent", id.to_string()))
                     .bind(("tick", tick_ref.to_string()))
                     .bind(("agent_type", agent_type.to_string()))
@@ -449,7 +463,8 @@ impl SurrealDbWriter {
             consumer_spending_daily = $spending, cpi = $cpi, ppi = $ppi, 
             inflation_rate = $inflation_rate, unemployment_rate = $unemployment,
             labor_force_participation = $lfp, job_openings = $jobs,
-            household_debt = $hh_debt, corporate_debt = $corp_debt, government_debt = $gov_debt,
+            household_debt = $hh_debt, corporate_debt = $corp_debt, government_debt = $gov_debt, 
+            bank_reserves = $bank_reserves, bank_credit = $bank_credit, bank_liabilities = $bank_liabilities, overnight_rates = $overnight_rates,
             m0 = $m0, m1 = $m1, m2 = $m2, velocity = $velocity, ts = $ts",
                 )
                 .bind(("tick", tick_ref.to_string()))
@@ -464,6 +479,10 @@ impl SurrealDbWriter {
                 .bind(("hh_debt", stats.household_debt))
                 .bind(("corp_debt", stats.corporate_debt))
                 .bind(("gov_debt", stats.government_debt))
+                .bind(("bank_reserves", stats.bank_reserves))
+                .bind(("bank_credit", stats.bank_credit))
+                .bind(("bank_liabilities", stats.bank_liabilities))
+                .bind(("overnight_rates", serde_json::to_value(&stats.overnight_rates).unwrap_or(serde_json::Value::Null)))
                 .bind(("m0", stats.m0))
                 .bind(("m1", stats.m1))
                 .bind(("m2", stats.m2))
@@ -481,12 +500,13 @@ impl SurrealDbWriter {
             };
 
             let _: Vec<MarketSummaryRecord> = self.db
-                .query("CREATE market_summary SET tick = type::thing($tick), market_id = $market_id, market_type = $market_type, best_bid = $best_bid, best_ask = $best_ask, spread = $spread, ts = $ts")
+                .query("CREATE market_summary SET tick = type::thing($tick), market_id = $market_id, market_type = $market_type, best_bid = $best_bid, best_ask = $best_ask, volume_24h = $volume_24h, spread = $spread, ts = $ts")
                 .bind(("tick", tick_ref.to_string()))
                 .bind(("market_id", market_id.to_string()))
                 .bind(("market_type", market_type))
                 .bind(("best_bid", snapshot.best_bid))
                 .bind(("best_ask", snapshot.best_ask))
+                .bind(("volume_24h", snapshot.volume_24h))
                 .bind(("spread", snapshot.spread))
                 .bind(("ts", now.clone()))
                 .await?.take(0)?;

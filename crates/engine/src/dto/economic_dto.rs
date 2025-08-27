@@ -11,6 +11,8 @@ pub struct MonetaryStats {
     pub monetary_base: f64,
     pub currency_in_circulation: f64,
     pub bank_reserves: f64,
+    pub bank_credit: f64,
+    pub bank_liabilities: f64,
 }
 
 #[derive(Serialize, Clone)]

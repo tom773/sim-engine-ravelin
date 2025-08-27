@@ -120,7 +120,7 @@ impl SimulationEngine {
             let _ = tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async {
                     if let Err(e) = self
-                        .persist_tick_batch(writer, &action_records, &all_effects, &action_to_effect_indices, &trades)
+                        .persist_tick_batch(writer, self.state.current_date, &action_records, &all_effects, &action_to_effect_indices, &trades)
                         .await
                     {
                         println!("[ERROR] Failed to write to SurrealDB: {}", e);
@@ -458,7 +458,7 @@ impl SimulationEngine {
     }
 
     pub async fn persist_tick_batch(
-        &self, writer: &SurrealDbWriter, action_records: &[ActionRecord], effects: &[StateEffect],
+        &self, writer: &SurrealDbWriter, sim_date: NaiveDate, action_records: &[ActionRecord], effects: &[StateEffect],
         action_to_effect_indices: &HashMap<usize, Vec<usize>>, trades: &[Trade],
     ) -> Result<(), Box<dyn std::error::Error>> {
         let instrument_snapshots: Vec<(InstrumentId, &FinancialInstrument)> =
@@ -515,6 +515,7 @@ impl SimulationEngine {
         writer
             .write_tick_batch(
                 self.state.ticknum,
+                sim_date, // Pass the simulation date
                 action_records,
                 effects,
                 action_to_effect_indices,
