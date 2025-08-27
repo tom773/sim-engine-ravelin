@@ -70,86 +70,31 @@ impl SimulationEngine {
     pub fn run_initialization(&mut self) {}
 
     pub fn tick(&mut self, rng: &mut dyn RngCore) -> TickResult {
-        let use_scheduler = std::env::var("USE_DAG_SCHEDULER").is_ok() || self.scheduler.is_some();
-
-        if use_scheduler && self.scheduler.is_some() { self.tick_with_scheduler(rng) } else { self.tick_legacy(rng) }
-    }
-
-    pub fn tick_with_scheduler(&mut self, rng: &mut dyn RngCore) -> TickResult {
         let scheduler = self.scheduler.take().expect("Scheduler not initialized");
 
         if let Err(e) = scheduler.validate_schedule() {
             println!("[ERROR] Scheduler validation failed: {}", e);
             self.scheduler = Some(scheduler);
-            return self.tick_legacy(rng);
+            return TickResult {
+                tick_number: self.state.ticknum,
+                success: false,
+            };
         }
 
         let execution_result = scheduler.execute_tick(self, rng);
 
         self.scheduler = Some(scheduler);
-
-        self.convert_execution_result(execution_result)
-    }
-
-    pub fn tick_legacy(&mut self, rng: &mut dyn RngCore) -> TickResult {
-        self.run_upkeep();
-        let labour_effects = self.state.financial_system.exchange.clear_labour_markets(&self.state.clone());
-
-        let intentions = self.gather_intentions(rng);
-        let icl = intentions.clone();
-        let (action_records, action_to_effect_indices, other_effects, trades) =
-            self.resolve_and_execute_intentions(intentions);
-
-        let mut all_effects = labour_effects;
-        all_effects.extend(other_effects);
-
-        self.state.financial_system.update_yield_curve(self.state.current_date);
-
-        let tick_record = TickRecord {
-            tick_number: self.state.ticknum,
-            date: self.state.current_date,
-            intentions: icl.clone(),
-            actions: action_records.clone(),
-            effects: all_effects.clone(),
-            action_to_effect_indices: action_to_effect_indices.clone(),
-            trades: trades.clone(),
-        };
-        dbg_evt!(tick_record);
-
-        if let Some(writer) = &self.db_writer {
-            let _ = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    if let Err(e) = self
-                        .persist_tick_batch(writer, self.state.current_date, &action_records, &all_effects, &action_to_effect_indices, &trades)
-                        .await
-                    {
-                        println!("[ERROR] Failed to write to SurrealDB: {}", e);
-                    }
-                })
-            });
+        if execution_result.success{
+            return TickResult {
+                tick_number: self.state.ticknum,
+                success: true,
+            }
+        } else {
+            return TickResult {
+                tick_number: self.state.ticknum,
+                success: false,
+            }
         }
-
-        self.state.history.add_tick_record(tick_record);
-        self.state.ticknum += 1;
-
-        TickResult {
-            tick_number: self.state.ticknum,
-            actions: action_records.iter().map(|r| r.action.clone()).collect(),
-            effects: all_effects,
-            trades,
-        }
-    }
-
-    fn convert_execution_result(&mut self, result: TickExecutionResult) -> TickResult {
-        if result.success {
-            self.state.ticknum += 1;
-        }
-
-        let actions = Vec::new();
-        let effects = Vec::new();
-        let trades = Vec::new();
-
-        TickResult { tick_number: result.tick_number, actions, effects, trades }
     }
 
     pub fn get_scheduler_stats(&self) -> Option<String> {
@@ -368,79 +313,6 @@ impl SimulationEngine {
         }
     }
 
-    fn run_upkeep(&mut self) {
-        self.state.advance_time();
-        println!("\n\n[DATE] {}", self.state.current_date);
-        self.update_agent_expectations();
-
-        let upkeep_actions = self.process_financial_updates();
-        let (_, _, upkeep_effects) = self.execute_actions(&upkeep_actions);
-
-        if let Err(e) = self.state.apply_effects(&upkeep_effects) {
-            println!("[ERROR] applying upkeep effects: {}", e);
-        }
-    }
-
-    fn resolve_and_execute_intentions(
-        &mut self, intentions: Vec<SimIntention>,
-    ) -> (Vec<ActionRecord>, HashMap<usize, Vec<usize>>, Vec<StateEffect>, Vec<Trade>) {
-        let categorized = self.domain_registry.categorize_intentions_by_phase(intentions);
-
-        let mut all_action_records = Vec::new();
-        let mut all_action_to_effect_indices = HashMap::new();
-        let mut all_effects = Vec::new();
-
-        for phase in [ResolutionPhase::Independent, ResolutionPhase::Market, ResolutionPhase::Dependent] {
-            if let Some(phase_intentions) = categorized.get(&phase) {
-                let (phase_records, phase_indices, phase_effects) = {
-                    let context = ResolutionContext { state: &self.state, current_tick: self.state.ticknum };
-                    self.resolve_and_execute_phase(
-                        phase_intentions,
-                        &context,
-                        all_action_records.len(),
-                        all_effects.len(),
-                    )
-                };
-
-                if phase == ResolutionPhase::Market {
-                    self.apply_market_effects_for_price_discovery(&phase_effects);
-                }
-
-                all_action_records.extend(phase_records);
-                for (k, v) in phase_indices {
-                    all_action_to_effect_indices.insert(k, v);
-                }
-                all_effects.extend(phase_effects);
-            }
-        }
-
-        let (trades, snapshots) = self.state.financial_system.exchange.clear_markets(self.state.ticknum as i64);
-        self.update_market_history(&trades, &snapshots);
-
-        let settlement_effects = self.settle_trades(trades.clone());
-        all_effects.extend(settlement_effects);
-
-        let labour_effects = self.state.financial_system.exchange.clear_labour_markets(&self.state.clone());
-        all_effects.extend(labour_effects);
-
-        if let Err(e) = self.state.apply_effects(&all_effects) {
-            println!("[ERROR] applying all effects: {}", e);
-        }
-
-        (all_action_records, all_action_to_effect_indices, all_effects, trades)
-    }
-
-    fn apply_market_effects_for_price_discovery(&mut self, effects: &[StateEffect]) {
-        let market_effects: Vec<StateEffect> =
-            effects.iter().filter(|e| matches!(e, StateEffect::Market(_))).cloned().collect();
-
-        if !market_effects.is_empty() {
-            if let Err(e) = self.state.apply_effects(&market_effects) {
-                println!("[ERROR] applying market effects for price discovery: {}", e);
-            }
-        }
-    }
-
     fn get_agent_info(&self, agent_id: &AgentId) -> (String, Option<String>) {
         if let Some(bank) = self.state.agents.banks.get(agent_id) {
             ("Bank".to_string(), Some(bank.name.clone()))
@@ -561,7 +433,5 @@ impl SimulationEngine {
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct TickResult {
     pub tick_number: u32,
-    pub actions: Vec<SimAction>,
-    pub effects: Vec<StateEffect>,
-    pub trades: Vec<Trade>,
+    pub success: bool,
 }

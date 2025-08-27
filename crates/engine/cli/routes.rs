@@ -61,15 +61,10 @@ pub async fn init_sim(State(state): State<Arc<AppState>>) -> (StatusCode, Header
     (StatusCode::OK, headers, Json(InitResponse { epoch: state.epoch.to_string() }))
 }
 
-// =============================================================================
-// QUERYSERVICE-ONLY ENDPOINTS (No engine fallback)
-// =============================================================================
 
-/// Dashboard endpoint - QueryService only
 pub async fn get_dashboard(State(state): State<Arc<AppState>>) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
     let headers = with_epoch_header(HeaderMap::new(), state.epoch);
 
-    // Hold the guard for the entire operation to avoid borrowing issues
     let query_service_guard = state.query_service.read().await;
     let query_service = match query_service_guard.as_ref() {
         Some(qs) => qs,
@@ -96,11 +91,9 @@ pub async fn get_dashboard(State(state): State<Arc<AppState>>) -> (StatusCode, H
     }
 }
 
-/// Stats endpoint - QueryService only
 pub async fn query_stats(State(state): State<Arc<AppState>>) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
     let headers = with_epoch_header(HeaderMap::new(), state.epoch);
     
-    // Hold the guard for the entire operation to avoid borrowing issues
     let query_service_guard = state.query_service.read().await;
     let query_service = match query_service_guard.as_ref() {
         Some(qs) => qs,
@@ -126,7 +119,6 @@ pub async fn query_stats(State(state): State<Arc<AppState>>) -> (StatusCode, Hea
     }
 }
 
-/// Agent summaries endpoint - QueryService only
 pub async fn get_agents_summary(
     Path(agent_type): Path<String>, 
     Query(pagination): Query<PaginationQuery>, 
@@ -136,7 +128,6 @@ pub async fn get_agents_summary(
     let page = pagination.page.unwrap_or(1).max(1);
     let page_size = pagination.page_size.unwrap_or(20).min(100).max(1);
 
-    // Hold the guard for the entire operation to avoid borrowing issues
     let query_service_guard = state.query_service.read().await;
     let query_service = match query_service_guard.as_ref() {
         Some(qs) => qs,
@@ -146,7 +137,6 @@ pub async fn get_agents_summary(
         }
     };
 
-    // Validate agent type
     let db_agent_type = match agent_type.as_str() {
         "banks" => "Bank",
         "firms" => "Firm", 
@@ -195,17 +185,13 @@ pub async fn get_agents_summary(
     }
 }
 
-// =============================================================================
-// ENGINE-ONLY ENDPOINTS (Must use simulation engine)
-// =============================================================================
 
-/// Tick endpoint - Must use simulation engine for command execution
 pub async fn tick(State(state): State<Arc<AppState>>) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
     let headers = with_epoch_header(HeaderMap::new(), state.epoch);
     let mut engine_guard = state.sim_engine.write().await;
     if let Some(engine) = engine_guard.as_mut() {
         let mut rng = ThreadRng::default();
-        let result = engine.tick_with_scheduler(&mut rng);
+        let result = engine.tick(&mut rng);
         (StatusCode::OK, headers, Json(json!({ "status": "Tick completed", "tick_number": result.tick_number })))
     } else {
         let err = ApiError { code: "NOT_INITIALIZED", message: "Simulation is not initialized." };
@@ -213,7 +199,6 @@ pub async fn tick(State(state): State<Arc<AppState>>) -> (StatusCode, HeaderMap,
     }
 }
 
-/// Real-time market snapshot - Must use engine for current state
 pub async fn query_market_snapshot(
     State(state): State<Arc<AppState>>,
 ) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
@@ -228,7 +213,6 @@ pub async fn query_market_snapshot(
     }
 }
 
-/// Full agent details - Must use engine for complete agent data
 pub async fn get_agents(
     Path(kind): Path<String>, State(state): State<Arc<AppState>>,
 ) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
@@ -248,7 +232,6 @@ pub async fn get_agents(
     }
 }
 
-/// Agent balance sheet - Must use engine for detailed balance sheet data
 pub async fn get_agent_balance_sheet(
     Path(agent_id): Path<AgentId>, State(state): State<Arc<AppState>>,
 ) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
@@ -275,7 +258,6 @@ pub async fn get_agent_balance_sheet(
     }
 }
 
-/// Employment contracts - Must use engine for current employment relationships
 pub async fn get_employment_contracts(
     State(state): State<Arc<AppState>>,
 ) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
@@ -303,7 +285,6 @@ pub async fn get_employment_contracts(
     }
 }
 
-/// Non-agent balance sheets - Must use engine for government/central bank data
 pub async fn get_non_agent_balance_sheets(
     State(state): State<Arc<AppState>>,
 ) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
@@ -332,12 +313,10 @@ pub fn http_router(state: Arc<AppState>) -> Router {
         .route("/healthz", get(healthz))
         .route("/init", post(init_sim))
         
-        // QueryService-only endpoints
         .route("/dashboard", get(get_dashboard))
         .route("/sim/analysis/stats", get(query_stats))
         .route("/agents/{agent_type}/summary", get(get_agents_summary))
         
-        // Engine-only endpoints
         .route("/sim/control/tick", post(tick))
         .route("/sim/analysis/market-snapshot", get(query_market_snapshot))
         .route("/agents/{agent_type}", get(get_agents))
@@ -345,7 +324,6 @@ pub fn http_router(state: Arc<AppState>) -> Router {
         .route("/sim/non_agent_balance_sheets", get(get_non_agent_balance_sheets))
         .route("/api/markets/labour/contracts", get(get_employment_contracts))
         
-        // Keep all existing market and history routes (they use engine)
         .route("/sim/analysis/history", get(get_simulation_history))
         .route("/sim/analysis/actions", get(get_actions_history))
         .route("/sim/analysis/effects", get(get_effects_history))

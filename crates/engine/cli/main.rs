@@ -93,7 +93,7 @@ async fn main() -> anyhow::Result<()> {
 
         println!("[ENGINE] Performing initial tick to populate data...");
         let mut rng = ThreadRng::default();
-        let result = engine.tick_with_scheduler(&mut rng);
+        let result = engine.tick(&mut rng);
         println!("[ENGINE] Initial tick completed. Tick number: {}\n", result.tick_number);
 
         *engine_guard = Some(engine);
