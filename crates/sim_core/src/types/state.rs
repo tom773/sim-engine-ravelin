@@ -127,7 +127,7 @@ impl SimState {
              current_cpi /= total_weight;
         }
 
-        let inflation_rate = 0.02; // Placeholder for now
+        let inflation_rate = 0.02;
 
         InflationView { cpi: current_cpi, inflation_rate }
     }
@@ -143,10 +143,8 @@ impl SimState {
     }
 
     pub fn macro_stats(&self) -> MacroStats {
-        // Step 1: Get all the detailed calculations first. This is now the single source of truth.
         let core_stats = self.calculate_core_stats();
 
-        // Step 2: Calculate stats that are NOT in CoreEconomicStats (money supply, velocity).
         let banks_map = HashSet::from_iter(self.agents.banks.keys().cloned());
         let m0 = self.financial_system.m0();
         let m1 = self.financial_system.m1(&banks_map);
@@ -161,7 +159,6 @@ impl SimState {
         let labour_force = self.agents.consumers.len();
         let employment = self.agents.firms.values().map(|f| f.employees.len()).sum();
 
-        // Step 3: Assemble the final struct, mapping the detailed stats to the summary fields.
         MacroStats {
             as_of: self.current_date,
             nominal_gdp_proxy: core_stats.gdp,
@@ -170,11 +167,11 @@ impl SimState {
             consumer_spending_note: "proxy: sum of turnover over CPI-weighted goods for the last simulated day",
             cpi: core_stats.cpi,
             ppi: core_stats.ppi,
-            inflation_rate: self.cpi_view().inflation_rate, // Placeholder from cpi_view
+            inflation_rate: self.cpi_view().inflation_rate,
             employment,
             unemployment: labour_force.saturating_sub(employment),
             labour_force,
-            unemployment_rate: core_stats.unemployment_rate / 100.0, // Convert from 5.0 to 0.05
+            unemployment_rate: core_stats.unemployment_rate / 100.0,
             labor_force_participation: core_stats.labor_force_participation / 100.0,
             job_openings: core_stats.job_openings,
             household_debt: core_stats.household_debt,
@@ -185,12 +182,11 @@ impl SimState {
             m2,
             velocity,
             velocity_note,
-            // --- These fields are not in CoreEconomicStats and are still proxies/dummies ---
-            avg_wage_rate: 0.0, // This could be moved to core_stats if needed
-            payroll_proxy: 0.0, // This could be moved to core_stats if needed
+            avg_wage_rate: 0.0,
+            payroll_proxy: 0.0,
             business_investment: 0.0,
             business_investment_note: "dummy: capital formation flows not implemented yet",
-            government_spending: self.financial_system.government.spending_targets.purchases, // Example proxy
+            government_spending: self.financial_system.government.spending_targets.purchases,
             government_spending_note: "proxy: uses current SpendingTargets (not realized fiscal outlays)",
         }
     }
@@ -201,7 +197,6 @@ impl EconomicAnalytics for SimState {
         let fs = &self.financial_system;
         let last_tick = self.history.tick_records.back();
 
-        // --- Duplicated logic from macro_stats() is now self-contained here ---
         let consumer_spending_daily = self.history.market_ticks
             .iter()
             .filter(|(market_id, _)| matches!(market_id, MarketId::Goods(_)))
@@ -214,7 +209,6 @@ impl EconomicAnalytics for SimState {
         let government_spending_proxy = st.transfers + st.purchases + st.investment + st.debt_service;
         let gdp = consumer_spending_daily + 0.0 /* investment_dummy */ + government_spending_proxy + 0.0 /* net_exports_dummy */;
         let cpi = self.cpi_view().cpi;
-        // --- End of self-contained logic ---
 
         let mut ppi = 0.0;
         let mut ppi_total_weight = 0.0;
@@ -222,7 +216,7 @@ impl EconomicAnalytics for SimState {
             if matches!(good.category, GoodCategory::RawMaterial | GoodCategory::IntermediateGood) {
                 if let Some(market_view) = self.market_view(&MarketId::Goods(*good_id)) {
                     if let Some(price) = market_view.last_or_mid() {
-                        let weight = 1.0; // Simple average for now
+                        let weight = 1.0;
                         ppi += price * weight;
                         ppi_total_weight += weight;
                     }
@@ -377,7 +371,7 @@ pub struct SimHistory {
     pub transactions: Vec<Transaction>,
     #[serde_as(as = "HashMap<DisplayFromStr, _>")]
     pub market_ticks: HashMap<MarketId, VecDeque<MarketTick>>,
-    pub tick_records: VecDeque<TickRecord>, // New field for action/effect history
+    pub tick_records: VecDeque<TickRecord>,
 }
 
 impl SimHistory {
@@ -400,7 +394,7 @@ pub struct TickRecord {
     pub intentions: Vec<SimIntention>,
     pub actions: Vec<ActionRecord>,
     pub effects: Vec<StateEffect>,
-    pub action_to_effect_indices: HashMap<usize, Vec<usize>>, // Maps action index to effect indices
+    pub action_to_effect_indices: HashMap<usize, Vec<usize>>,
     pub trades: Vec<Trade>,
 }
 
@@ -408,7 +402,7 @@ pub struct TickRecord {
 pub struct ActionRecord {
     pub action: SimAction,
     pub agent_id: AgentId,
-    pub agent_type: String, // "Bank", "Consumer", "Firm", "Government"
+    pub agent_type: String,
     pub agent_name: Option<String>,
 }
 
@@ -427,17 +421,17 @@ pub struct MacroStats {
     pub government_spending: f64,
     pub government_spending_note: &'static str,
     pub cpi: f64,
-    pub ppi: f64, // Add
+    pub ppi: f64,
     pub inflation_rate: f64,
     pub employment: usize,
     pub unemployment: usize,
     pub labour_force: usize,
     pub unemployment_rate: f64,
-    pub labor_force_participation: f64, // Add
-    pub job_openings: f64, // Add
-    pub household_debt: f64, // Add
-    pub corporate_debt: f64, // Add
-    pub government_debt: f64, // Add
+    pub labor_force_participation: f64,
+    pub job_openings: f64,
+    pub household_debt: f64,
+    pub corporate_debt: f64,
+    pub government_debt: f64,
     pub m0: f64,
     pub m2: f64,
     pub m1: f64,

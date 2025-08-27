@@ -145,9 +145,9 @@ impl SimulationEngine {
             self.state.ticknum += 1;
         }
 
-        let actions = Vec::new(); // TODO: Extract from step results metadata
-        let effects = Vec::new(); // TODO: Extract from step results metadata  
-        let trades = Vec::new(); // TODO: Extract from step results metadata
+        let actions = Vec::new();
+        let effects = Vec::new();
+        let trades = Vec::new();
 
         TickResult { tick_number: result.tick_number, actions, effects, trades }
     }
@@ -490,7 +490,6 @@ impl SimulationEngine {
         }
         let macro_stats = self.state.macro_stats();
 
-        // Collect market snapshots from current state
         let mut market_snapshots = Vec::new();
         let exchange = &self.state.financial_system.exchange;
 
@@ -504,7 +503,6 @@ impl SimulationEngine {
             market_snapshots.push((MarketId::Financial(fin_id.clone()), snapshot));
         }
 
-        // Get yield curve points
         let yield_curve_points: Vec<(Tenor, f64)> = self
             .state
             .financial_system
@@ -523,9 +521,9 @@ impl SimulationEngine {
                 trades,
                 &instrument_snapshots,
                 &agent_snapshots,
-                Some(&macro_stats),  // NEW
-                &market_snapshots,   // NEW
-                &yield_curve_points, // NEW
+                Some(&macro_stats),
+                &market_snapshots,
+                &yield_curve_points,
             )
             .await?;
 
