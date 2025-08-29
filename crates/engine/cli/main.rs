@@ -1,7 +1,7 @@
 use engine::{Scenario, QueryService, SimulationEngine};
 use rand::rngs::ThreadRng;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tower_http::cors::{Any, CorsLayer};
 use uuid::Uuid;
@@ -18,29 +18,33 @@ pub use sim_history_routes::*;
 pub const SCENARIO_TOML: &str = include_str!("../../../config/config.toml");
 
 pub struct AppState {
-    epoch: Uuid,
-    sim_engine: RwLock<Option<SimulationEngine>>,
-    query_service: RwLock<Option<QueryService>>,
-    scenario: Scenario,
+    pub epoch: Uuid,
+    sim_engine: Mutex<Option<SimulationEngine>>,
+    query_service: Mutex<Option<Arc<QueryService>>>,
+    pub scenario: Scenario,
 }
 
 impl AppState {
     pub fn new(scenario: Scenario) -> Self {
         Self {
             epoch: Uuid::new_v4(),
-            sim_engine: RwLock::new(None),
-            query_service: RwLock::new(None),
+            sim_engine: Mutex::new(None),
+            query_service: Mutex::new(None),
             scenario,
         }
     }
 
     pub async fn initialize_query_service(&self) -> Result<(), String> {
-        match QueryService::connect().await {
+        match QueryService::connect_and_init(
+            &self.scenario.get_goods_catalogue(),
+            &self.scenario.get_recipes_catalogue()
+        ).await {
             Ok(qs) => {
-                match qs.health_check().await {
+                let qs_arc = Arc::new(qs); // Wrap in Arc
+                match qs_arc.health_check().await {
                     Ok(true) => {
-                        *self.query_service.write().await = Some(qs);
-                        println!("🗄️ QueryService connected and healthy");
+                        *self.query_service.lock().await = Some(qs_arc);
+                        println!("🗄️ QueryService connected, healthy, and DB initialized.");
                         Ok(())
                     }
                     Ok(false) => {
@@ -61,7 +65,8 @@ impl AppState {
     }
 
     pub async fn query_service_status(&self) -> String {
-        if let Some(qs) = self.query_service.read().await.as_ref() {
+        let qs_opt = self.query_service.lock().await.clone();
+        if let Some(qs) = qs_opt {
             match qs.health_check().await {
                 Ok(true) => "Connected and healthy".to_string(),
                 Ok(false) => "Connected but unhealthy".to_string(),
@@ -79,16 +84,25 @@ async fn main() -> anyhow::Result<()> {
         .expect("Failed to parse scenario TOML");
 
     let state = Arc::new(AppState::new(scenario));
-
     let shutdown = CancellationToken::new();
+
+    println!("\n[DB] Initializing CQRS Query Service and DB Schema...");
+    if let Err(e) = state.initialize_query_service().await {
+        println!("[DB] QueryService initialization failed: {}", e);
+        return Err(anyhow::anyhow!("Database initialization failed: {}", e));
+    } else {
+        println!("[DB] QueryService initialization successful");
+    }
 
     println!("\n[ENGINE] Initializing simulation engine...");
     {
-        let mut engine_guard = state.sim_engine.write().await;
+        let mut engine_guard = state.sim_engine.lock().await;
         let mut engine = state.scenario.initialize_engine();
 
-        if let Err(e) = engine.connect_to_db().await {
-            println!("[ERROR] Failed to connect to SurrealDB during init: {}", e);
+        if let Some(qs) = state.query_service.lock().await.as_ref() {
+             engine.set_db_writer(qs.get_writer());
+        } else {
+             return Err(anyhow::anyhow!("QueryService disappeared unexpectedly"));
         }
 
         println!("[ENGINE] Performing initial tick to populate data...");
@@ -99,15 +113,6 @@ async fn main() -> anyhow::Result<()> {
         *engine_guard = Some(engine);
     }
     println!("[ENGINE] Simulation engine is live.");
-
-
-    println!("\n[DB] Initializing CQRS Query Service...");
-    if let Err(e) = state.initialize_query_service().await {
-        println!("[DB] QueryService initialization failed: {}", e);
-        println!("[DB] Application will continue with legacy mode only");
-    } else {
-        println!("[DB] QueryService initialization successful");
-    }
 
     let http_server_fut = run_http(state.clone(), shutdown.clone());
 

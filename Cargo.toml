@@ -2,7 +2,6 @@
 members = [
     "crates/sim_core",
     "crates/domains",
-    "crates/sim_macros",
     "crates/engine",
 ]
 resolver = "3"
@@ -30,12 +29,5 @@ tokio = { version = "1.46.1", features = ["rt-multi-thread", "time", "macros", "
 axum = { version = "0.8", features = ["macros", "ws"] }
 tower-http = { version = "0.6", features = ["cors"] }
 
-crossbeam-channel = "0.5.15"
 
-fake = { version = "4.4.0", features = ["derive"] }
-
-proc-macro2 = "1.0.101"
-quote = "1.0"
-syn = "2.0.106"
 petgraph = "0.8.2"
-rayon = "1.9.0" 

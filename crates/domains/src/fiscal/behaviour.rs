@@ -53,13 +53,14 @@ impl BasicGovernmentDecisionModel {
         if current_balance < monthly_spending_target {
             let deficit = monthly_spending_target - current_balance;
 
-            let issue_distribution = [(Tenor::T2Y, 0.15), (Tenor::T5Y, 0.25), (Tenor::T10Y, 0.40), (Tenor::T30Y, 0.20)];
+            let issue_distribution = [
+                (Tenor::T1M, 0.05), (Tenor::T2M, 0.05), (Tenor::T3M, 0.10), (Tenor::T6M, 0.10), (Tenor::T1Y, 0.10),
+                (Tenor::T2Y, 0.15), (Tenor::T5Y, 0.25), (Tenor::T10Y, 0.40), (Tenor::T30Y, 0.20)];
 
             let coupon_rate = fs.central_bank.policy_rate_bps;
 
             for (tenor, percentage) in issue_distribution {
                 let amount_to_raise = deficit * percentage;
-
                 if amount_to_raise > 0.0 {
                     intentions.push(SimIntention::IssueDebtToRaise {
                         government_id: government.id,

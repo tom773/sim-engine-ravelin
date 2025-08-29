@@ -305,7 +305,7 @@ impl TradingDomain {
         }
 
         effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument(new_bond)));
-        
+        println!("[PRIMARY ISSUE] Sale Effects: {:#?}", effects); 
         effects
     }
     
@@ -333,7 +333,7 @@ impl TradingDomain {
                 }
             }
         }
-        
+        println!("[SECONDARY TRADE] Settlement Effects: {:#?}", effects); 
         effects
     }
     

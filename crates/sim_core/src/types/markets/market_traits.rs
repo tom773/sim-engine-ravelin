@@ -14,7 +14,7 @@ pub trait RatesMarket {
 }
 
 pub trait MarketSnapshotProvider {
-    fn snapshot(&self) -> super::market_types::MarketSnapshot;
+    fn snapshot(&self) -> MarketSnapshot;
 }
 
 pub trait MarketSummaryProvider {

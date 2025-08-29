@@ -194,6 +194,11 @@ impl InvestmentFirmDecisionModel {
     fn calculate_yield_quotes(&self, tenor: Tenor, fs: &FinancialSystem) -> (BasisPoints, BasisPoints) {
         let policy_bps = fs.central_bank.policy_rate_bps;
         let term_premium = match tenor {
+            Tenor::T1M => 2.0,
+            Tenor::T2M => 3.0,
+            Tenor::T3M => 7.0,
+            Tenor::T6M => 10.0,
+            Tenor::T1Y => 12.0,
             Tenor::T2Y => 15.0,
             Tenor::T5Y => 35.0,
             Tenor::T10Y => 50.0,
@@ -201,7 +206,7 @@ impl InvestmentFirmDecisionModel {
         };
 
         let spread_bps = rand::random_range(10.0..25.0);
-        let mid = policy_bps + term_premium;
+        let mid = policy_bps + (term_premium*rand::random_range(0.9..1.1));
         let bid = mid + spread_bps / 2.0;
         let ask = mid - spread_bps / 2.0;
         (bid, ask)

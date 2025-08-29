@@ -62,15 +62,16 @@ impl Exchange {
         self.labour_markets.get_mut(market_id)
     }
 
-    pub fn clear_markets(&mut self, now_ts: i64) -> (Vec<Trade>, HashMap<MarketId, MarketSnapshot>) {
+    pub fn clear_markets(
+        &mut self, now_ts: i64, instruments: &HashMap<InstrumentId, FinancialInstrument>,
+    ) -> (Vec<Trade>, HashMap<MarketId, MarketSnapshot>) {
         let mut all_trades = Vec::new();
         let mut snapshots = HashMap::new();
         let since_ts = now_ts - 86_400;
 
         for (id, market) in self.goods_markets.iter_mut() {
             let market_id = MarketId::Goods(*id);
-
-            let mut snapshot = market.snapshot();
+            let mut snapshot = market.snapshot(); // Goods markets don't need yields
 
             if let Some(tape) = self.trade_tape.get(&market_id) {
                 snapshot.volume_24h = tape.iter().filter(|t| t.at >= since_ts).map(|t| t.trade.quantity).sum();
@@ -79,10 +80,10 @@ impl Exchange {
             snapshots.insert(market_id.clone(), snapshot);
             all_trades.extend(market.order_book.clear_and_match(&market_id));
         }
+
         for (id, market) in self.financial_markets.iter_mut() {
             let market_id = MarketId::Financial(id.clone());
-
-            let mut snapshot = market.snapshot();
+            let mut snapshot = market.snapshot_with_instruments(instruments); // Use instruments directly
 
             if let Some(tape) = self.trade_tape.get(&market_id) {
                 snapshot.volume_24h = tape.iter().filter(|t| t.at >= since_ts).map(|t| t.trade.quantity).sum();
@@ -91,6 +92,7 @@ impl Exchange {
             snapshots.insert(market_id.clone(), snapshot);
             all_trades.extend(market.order_book.clear_and_match(&market_id));
         }
+
         for tr in &all_trades {
             let e = self.trade_tape.entry(tr.market_id.clone()).or_default();
             e.push_back(TimedTrade { at: now_ts, trade: tr.clone() });
@@ -167,5 +169,17 @@ impl Exchange {
                 Candle { ts, open, high, low, close, volume, vwap, trades_count: group.len() as u32 }
             })
             .collect()
+    }
+    pub fn get_treasury_bond_details_from_instruments(
+        instruments: &HashMap<InstrumentId, FinancialInstrument>, tenor: &Tenor,
+    ) -> Option<BondDetails> {
+        for instrument in instruments.values() {
+            if let Some(bond_details) = instrument.details.as_any().downcast_ref::<BondDetails>() {
+                if bond_details.bond_type == BondType::Government && &bond_details.tenor == tenor {
+                    return Some(bond_details.clone());
+                }
+            }
+        }
+        None
     }
 }

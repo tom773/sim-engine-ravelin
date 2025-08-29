@@ -3,7 +3,7 @@ description = "A simple economy with two banks, one oil refinery, and a few cons
 
 [config]
 iterations = 100
-treasury_tenors_to_register = ["T2Y", "T5Y", "T10Y", "T30Y"]
+treasury_tenors_to_register = ["T1M", "T2M", "T3M", "T6M", "T1Y", "T2Y", "T5Y", "T10Y", "T30Y"]
 
 [[banks]]
 id = "bank_a"

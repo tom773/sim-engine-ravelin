@@ -61,10 +61,8 @@ impl SimulationEngine {
         scheduler
     }
 
-    pub async fn connect_to_db(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let writer = SurrealDbWriter::connect().await?;
+    pub fn set_db_writer(&mut self, writer: crate::broadcast::SurrealDbWriter) {
         self.db_writer = Some(writer);
-        Ok(())
     }
 
     pub fn run_initialization(&mut self) {}
@@ -75,26 +73,17 @@ impl SimulationEngine {
         if let Err(e) = scheduler.validate_schedule() {
             println!("[ERROR] Scheduler validation failed: {}", e);
             self.scheduler = Some(scheduler);
-            return TickResult {
-                tick_number: self.state.ticknum,
-                success: false,
-            };
+            return TickResult { tick_number: self.state.ticknum, success: false };
         }
 
         let execution_result = scheduler.execute_tick(self, rng);
 
         self.scheduler = Some(scheduler);
-        if execution_result.success{
+        if execution_result.success {
             self.state.ticknum += 1;
-            return TickResult {
-                tick_number: self.state.ticknum,
-                success: true,
-            }
+            return TickResult { tick_number: self.state.ticknum, success: true };
         } else {
-            return TickResult {
-                tick_number: self.state.ticknum,
-                success: false,
-            }
+            return TickResult { tick_number: self.state.ticknum, success: false };
         }
     }
 
@@ -330,13 +319,11 @@ impl SimulationEngine {
         }
     }
 
+
     pub async fn persist_tick_batch(
         &self, writer: &SurrealDbWriter, sim_date: NaiveDate, action_records: &[ActionRecord], effects: &[StateEffect],
         action_to_effect_indices: &HashMap<usize, Vec<usize>>, trades: &[Trade],
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let instrument_snapshots: Vec<(InstrumentId, &FinancialInstrument)> =
-            self.state.financial_system.instruments.iter().map(|(id, inst)| (*id, inst)).collect();
-
         let mut agent_snapshots = Vec::new();
         for (bank_id, _bank) in &self.state.agents.banks {
             if let Some(bs) = self.state.financial_system.get_bs_by_id(bank_id) {
@@ -361,19 +348,35 @@ impl SimulationEngine {
         if let Some(bs) = self.state.financial_system.get_bs_by_id(&cb_id) {
             agent_snapshots.push((cb_id, "CentralBank".to_string(), bs));
         }
+
         let macro_stats = self.state.macro_stats();
 
-        let mut market_snapshots = Vec::new();
         let exchange = &self.state.financial_system.exchange;
+        let mut market_summaries = Vec::new();
 
+        let mut order_books = Vec::new();
         for (good_id, market) in &exchange.goods_markets {
-            let snapshot = market.snapshot();
-            market_snapshots.push((MarketId::Goods(*good_id), snapshot));
+            let market_id = MarketId::Goods(*good_id);
+            market_summaries.push((market_id.clone(), market.snapshot()));
+            let bids: Vec<Bid> = market.order_book.bids.iter().map(|b| b.clone()).collect();
+            let asks: Vec<Ask> = market.order_book.asks.iter().map(|a| a.clone()).collect();
+            order_books.push((market_id, bids, asks));
         }
 
         for (fin_id, market) in &exchange.financial_markets {
-            let snapshot = market.snapshot();
-            market_snapshots.push((MarketId::Financial(fin_id.clone()), snapshot));
+            let market_id = MarketId::Financial(fin_id.clone());
+            market_summaries
+                .push((market_id.clone(), market.snapshot_with_instruments(&self.state.financial_system.instruments)));
+            let bids: Vec<Bid> = market.order_book.bids.iter().map(|b| b.clone()).collect();
+            let asks: Vec<Ask> = market.order_book.asks.iter().map(|a| a.clone()).collect();
+            order_books.push((market_id, bids, asks));
+        }
+
+        let mut labour_markets = Vec::new();
+        for (labour_id, market) in &exchange.labour_markets {
+            let offers = market.job_offers.clone();
+            let applications = market.job_applications.clone();
+            labour_markets.push((labour_id.clone(), offers, applications));
         }
 
         let yield_curve_points: Vec<(Tenor, f64)> = self
@@ -388,16 +391,18 @@ impl SimulationEngine {
         writer
             .write_tick_batch(
                 self.state.ticknum,
-                sim_date, // Pass the simulation date
+                sim_date,
                 action_records,
                 effects,
                 action_to_effect_indices,
                 trades,
-                &instrument_snapshots,
+                &self.state.financial_system.instruments, // Pass the full HashMap
                 &agent_snapshots,
                 Some(&macro_stats),
-                &market_snapshots,
+                &market_summaries,
                 &yield_curve_points,
+                &order_books,
+                &labour_markets,
             )
             .await?;
 

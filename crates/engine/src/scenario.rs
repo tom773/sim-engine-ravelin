@@ -54,16 +54,23 @@ pub enum DecisionModelConfig {
 impl DecisionModelConfig {
     pub fn into_decision_model(self) -> Box<dyn DecisionModel> {
         match self {
-            DecisionModelConfig::SimpleFirmDecisionModel { target_markup: _, production_capacity: _, inventory_threshold: _ } => {
+            DecisionModelConfig::SimpleFirmDecisionModel {
+                target_markup: _,
+                production_capacity: _,
+                inventory_threshold: _,
+            } => {
                 let model = ProductionFirmDecisionModel::default();
-                
-                
+
                 Box::new(model)
-            },
-            DecisionModelConfig::InvestmentFirmDecisionModel { risk_tolerance: _, rebalance_threshold: _, portfolio_target: _ } => {
+            }
+            DecisionModelConfig::InvestmentFirmDecisionModel {
+                risk_tolerance: _,
+                rebalance_threshold: _,
+                portfolio_target: _,
+            } => {
                 let model = InvestmentFirmDecisionModel::default();
                 Box::new(model)
-            },
+            }
         }
     }
 }
@@ -177,13 +184,21 @@ impl Scenario {
         state.financial_system.exchange.register_financial_market(FinancialMarketId::DiscountWindow);
         state.financial_system.exchange.register_financial_market(FinancialMarketId::StandingRepoFacility);
         state.financial_system.exchange.register_financial_market(FinancialMarketId::OvernightReverseRepo);
-        
+
         state.financial_system.exchange.register_labour_market(LabourMarketId::GeneralLabour);
 
         let mut engine = SimulationEngine::new_with_scheduler(state);
         engine.decision_models = decision_models_map;
         engine.run_initialization();
-        
+
         engine
+    }
+
+    pub fn get_goods_catalogue(&self) -> HashMap<GoodId, Good> {
+        sim_core::goods::CATALOGUE.goods.clone()
+    }
+
+    pub fn get_recipes_catalogue(&self) -> HashMap<RecipeId, ProductionRecipe> {
+        sim_core::goods::CATALOGUE.recipes.clone()
     }
 }

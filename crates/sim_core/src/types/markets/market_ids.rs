@@ -1,24 +1,16 @@
+use super::market_traits::{RatesMarket, Tradable};
 use crate::*;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 use thiserror::Error;
-use super::market_traits::{RatesMarket, Tradable};
 
 impl Tradable for GoodId {
-    fn check_holdings(
-        &self,
-        agent_id: &AgentId,
-        quantity: f64,
-        fs: &FinancialSystem,
-    ) -> Result<(), String> {
+    fn check_holdings(&self, agent_id: &AgentId, quantity: f64, fs: &FinancialSystem) -> Result<(), String> {
         let bs = fs.get_bs_by_id(agent_id).ok_or(format!("Agent {} not found", agent_id))?;
         let available = bs.get_inventory().and_then(|inv| inv.get(self)).map_or(0.0, |item| item.quantity);
         if available < quantity {
-            Err(format!(
-                "Insufficient inventory for GoodId({:?}): have {:.2}, need {:.2}",
-                self.0, available, quantity
-            ))
+            Err(format!("Insufficient inventory for GoodId({:?}): have {:.2}, need {:.2}", self.0, available, quantity))
         } else {
             Ok(())
         }
@@ -26,12 +18,7 @@ impl Tradable for GoodId {
 }
 
 impl Tradable for FinancialMarketId {
-    fn check_holdings(
-        &self,
-        agent_id: &AgentId,
-        quantity: f64,
-        fs: &FinancialSystem,
-    ) -> Result<(), String> {
+    fn check_holdings(&self, agent_id: &AgentId, quantity: f64, fs: &FinancialSystem) -> Result<(), String> {
         match self {
             FinancialMarketId::FederalFundsOvernight | FinancialMarketId::TreasuryRepoOvernight => {
                 let reserves = fs.get_bank_reserves(agent_id).unwrap_or(0.0);
@@ -117,7 +104,6 @@ impl FromStr for LabourMarketId {
     }
 }
 
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum MarketId {
     Goods(GoodId),
@@ -128,9 +114,18 @@ pub enum MarketId {
 impl std::hash::Hash for MarketId {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         match self {
-            MarketId::Goods(id) => { 0.hash(state); id.hash(state); }
-            MarketId::Financial(id) => { 1.hash(state); id.hash(state); }
-            MarketId::Labour(id) => { 2.hash(state); id.hash(state); }
+            MarketId::Goods(id) => {
+                0.hash(state);
+                id.hash(state);
+            }
+            MarketId::Financial(id) => {
+                1.hash(state);
+                id.hash(state);
+            }
+            MarketId::Labour(id) => {
+                2.hash(state);
+                id.hash(state);
+            }
         }
     }
 }
@@ -196,30 +191,69 @@ impl Default for MarketId {
     }
 }
 
-
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Copy)]
 pub enum Tenor {
-    T2Y, T5Y, T10Y, T30Y,
+    T1M,
+    T2M,
+    T3M,
+    T6M,
+    T1Y,
+    T2Y,
+    T5Y,
+    T10Y,
+    T30Y,
 }
 
 impl Tenor {
     pub fn to_days(&self) -> u32 {
-        match self { Tenor::T2Y => 730, Tenor::T5Y => 1825, Tenor::T10Y => 3650, Tenor::T30Y => 10950 }
+        match self {
+            Tenor::T1M => 30,
+            Tenor::T2M => 60,
+            Tenor::T3M => 90,
+            Tenor::T6M => 180,
+            Tenor::T1Y => 360,
+            Tenor::T2Y => 720,
+            Tenor::T5Y => 1800,
+            Tenor::T10Y => 3600,
+            Tenor::T30Y => 10800,
+        }
     }
     pub fn to_years(&self) -> f64 {
-        match self { Tenor::T2Y => 2.0, Tenor::T5Y => 5.0, Tenor::T10Y => 10.0, Tenor::T30Y => 30.0 }
+        match self {
+            Tenor::T1M => 1.0 / 12.0,
+            Tenor::T2M => 2.0 / 12.0,
+            Tenor::T3M => 3.0 / 12.0,
+            Tenor::T6M => 6.0 / 12.0,
+            Tenor::T1Y => 1.0,
+            Tenor::T2Y => 2.0,
+            Tenor::T5Y => 5.0,
+            Tenor::T10Y => 10.0,
+            Tenor::T30Y => 30.0,
+        }
     }
     pub fn add_to_date(&self, date: chrono::NaiveDate) -> chrono::NaiveDate {
         date + chrono::Duration::days(self.to_days() as i64)
     }
     pub fn periods(&self, frequency: usize) -> usize {
-        let years = match self { Tenor::T2Y => 2, Tenor::T5Y => 5, Tenor::T10Y => 10, Tenor::T30Y => 30 };
-        years * frequency
+        let years = match self {
+            Tenor::T1M => 1.0 / 12.0,
+            Tenor::T2M => 2.0 / 12.0,
+            Tenor::T3M => 3.0 / 12.0,
+            Tenor::T6M => 6.0 / 12.0,
+            Tenor::T1Y => 1.0,
+            Tenor::T2Y => 2.0,
+            Tenor::T5Y => 5.0,
+            Tenor::T10Y => 10.0,
+            Tenor::T30Y => 30.0,
+        };
+        (years * frequency as f64).round() as usize
     }
 }
 
 impl fmt::Display for Tenor {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "{:?}", self) }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 #[derive(Debug, Error)]
@@ -230,13 +264,19 @@ impl FromStr for Tenor {
     type Err = ParseTenorError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "T2Y" => Ok(Tenor::T2Y), "T5Y" => Ok(Tenor::T5Y),
-            "T10Y" => Ok(Tenor::T10Y), "T30Y" => Ok(Tenor::T30Y),
+            "T1M" => Ok(Tenor::T1M),
+            "T2M" => Ok(Tenor::T2M),
+            "T3M" => Ok(Tenor::T3M),
+            "T6M" => Ok(Tenor::T6M),
+            "T1Y" => Ok(Tenor::T1Y),
+            "T2Y" => Ok(Tenor::T2Y),
+            "T5Y" => Ok(Tenor::T5Y),
+            "T10Y" => Ok(Tenor::T10Y),
+            "T30Y" => Ok(Tenor::T30Y),
             _ => Err(ParseTenorError(s.to_string())),
         }
     }
 }
-
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FinancialMarketId {
@@ -301,7 +341,9 @@ impl RatesMarket for FinancialMarketId {
     fn price_to_daily_rate(&self, price: f64) -> f64 {
         match self {
             FinancialMarketId::FederalFundsOvernight | FinancialMarketId::TreasuryRepoOvernight => {
-                if price <= 0.0 { return f64::INFINITY; }
+                if price <= 0.0 {
+                    return f64::INFINITY;
+                }
                 (1.0 / price) - 1.0
             }
             _ => 0.0,

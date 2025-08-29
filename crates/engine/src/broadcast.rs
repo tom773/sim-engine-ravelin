@@ -1,6 +1,6 @@
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use sim_core::*;
-use chrono::NaiveDate;
 use std::collections::HashMap;
 use surrealdb::engine::remote::ws::{Client as WsClient, Ws};
 use surrealdb::{Result as SurrealResult, Surreal};
@@ -10,7 +10,7 @@ pub struct TickRecordB {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<surrealdb::sql::Thing>,
     pub tick_number: u32,
-    pub sim_date: String, // Added simulation date
+    pub sim_date: String,
     pub ts: surrealdb::sql::Datetime,
 }
 
@@ -63,6 +63,7 @@ pub struct AgentStateRecord {
     pub net_worth: f64,
     pub liquid_assets: f64,
     pub details: serde_json::Value,
+    pub balance_sheet: BalanceSheet,
 }
 #[derive(Serialize, Deserialize, Clone)]
 pub struct TradeRecord {
@@ -136,7 +137,16 @@ pub struct MarketSummaryRecord {
     pub spread: Option<f64>,
     pub volume_24h: f64,
     pub last_price: Option<f64>,
+    pub depth: Option<serde_json::Value>,
     pub ts: surrealdb::sql::Datetime,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub best_bid_yield: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub best_ask_yield: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mid_yield: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_yield: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -149,38 +159,71 @@ pub struct YieldCurveRecord {
     pub price: Option<f64>,
     pub ts: surrealdb::sql::Datetime,
 }
+#[derive(Serialize, Deserialize, Clone)]
+pub struct OrderBookSnapshotRecord {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<surrealdb::sql::Thing>,
+    pub tick: surrealdb::sql::Thing,
+    pub market_id: String,
+    pub bids: Vec<serde_json::Value>,
+    pub asks: Vec<serde_json::Value>,
+    pub ts: surrealdb::sql::Datetime,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct LabourMarketSnapshotRecord {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<surrealdb::sql::Thing>,
+    pub tick: surrealdb::sql::Thing,
+    pub market_id: String,
+    pub job_applications: Vec<serde_json::Value>,
+    pub job_offers: Vec<serde_json::Value>,
+    pub ts: surrealdb::sql::Datetime,
+}
+#[derive(Clone)]
 pub struct SurrealDbWriter {
-    db: Surreal<WsClient>,
+    pub db: Surreal<WsClient>,
 }
 
 impl SurrealDbWriter {
-    pub async fn connect() -> SurrealResult<Self> {
+    pub async fn connect_and_initialize(
+        goods: &std::collections::HashMap<sim_core::GoodId, sim_core::goods::Good>,
+        recipes: &std::collections::HashMap<sim_core::RecipeId, sim_core::goods::ProductionRecipe>,
+    ) -> SurrealResult<Self> {
         let db = Surreal::new::<Ws>("localhost:8000").await?;
         db.signin(surrealdb::opt::auth::Root { username: "root", password: "root" }).await?;
+        db.query("REMOVE DATABASE sim;").await?;
         db.use_ns("research").use_db("sim").await?;
         let writer = Self { db };
-        writer.clear_database().await?;
+
+        writer.clear_dynamic_data().await?;
         writer.setup_schema().await?;
+        writer.write_static_data(goods, recipes).await?;
+
         Ok(writer)
     }
 
-    async fn clear_database(&self) -> SurrealResult<()> {
+    async fn clear_dynamic_data(&self) -> SurrealResult<()> {
         self.db
             .query(
                 "
-            REMOVE TABLE impacts;
-            REMOVE TABLE causes;
-            REMOVE TABLE tick;
-            REMOVE TABLE effect;
-            REMOVE TABLE action;
-            REMOVE TABLE instrument_state;
-            REMOVE TABLE agent_state;
-            REMOVE TABLE trade;
-            REMOVE TABLE tick_summary;
-            REMOVE TABLE macro_stats;
-            REMOVE TABLE market_summary;
-            REMOVE TABLE yield_curve;
-        ",
+        REMOVE TABLE impacts;
+        REMOVE TABLE causes;
+        REMOVE TABLE tick;
+        REMOVE TABLE effect;
+        REMOVE TABLE action;
+        REMOVE TABLE instrument_state;
+        REMOVE TABLE agent_state;
+        REMOVE TABLE trade;
+        REMOVE TABLE tick_summary;
+        REMOVE TABLE macro_stats;
+        REMOVE TABLE market_summary;
+        REMOVE TABLE yield_curve;
+        REMOVE TABLE good;
+        REMOVE TABLE order_book_snapshot;
+        REMOVE TABLE labour_market_snapshot;
+        REMOVE TABLE recipe;
+    ",
             )
             .await?;
         Ok(())
@@ -189,7 +232,7 @@ impl SurrealDbWriter {
     async fn setup_schema(&self) -> SurrealResult<()> {
         self.db.query("DEFINE TABLE tick SCHEMALESS;").await?;
         self.db.query("DEFINE FIELD tick_number ON tick TYPE int ASSERT $value >= 0;").await?;
-        self.db.query("DEFINE FIELD sim_date ON tick TYPE string;").await?; // Added schema for sim_date
+        self.db.query("DEFINE FIELD sim_date ON tick TYPE string;").await?;
         self.db.query("DEFINE FIELD ts ON tick TYPE datetime;").await?;
         self.db.query("DEFINE INDEX tick_number_unique ON TABLE tick FIELDS tick_number UNIQUE;").await?;
 
@@ -274,6 +317,15 @@ impl SurrealDbWriter {
         self.db.query("DEFINE FIELD market_type ON market_summary TYPE string;").await?;
         self.db.query("DEFINE FIELD best_bid ON market_summary TYPE option<number>;").await?;
         self.db.query("DEFINE FIELD best_ask ON market_summary TYPE option<number>;").await?;
+        self.db.query("DEFINE FIELD mid_price ON market_summary TYPE option<number>;").await?;
+        self.db.query("DEFINE FIELD last_price ON market_summary TYPE option<number>;").await?;
+        self.db.query("DEFINE FIELD spread ON market_summary TYPE option<number>;").await?;
+        self.db.query("DEFINE FIELD volume_24h ON market_summary TYPE number;").await?;
+        self.db.query("DEFINE FIELD depth ON market_summary TYPE option<object>;").await?;
+        self.db.query("DEFINE FIELD best_bid_yield ON market_summary TYPE option<number>;").await?;
+        self.db.query("DEFINE FIELD best_ask_yield ON market_summary TYPE option<number>;").await?;
+        self.db.query("DEFINE FIELD mid_yield ON market_summary TYPE option<number>;").await?;
+        self.db.query("DEFINE FIELD last_yield ON market_summary TYPE option<number>;").await?;
         self.db
             .query("DEFINE INDEX market_summary_by_tick_market ON TABLE market_summary FIELDS tick, market_id UNIQUE;")
             .await?;
@@ -292,6 +344,8 @@ impl SurrealDbWriter {
         self.db.query("DEFINE TABLE causes TYPE RELATION SCHEMALESS;").await?;
         self.db.query("DEFINE FIELD in ON causes TYPE record<action>;").await?;
         self.db.query("DEFINE FIELD out ON causes TYPE record<effect>;").await?;
+        self.db.query("DEFINE TABLE good SCHEMALESS;").await?;
+        self.db.query("DEFINE TABLE recipe SCHEMALESS;").await?;
 
         Ok(())
     }
@@ -299,9 +353,10 @@ impl SurrealDbWriter {
     pub async fn write_tick_batch(
         &self, tick_number: u32, sim_date: NaiveDate, actions: &[ActionRecord], effects: &[StateEffect],
         action_to_effect_indices: &HashMap<usize, Vec<usize>>, trades: &[Trade],
-        instruments: &[(InstrumentId, &FinancialInstrument)], agents: &[(AgentId, String, &BalanceSheet)],
+        instruments: &HashMap<InstrumentId, FinancialInstrument>, agents: &[(AgentId, String, &BalanceSheet)],
         macro_stats: Option<&MacroStats>, market_summaries: &[(MarketId, MarketSnapshot)],
-        yield_curve_points: &[(Tenor, f64)],
+        yield_curve_points: &[(Tenor, f64)], order_books: &[(MarketId, Vec<Bid>, Vec<Ask>)],
+        labour_markets: &[(LabourMarketId, Vec<JobOffer>, Vec<JobApplication>)],
     ) -> SurrealResult<()> {
         let now = surrealdb::sql::Datetime::from(chrono::Utc::now());
 
@@ -309,7 +364,7 @@ impl SurrealDbWriter {
             .db
             .query("CREATE tick SET tick_number = $tick_number, sim_date = $sim_date, ts = $ts RETURN *")
             .bind(("tick_number", tick_number as i64))
-            .bind(("sim_date", sim_date.format("%Y-%m-%d").to_string())) // Bind sim_date
+            .bind(("sim_date", sim_date.format("%Y-%m-%d").to_string()))
             .bind(("ts", now.clone()))
             .await?
             .take(0)?;
@@ -402,12 +457,13 @@ impl SurrealDbWriter {
 
         if !agents.is_empty() {
             for (id, agent_type, bs) in agents {
+                let bs_cl = *bs;
                 let details =
                     serde_json::json!({ "cash_assets": bs.liquid_assets(), "deposit_assets": bs.total_deposits() });
                 let _: Vec<AgentStateRecord> = self.db
                     .query("CREATE agent_state SET agent = $agent, tick = type::thing($tick), agent_type = $agent_type, 
                         total_assets = $total_assets, total_liabilities = $total_liabilities, net_worth = $net_worth, liquid_assets = $liquid_assets, 
-                        details = $details")
+                        details = $details, balance_sheet = $balance_sheet")
                     .bind(("agent", id.to_string()))
                     .bind(("tick", tick_ref.to_string()))
                     .bind(("agent_type", agent_type.to_string()))
@@ -416,6 +472,7 @@ impl SurrealDbWriter {
                     .bind(("net_worth", bs.net_worth()))
                     .bind(("liquid_assets", bs.liquid_assets()))
                     .bind(("details", details))
+                    .bind(("balance_sheet", bs_cl.clone()))
                     .await?.take(0)?;
             }
         }
@@ -499,28 +556,143 @@ impl SurrealDbWriter {
                 MarketId::Labour(_) => "labour",
             };
 
+            let (best_bid_yield, best_ask_yield, mid_yield, last_yield) = if market_type == "financial" {
+
+                (snapshot.best_bid_yield, snapshot.best_ask_yield, snapshot.mid_yield, snapshot.last_yield)
+            } else {
+                (None, None, None, None)
+            };
+
             let _: Vec<MarketSummaryRecord> = self.db
-                .query("CREATE market_summary SET tick = type::thing($tick), market_id = $market_id, market_type = $market_type, best_bid = $best_bid, best_ask = $best_ask, volume_24h = $volume_24h, spread = $spread, ts = $ts")
+                .query("CREATE market_summary SET tick = type::thing($tick), market_id = $market_id, market_type = $market_type, 
+                    best_bid = $best_bid, best_ask = $best_ask, mid_price = $mid_price, last_price = $last_price,
+                    spread = $spread, volume_24h = $volume_24h, depth = $depth, ts = $ts,
+                    best_bid_yield = $best_bid_yield, best_ask_yield = $best_ask_yield,
+                    mid_yield = $mid_yield, last_yield = $last_yield")
                 .bind(("tick", tick_ref.to_string()))
                 .bind(("market_id", market_id.to_string()))
                 .bind(("market_type", market_type))
                 .bind(("best_bid", snapshot.best_bid))
                 .bind(("best_ask", snapshot.best_ask))
-                .bind(("volume_24h", snapshot.volume_24h))
+                .bind(("mid_price", snapshot.mid_price))
+                .bind(("last_price", snapshot.last_price))
                 .bind(("spread", snapshot.spread))
+                .bind(("volume_24h", snapshot.volume_24h))
+                .bind(("depth", serde_json::to_value(snapshot.depth.clone()).unwrap()))
+                .bind(("ts", now.clone()))
+                .bind(("best_bid_yield", best_bid_yield))
+                .bind(("best_ask_yield", best_ask_yield))
+                .bind(("mid_yield", mid_yield))
+                .bind(("last_yield", last_yield))
+                .await?.take(0)?;
+
+        }
+        for (tenor, yield_pct) in yield_curve_points {
+            let _: Vec<YieldCurveRecord> = self.db
+            .query("CREATE yield_curve SET tick = type::thing($tick), tenor = $tenor, yield_pct = $yield_pct, ts = $ts")
+            .bind(("tick", tick_ref.to_string()))
+            .bind(("tenor", format!("{:?}", tenor)))
+            .bind(("yield_pct", *yield_pct))
+            .bind(("ts", now.clone()))
+            .await?.take(0)?;
+        }
+        for (market_id, bids, asks) in order_books {
+            let bids_json: Vec<serde_json::Value> =
+                bids.iter().map(|b| serde_json::to_value(b).unwrap_or(serde_json::Value::Null)).collect();
+            let asks_json: Vec<serde_json::Value> =
+                asks.iter().map(|a| serde_json::to_value(a).unwrap_or(serde_json::Value::Null)).collect();
+
+            let _: Vec<OrderBookSnapshotRecord> = self.db
+                .query("CREATE order_book_snapshot SET tick = type::thing($tick), market_id = $market_id, bids = $bids, asks = $asks, ts = $ts")
+                .bind(("tick", tick_ref.to_string()))
+                .bind(("market_id", market_id.to_string()))
+                .bind(("bids", bids_json))
+                .bind(("asks", asks_json))
                 .bind(("ts", now.clone()))
                 .await?.take(0)?;
         }
 
-        for (tenor, yield_pct) in yield_curve_points {
-            let _: Vec<YieldCurveRecord> = self.db
-                .query("CREATE yield_curve SET tick = type::thing($tick), tenor = $tenor, yield_pct = $yield_pct, ts = $ts")
+        for (market_id, offers, applications) in labour_markets {
+            let offers_json: Vec<serde_json::Value> =
+                offers.iter().map(|o| serde_json::to_value(o).unwrap_or(serde_json::Value::Null)).collect();
+            let applications_json: Vec<serde_json::Value> =
+                applications.iter().map(|a| serde_json::to_value(a).unwrap_or(serde_json::Value::Null)).collect();
+
+            self.db.query("CREATE labour_market_snapshot SET tick = type::thing($tick), market_id = $market_id, job_offers = $offers, job_applications = $applications, ts = $ts")
                 .bind(("tick", tick_ref.to_string()))
-                .bind(("tenor", format!("{:?}", tenor)))
-                .bind(("yield_pct", *yield_pct))
+                .bind(("market_id", market_id.to_string()))
+                .bind(("offers", offers_json))
+                .bind(("applications", applications_json))
                 .bind(("ts", now.clone()))
-                .await?.take(0)?;
+                .await?
+                .take::<Vec<LabourMarketSnapshotRecord>>(0)?;
         }
+
+        Ok(())
+    }
+
+    async fn write_static_data(
+        &self, goods: &HashMap<sim_core::GoodId, sim_core::goods::Good>,
+        recipes: &HashMap<sim_core::RecipeId, sim_core::goods::ProductionRecipe>,
+    ) -> SurrealResult<()> {
+        self.db.query("REMOVE TABLE good; REMOVE TABLE recipe;").await?;
+
+        for (id, good) in goods {
+            println!("DEBUG: Writing good {:?} to database", id);
+
+            let category_str = format!("{:?}", good.category);
+
+            let resp = self
+                .db
+                .query(
+                    "CREATE type::thing('good', $id)
+                     SET name = $name, unit = $unit, category = $category, cpi_weight = $cpi_weight
+                     RETURN NONE",
+                )
+                .bind(("id", id.to_string()))
+                .bind(("name", good.name.clone()))
+                .bind(("unit", good.unit.clone()))
+                .bind(("category", category_str))
+                .bind(("cpi_weight", good.cpi_weight))
+                .await?;
+
+            if let Err(e) = resp.check() {
+                println!("ERROR: Failed to write good {:?}: {}", id, e);
+                return Err(e);
+            }
+
+            println!("DEBUG: ✓ Successfully wrote good {:?}", id);
+        }
+
+        for (id, recipe) in recipes {
+            println!("DEBUG: Writing recipe {:?} to database", id);
+
+            let inputs_val = serde_json::to_value(&recipe.inputs).unwrap_or(serde_json::Value::Null);
+            let outputs_val = serde_json::to_value(&recipe.outputs).unwrap_or(serde_json::Value::Null);
+
+            let resp = self
+                .db
+                .query(
+                    "CREATE type::thing('recipe', $id)
+                     SET name = $name, inputs = $inputs, outputs = $outputs, labor_required = $labor
+                     RETURN NONE",
+                )
+                .bind(("id", id.to_string()))
+                .bind(("name", recipe.name.clone()))
+                .bind(("inputs", inputs_val))
+                .bind(("outputs", outputs_val))
+                .bind(("labor", recipe.labour_hours))
+                .await?;
+
+            if let Err(e) = resp.check() {
+                println!("ERROR: Failed to write recipe {:?}: {}", id, e);
+                return Err(e);
+            }
+
+            println!("DEBUG: ✓ Successfully wrote recipe {:?}", id);
+        }
+
+        println!("DEBUG: All static data written successfully");
         Ok(())
     }
 
@@ -635,8 +807,8 @@ impl SurrealDbWriter {
             let _: Vec<ImpactRecord> = self
                 .db
                 .query("RELATE $effect->impacts->$state SET delta = $delta")
-                .bind(("effect", effect_id.clone()))
-                .bind(("state", state_id))
+                .bind(("effect", effect_id.to_string()))
+                .bind(("state", state_id.to_string()))
                 .bind(("delta", delta))
                 .await?
                 .take(0)?;
@@ -900,4 +1072,16 @@ impl SurrealDbWriter {
             .take(0)?;
         Ok(deltas)
     }
+}
+
+pub async fn get_latest_tick_id(db: &Surreal<WsClient>) -> SurrealResult<Option<surrealdb::sql::Thing>> {
+    #[derive(Deserialize)]
+    struct IdRecord {
+        id: surrealdb::sql::Thing,
+    }
+
+    let latest_tick_query: Vec<IdRecord> =
+        db.query("SELECT id, tick_number FROM tick ORDER BY tick_number DESC LIMIT 1").await?.take(0)?;
+
+    Ok(latest_tick_query.first().map(|record| record.id.clone()))
 }

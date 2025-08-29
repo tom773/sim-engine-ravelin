@@ -87,8 +87,8 @@ impl BasicBankDecisionModel {
 
     fn should_make_market_for_tenor(&self, tenor: &Tenor, _bank: &Bank, _fs: &FinancialSystem) -> bool {
         match tenor {
-            Tenor::T2Y | Tenor::T5Y | Tenor::T10Y => true,
             Tenor::T30Y => false,
+            _ => true,
         }
     }
 
@@ -96,6 +96,11 @@ impl BasicBankDecisionModel {
         let policy_rate_bps = fs.central_bank.policy_rate_bps;
         
         let term_premium = match tenor {
+            Tenor::T1M => 2.0,
+            Tenor::T2M => 3.0,
+            Tenor::T3M => 7.0,
+            Tenor::T6M => 10.0,
+            Tenor::T1Y => 12.0,
             Tenor::T2Y => 15.0,
             Tenor::T5Y => 35.0,
             Tenor::T10Y => 50.0,
@@ -104,7 +109,7 @@ impl BasicBankDecisionModel {
 
         let bid_ask_spread_bps = rng.random_range(15.0..30.0);
         
-        let base_yield = policy_rate_bps + term_premium;
+        let base_yield = policy_rate_bps + (term_premium * rng.random_range(0.9..1.1));
         let bid_yield_bps = base_yield + (bid_ask_spread_bps / 2.0);
         let ask_yield_bps = base_yield - (bid_ask_spread_bps / 2.0);
 

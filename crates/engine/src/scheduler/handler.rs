@@ -1,7 +1,7 @@
-use super::{StepHandler, StepContext, StepResult, TickStep};
-use crate::SimulationEngine;
-use sim_core::*;
+use super::{StepContext, StepHandler, StepResult, TickStep};
+use crate::{SimulationEngine};
 use domains::{ResolutionContext, ResolutionPhase};
+use sim_core::*;
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -9,10 +9,7 @@ pub struct UpkeepHandler;
 
 impl StepHandler for UpkeepHandler {
     fn execute(
-        &self,
-        engine: &mut SimulationEngine,
-        _context: &mut StepContext,
-        _rng: &mut dyn rand::RngCore,
+        &self, engine: &mut SimulationEngine, _context: &mut StepContext, _rng: &mut dyn rand::RngCore,
     ) -> StepResult {
         let start = Instant::now();
 
@@ -50,10 +47,7 @@ pub struct GatherIntentionsHandler;
 
 impl StepHandler for GatherIntentionsHandler {
     fn execute(
-        &self,
-        engine: &mut SimulationEngine,
-        context: &mut StepContext,
-        rng: &mut dyn rand::RngCore,
+        &self, engine: &mut SimulationEngine, context: &mut StepContext, rng: &mut dyn rand::RngCore,
     ) -> StepResult {
         let start = Instant::now();
 
@@ -92,10 +86,7 @@ impl StepHandler for GatherIntentionsHandler {
 }
 
 impl GatherIntentionsHandler {
-    fn categorize_intentions_by_agent(
-        intentions: &[SimIntention],
-        state: &SimState,
-    ) -> serde_json::Value {
+    fn categorize_intentions_by_agent(intentions: &[SimIntention], state: &SimState) -> serde_json::Value {
         let mut counts = HashMap::new();
         for intention in intentions {
             let agent_id = intention.agent_id();
@@ -130,10 +121,7 @@ impl PhaseResolutionHandler {
 
 impl StepHandler for PhaseResolutionHandler {
     fn execute(
-        &self,
-        engine: &mut SimulationEngine,
-        context: &mut StepContext,
-        _rng: &mut dyn rand::RngCore,
+        &self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn rand::RngCore,
     ) -> StepResult {
         let start = Instant::now();
 
@@ -157,15 +145,12 @@ impl StepHandler for PhaseResolutionHandler {
             return StepResult::success(start.elapsed().as_millis() as u64, metadata);
         }
 
-        let resolution_context = ResolutionContext {
-            state: &engine.state,
-            current_tick: engine.state.ticknum,
-        };
+        let resolution_context = ResolutionContext { state: &engine.state, current_tick: engine.state.ticknum };
 
         let action_offset = context.get_all_actions().map(|a| a.len()).unwrap_or(0);
         let effect_offset = context.get_all_effects().map(|e| e.len()).unwrap_or(0);
 
-        let (action_records, action_to_effect_indices, effects) = 
+        let (action_records, action_to_effect_indices, effects) =
             engine.resolve_and_execute_phase(&intentions, &resolution_context, action_offset, effect_offset);
 
         if let Err(e) = context.store_phase_actions(self.phase, action_records.clone()) {
@@ -232,7 +217,7 @@ impl StepHandler for PhaseResolutionHandler {
     fn name(&self) -> &'static str {
         match self.phase {
             ResolutionPhase::Independent => "IndependentPhaseHandler",
-            ResolutionPhase::Market => "MarketPhaseHandler", 
+            ResolutionPhase::Market => "MarketPhaseHandler",
             ResolutionPhase::Dependent => "DependentPhaseHandler",
         }
     }
@@ -242,10 +227,7 @@ pub struct ApplyMarketEffectsHandler;
 
 impl StepHandler for ApplyMarketEffectsHandler {
     fn execute(
-        &self,
-        engine: &mut SimulationEngine,
-        context: &mut StepContext,
-        _rng: &mut dyn rand::RngCore,
+        &self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn rand::RngCore,
     ) -> StepResult {
         let start = Instant::now();
 
@@ -259,10 +241,8 @@ impl StepHandler for ApplyMarketEffectsHandler {
             }
         };
 
-        let market_state_effects: Vec<StateEffect> = market_effects
-            .into_iter()
-            .filter(|e| matches!(e, StateEffect::Market(_)))
-            .collect();
+        let market_state_effects: Vec<StateEffect> =
+            market_effects.into_iter().filter(|e| matches!(e, StateEffect::Market(_))).collect();
 
         if !market_state_effects.is_empty() {
             if let Err(e) = engine.state.apply_effects(&market_state_effects) {
@@ -296,20 +276,17 @@ pub struct ClearMarketsHandler;
 
 impl StepHandler for ClearMarketsHandler {
     fn execute(
-        &self,
-        engine: &mut SimulationEngine,
-        context: &mut StepContext,
-        _rng: &mut dyn rand::RngCore,
+        &self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn rand::RngCore,
     ) -> StepResult {
         let start = Instant::now();
 
-        let (trades, snapshots) = engine.state.financial_system.exchange.clear_markets(engine.state.ticknum as i64);
+        let (trades, snapshots) = engine.state.financial_system.exchange.clear_markets(
+            engine.state.ticknum as i64,
+            &engine.state.financial_system.instruments, // Just pass the instruments
+        );
 
         if let Err(e) = context.store_trades(trades.clone()) {
-            return StepResult::failure(
-                start.elapsed().as_millis() as u64,
-                format!("Failed to store trades: {}", e),
-            );
+            return StepResult::failure(start.elapsed().as_millis() as u64, format!("Failed to store trades: {}", e));
         }
 
         if let Err(e) = context.store_market_snapshots(snapshots.clone()) {
@@ -345,20 +322,14 @@ pub struct SettleTradesHandler;
 
 impl StepHandler for SettleTradesHandler {
     fn execute(
-        &self,
-        engine: &mut SimulationEngine,
-        context: &mut StepContext,
-        _rng: &mut dyn rand::RngCore,
+        &self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn rand::RngCore,
     ) -> StepResult {
         let start = Instant::now();
 
         let trades = match context.get_trades() {
             Ok(trades) => trades,
             Err(e) => {
-                return StepResult::failure(
-                    start.elapsed().as_millis() as u64,
-                    format!("Failed to get trades: {}", e),
-                );
+                return StepResult::failure(start.elapsed().as_millis() as u64, format!("Failed to get trades: {}", e));
             }
         };
 
@@ -392,10 +363,7 @@ pub struct ApplyAllEffectsHandler;
 
 impl StepHandler for ApplyAllEffectsHandler {
     fn execute(
-        &self,
-        engine: &mut SimulationEngine,
-        context: &mut StepContext,
-        _rng: &mut dyn rand::RngCore,
+        &self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn rand::RngCore,
     ) -> StepResult {
         let start = Instant::now();
 
@@ -446,10 +414,7 @@ pub struct UpdateHistoryHandler;
 
 impl StepHandler for UpdateHistoryHandler {
     fn execute(
-        &self,
-        engine: &mut SimulationEngine,
-        context: &mut StepContext,
-        _rng: &mut dyn rand::RngCore,
+        &self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn rand::RngCore,
     ) -> StepResult {
         let start = Instant::now();
 
@@ -503,10 +468,7 @@ pub struct PersistDataHandler;
 
 impl StepHandler for PersistDataHandler {
     fn execute(
-        &self,
-        engine: &mut SimulationEngine,
-        context: &mut StepContext,
-        _rng: &mut dyn rand::RngCore,
+        &self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn rand::RngCore,
     ) -> StepResult {
         let start = Instant::now();
 
@@ -518,23 +480,22 @@ impl StepHandler for PersistDataHandler {
 
             let result = tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async {
-                    engine.persist_tick_batch(
-                        writer,
-                        engine.state.current_date,
-                        &all_actions,
-                        &all_effects,
-                        &action_to_effect_indices,
-                        &trades,
-                    ).await
+                    engine
+                        .persist_tick_batch(
+                            writer,
+                            engine.state.current_date,
+                            &all_actions,
+                            &all_effects,
+                            &action_to_effect_indices,
+                            &trades,
+                        )
+                        .await
                 })
             });
 
             if let Err(e) = result {
                 println!("[WARNING] Failed to persist tick data: {}", e);
-                let metadata = serde_json::json!({
-                    "persisted": false,
-                    "error": e.to_string()
-                });
+                let metadata = serde_json::json!({ "persisted": false, "error": e.to_string() });
                 return StepResult::success(start.elapsed().as_millis() as u64, metadata);
             }
 
@@ -546,10 +507,7 @@ impl StepHandler for PersistDataHandler {
             });
             StepResult::success(start.elapsed().as_millis() as u64, metadata)
         } else {
-            let metadata = serde_json::json!({
-                "persisted": false,
-                "reason": "No database writer available"
-            });
+            let metadata = serde_json::json!({ "persisted": false, "reason": "No database writer available" });
             StepResult::success(start.elapsed().as_millis() as u64, metadata)
         }
     }
