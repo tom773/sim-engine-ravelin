@@ -23,7 +23,7 @@ impl Default for SimState {
     fn default() -> Self {
         Self {
             ticknum: 0,
-            current_date: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            current_date: chrono::NaiveDate::from_ymd_opt(2025, 12, 31).unwrap(),
             financial_system: FinancialSystem::default(),
             agents: AgentRegistry::default(),
             config: SimConfig::default(),
@@ -127,7 +127,7 @@ impl SimState {
              current_cpi /= total_weight;
         }
 
-        let inflation_rate = 0.02; // Placeholder for now
+        let inflation_rate = 0.02;
 
         InflationView { cpi: current_cpi, inflation_rate }
     }
@@ -143,58 +143,7 @@ impl SimState {
     }
 
     pub fn macro_stats(&self) -> MacroStats {
-        use chrono::Duration;
-
-        let mut employee_ids = std::collections::HashSet::new();
-        let mut avg_wage_sum = 0.0;
-        let mut avg_wage_n = 0usize;
-        let mut payroll_sum = 0.0;
-
-        for (_fid, firm) in &self.agents.firms {
-            for (_emp_id, contract) in &firm.employees {
-                employee_ids.insert(contract.employee_id);
-                avg_wage_sum += contract.wage_rate;
-                avg_wage_n += 1;
-                payroll_sum += contract.wage_rate * contract.hours;
-            }
-        }
-
-        let labour_force = self.agents.consumers.len();
-        let employment = employee_ids.len();
-        let unemployment = labour_force.saturating_sub(employment);
-        let unemployment_rate = if labour_force > 0 {
-            unemployment as f64 / labour_force as f64
-        } else {
-            0.0
-        };
-        let avg_wage_rate = if avg_wage_n > 0 { avg_wage_sum / avg_wage_n as f64 } else { 0.0 };
-
-        let infl = self.cpi_view();
-        let cpi = infl.cpi;
-        let inflation_rate = infl.inflation_rate;
-
-        let start_date = self.current_date - Duration::days(1);
-        let mut consumer_spending_daily = 0.0;
-
-        for (good_id, good) in &self.financial_system.goods.goods {
-            if good.cpi_weight > 0.0 {
-                let mkt_id = MarketId::Goods(*good_id);
-                if let Some(ticks) = self.history.market_ticks.get(&mkt_id) {
-                    for tick in ticks.iter().rev() {
-                        if tick.date < start_date { break; }
-                        consumer_spending_daily += tick.turnover;
-                    }
-                }
-            }
-        }
-
-        let st = &self.financial_system.government.spending_targets;
-        let government_spending_proxy = st.transfers + st.purchases + st.investment + st.debt_service;
-
-        let business_investment_dummy = 0.0;
-        let net_exports_dummy = 0.0;
-
-        let nominal_gdp_proxy = consumer_spending_daily + business_investment_dummy + government_spending_proxy + net_exports_dummy;
+        let core_stats = self.calculate_core_stats();
 
         let banks_map = HashSet::from_iter(self.agents.banks.keys().cloned());
         let m0 = self.financial_system.m0();
@@ -202,70 +151,153 @@ impl SimState {
         let m2 = self.financial_system.m2(&banks_map);
 
         let (velocity, velocity_note) = if m1 > 1e-9 {
-            (consumer_spending_daily / m1, "proxy: daily nominal spending divided by M1 (cash+DDs, non-banks)")
+            (core_stats.consumption / m1, "proxy: daily nominal spending divided by M1 (cash+DDs, non-banks)")
         } else {
             (0.0, "proxy: velocity undefined with zero M1; returning 0.0")
         };
+        
+        let labour_force = self.agents.consumers.len();
+        let employment = self.agents.firms.values().map(|f| f.employees.len()).sum();
 
         MacroStats {
             as_of: self.current_date,
-            nominal_gdp_proxy,
+            nominal_gdp_proxy: core_stats.gdp,
             nominal_gdp_note: "proxy: C (daily) + I(dummy) + G(proxy) + NX(dummy)",
-            consumer_spending_daily,
+            consumer_spending_daily: core_stats.consumption,
             consumer_spending_note: "proxy: sum of turnover over CPI-weighted goods for the last simulated day",
-            cpi,
-            inflation_rate,
+            cpi: core_stats.cpi,
+            ppi: core_stats.ppi,
+            inflation_rate: self.cpi_view().inflation_rate,
             employment,
-            unemployment,
+            unemployment: labour_force.saturating_sub(employment),
             labour_force,
-            unemployment_rate,
-            avg_wage_rate,
-            payroll_proxy: payroll_sum,
-            business_investment: business_investment_dummy,
-            business_investment_note: "dummy: capital formation flows not implemented yet",
-            government_spending: government_spending_proxy,
-            government_spending_note: "proxy: uses current SpendingTargets (not realized fiscal outlays)",
-            net_exports: net_exports_dummy,
-            net_exports_note: "dummy: trade not modeled (closed economy)",
+            unemployment_rate: core_stats.unemployment_rate / 100.0,
+            labor_force_participation: core_stats.labor_force_participation / 100.0,
+            job_openings: core_stats.job_openings,
+            household_debt: core_stats.household_debt,
+            corporate_debt: core_stats.corporate_debt,
+            government_debt: core_stats.government_debt,
+            overnight_rates: self.financial_system.calculate_overnight_rates(),
+            bank_credit: self.financial_system.all_bank_assets(&banks_map),
+            bank_liabilities: self.financial_system.all_bank_deposits(&banks_map),
+            bank_reserves: self.financial_system.all_bank_reserves(&banks_map),
             m0,
             m1,
             m2,
             velocity,
             velocity_note,
+            avg_wage_rate: 0.0,
+            payroll_proxy: 0.0,
+            business_investment: 0.0,
+            business_investment_note: "dummy: capital formation flows not implemented yet",
+            government_spending: self.financial_system.government.spending_targets.purchases,
+            government_spending_note: "proxy: uses current SpendingTargets (not realized fiscal outlays)",
         }
     }
 }
 
 impl EconomicAnalytics for SimState {
     fn calculate_core_stats(&self) -> CoreEconomicStats {
-        
-        let detailed_stats = self.macro_stats();
         let fs = &self.financial_system;
+        let last_tick = self.history.tick_records.back();
 
-        let household_debt = self.agents.consumers.values()
+        let consumer_spending_daily = self.history.market_ticks
+            .iter()
+            .filter(|(market_id, _)| matches!(market_id, MarketId::Goods(_)))
+            .flat_map(|(_, ticks)| ticks.iter())
+            .filter(|tick| tick.date == self.current_date)
+            .map(|tick| tick.turnover)
+            .sum();
+
+        let st = &self.financial_system.government.spending_targets;
+        let government_spending_proxy = st.transfers + st.purchases + st.investment + st.debt_service;
+        let gdp = consumer_spending_daily + 0.0 /* investment_dummy */ + government_spending_proxy + 0.0 /* net_exports_dummy */;
+        let cpi = self.cpi_view().cpi;
+
+        let mut ppi = 0.0;
+        let mut ppi_total_weight = 0.0;
+        for (good_id, good) in &fs.goods.goods {
+            if matches!(good.category, GoodCategory::RawMaterial | GoodCategory::IntermediateGood) {
+                if let Some(market_view) = self.market_view(&MarketId::Goods(*good_id)) {
+                    if let Some(price) = market_view.last_or_mid() {
+                        let weight = 1.0;
+                        ppi += price * weight;
+                        ppi_total_weight += weight;
+                    }
+                }
+            }
+        }
+        if ppi_total_weight > 0.0 {
+            ppi /= ppi_total_weight;
+        }
+
+        let employed_count: usize = self.agents.firms.values().map(|f| f.employees.len()).sum();
+        let seeking_work_count: HashSet<AgentId> = fs.exchange.labour_markets.values()
+            .flat_map(|m| m.job_applications.iter().map(|app| app.consumer_id))
+            .collect();
+        let labor_force = (employed_count + seeking_work_count.len()) as f64;
+        let total_population = self.agents.consumers.len() as f64;
+        let labor_force_participation = if total_population > 0.0 { labor_force / total_population } else { 0.0 };
+        let unemployment_rate = if labor_force > 0.0 { (labor_force - employed_count as f64) / labor_force } else { 0.0 };
+
+        let job_openings: u32 = fs.exchange.labour_markets.values()
+            .flat_map(|m| &m.job_offers)
+            .map(|offer| offer.quantity)
+            .sum();
+
+        let mut industrial_production = 0.0;
+        let mut actual_batches_produced = 0;
+        if let Some(tick) = last_tick {
+            for effect in &tick.effects {
+                if let StateEffect::Agent(AgentEffect::Produce { good_id, amount, .. }) = effect {
+                    if let Some(market_view) = self.market_view(&MarketId::Goods(*good_id)) {
+                        let price = market_view.last_or_mid().unwrap_or(1.0);
+                        industrial_production += amount * price;
+                    }
+                }
+            }
+            for action in &tick.actions {
+                if let SimAction::Production(ProductionAction::Produce { batches, .. }) = &action.action {
+                    actual_batches_produced += batches;
+                }
+            }
+        }
+        let potential_batches: usize = self.agents.firms.values().map(|f| f.employees.len()).sum();
+        let capacity_utilization = if potential_batches > 0 { (actual_batches_produced as f64) / (potential_batches as f64) } else { 0.0 };
+
+        let household_debt: f64 = self.agents.consumers.values()
             .map(|c| fs.get_total_liabilities(&c.id)).sum();
-
-        let corporate_debt = self.agents.firms.values()
+        let corporate_debt: f64 = self.agents.firms.values()
             .map(|f| fs.get_total_liabilities(&f.id)).sum();
-            
         let government_debt = fs.get_total_liabilities(&fs.government.id);
+        let total_debt = household_debt + corporate_debt + government_debt;
+        
+        let mut new_credit_this_tick = 0.0;
+        if let Some(tick) = last_tick {
+            for effect in &tick.effects {
+                if let StateEffect::Financial(FinancialEffect::CreateInstrument(inst)) = effect {
+                    if inst.details.as_any().is::<LoanDetails>() || inst.details.as_any().is::<BondDetails>() {
+                        new_credit_this_tick += inst.principal;
+                    }
+                }
+            }
+        }
+        let credit_growth = if total_debt > 0.0 { new_credit_this_tick / total_debt } else { 0.0 };
 
-        let bank_liabilities = self.agents.banks.values()
-            .map(|b| fs.get_total_liabilities(&b.id)).sum::<f64>();
+        let bank_liabilities: f64 = self.agents.banks.values()
+            .map(|b| fs.get_total_liabilities(&b.id)).sum();
 
         CoreEconomicStats {
-            gdp: detailed_stats.nominal_gdp_proxy,
-            consumption: detailed_stats.consumer_spending_daily,
-            cpi: detailed_stats.cpi,
-            ppi: 250.0, // Placeholder, as it wasn't in MacroStats
-            unemployment_rate: detailed_stats.unemployment_rate * 100.0, // Convert to percentage
-            labor_force_participation: 62.5, // Placeholder
-            job_openings: self.agents.firms.len() as f64, // Placeholder
-            capacity_utilization: 87.2, // Placeholder
-            industrial_production: 0.0, // Placeholder, not in MacroStats
-            housing_starts: 150_000.0, // Placeholder
-            trade_balance: detailed_stats.net_exports,
-            credit_growth: 0.05, // Placeholder
+            gdp,
+            consumption: consumer_spending_daily,
+            cpi,
+            ppi,
+            unemployment_rate: unemployment_rate * 100.0,
+            labor_force_participation: labor_force_participation * 100.0,
+            job_openings: job_openings as f64,
+            capacity_utilization: capacity_utilization * 100.0,
+            industrial_production,
+            credit_growth,
             household_debt,
             corporate_debt,
             government_debt,
@@ -343,7 +375,7 @@ pub struct SimHistory {
     pub transactions: Vec<Transaction>,
     #[serde_as(as = "HashMap<DisplayFromStr, _>")]
     pub market_ticks: HashMap<MarketId, VecDeque<MarketTick>>,
-    pub tick_records: VecDeque<TickRecord>, // New field for action/effect history
+    pub tick_records: VecDeque<TickRecord>,
 }
 
 impl SimHistory {
@@ -363,9 +395,10 @@ impl SimHistory {
 pub struct TickRecord {
     pub tick_number: u32,
     pub date: chrono::NaiveDate,
+    pub intentions: Vec<SimIntention>,
     pub actions: Vec<ActionRecord>,
     pub effects: Vec<StateEffect>,
-    pub action_to_effect_indices: HashMap<usize, Vec<usize>>, // Maps action index to effect indices
+    pub action_to_effect_indices: HashMap<usize, Vec<usize>>,
     pub trades: Vec<Trade>,
 }
 
@@ -373,7 +406,7 @@ pub struct TickRecord {
 pub struct ActionRecord {
     pub action: SimAction,
     pub agent_id: AgentId,
-    pub agent_type: String, // "Bank", "Consumer", "Firm", "Government"
+    pub agent_type: String,
     pub agent_name: Option<String>,
 }
 
@@ -385,20 +418,28 @@ pub struct MacroStats {
     pub nominal_gdp_note: &'static str,
     pub consumer_spending_daily: f64,
     pub consumer_spending_note: &'static str,
-    pub cpi: f64,
-    pub inflation_rate: f64,
-    pub employment: usize,
-    pub unemployment: usize,
-    pub labour_force: usize,
-    pub unemployment_rate: f64,
     pub avg_wage_rate: f64,
     pub payroll_proxy: f64,
     pub business_investment: f64,
     pub business_investment_note: &'static str,
     pub government_spending: f64,
     pub government_spending_note: &'static str,
-    pub net_exports: f64,
-    pub net_exports_note: &'static str,
+    pub cpi: f64,
+    pub ppi: f64,
+    pub inflation_rate: f64,
+    pub employment: usize,
+    pub unemployment: usize,
+    pub labour_force: usize,
+    pub unemployment_rate: f64,
+    pub labor_force_participation: f64,
+    pub job_openings: f64,
+    pub household_debt: f64,
+    pub corporate_debt: f64,
+    pub government_debt: f64,
+    pub overnight_rates: OvernightRates,
+    pub bank_credit: f64,
+    pub bank_liabilities: f64,
+    pub bank_reserves: f64,
     pub m0: f64,
     pub m2: f64,
     pub m1: f64,

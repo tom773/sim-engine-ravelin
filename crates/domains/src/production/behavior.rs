@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use sim_core::*;
 use std::any::Any;
 use chrono::Datelike;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProductionFirmDecisionModel {
     pub target_markup: f64,
@@ -74,7 +75,6 @@ impl ProductionFirmDecisionModel {
     }
 
     fn handle_wages(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
-        println!("[WAGE PAYMENT] {} has emplyers {:#?}", firm.name, firm.employees);
         if (state.current_date.day() == 3 || state.current_date.day() == 17) == true {
             for (employee_id, contract) in &firm.employees {
                 let fortnightly_wage = (contract.wage_rate * contract.hours) * 2.0;
@@ -90,13 +90,14 @@ impl ProductionFirmDecisionModel {
     }
 
     fn handle_sales(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
+        
         if let Some(inventory) = state.financial_system.get_bs_by_id(&firm.id).and_then(|bs| bs.get_inventory()) {
             for (good_id, item) in inventory {
                 if item.quantity > 0.1 {
                     intentions.push(SimIntention::SellInventory {
                         agent_id: firm.id,
                         good_id: *good_id,
-                        quantity: item.quantity,
+                        quantity: item.quantity*0.2,
                         desired_markup: self.target_markup,
                     });
                 }
@@ -193,6 +194,11 @@ impl InvestmentFirmDecisionModel {
     fn calculate_yield_quotes(&self, tenor: Tenor, fs: &FinancialSystem) -> (BasisPoints, BasisPoints) {
         let policy_bps = fs.central_bank.policy_rate_bps;
         let term_premium = match tenor {
+            Tenor::T1M => 2.0,
+            Tenor::T2M => 3.0,
+            Tenor::T3M => 7.0,
+            Tenor::T6M => 10.0,
+            Tenor::T1Y => 12.0,
             Tenor::T2Y => 15.0,
             Tenor::T5Y => 35.0,
             Tenor::T10Y => 50.0,
@@ -200,7 +206,7 @@ impl InvestmentFirmDecisionModel {
         };
 
         let spread_bps = rand::random_range(10.0..25.0);
-        let mid = policy_bps + term_premium;
+        let mid = policy_bps + (term_premium*rand::random_range(0.9..1.1));
         let bid = mid + spread_bps / 2.0;
         let ask = mid - spread_bps / 2.0;
         (bid, ask)

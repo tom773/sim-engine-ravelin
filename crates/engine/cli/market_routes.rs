@@ -1,4 +1,5 @@
-use crate::{AppState, dto::*, routes::*};
+use crate::{AppState, routes::*};
+use engine::dto::*;
 use std::str::FromStr;
 use axum::{
     Json,
@@ -12,56 +13,19 @@ use std::sync::Arc;
 
 pub async fn get_markets_overview(State(state): State<Arc<AppState>>) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
     let headers = with_epoch_header(HeaderMap::new(), state.epoch);
-    let engine_guard = state.sim_engine.read().await;
 
-    if let Some(engine) = engine_guard.as_ref() {
-        let fs = &engine.state.financial_system;
-
-        let treasury_summaries = fs.exchange.get_treasury_market_summaries(fs);
-        
-        let treasuries: Vec<TreasuryMarketDto> = treasury_summaries.iter().map(|summary| {
-            TreasuryMarketDto {
-                instrument_id: format!("Financial(Treasury_{})", summary.tenor),
-                name: format!("US {}", summary.tenor.to_string().replace("T", "").replace("Y", "Y")),
-                price: summary.price / 10.0,
-                yield_to_maturity: summary.yield_to_maturity * 100.0,
-                spread_bps: summary.spread_bps,
-                daily_change_pct: 0.001,
-                duration: None,
-                convexity: None,
-            }
-        }).collect();
-
-        let yield_curve: Vec<YieldCurvePointDto> = treasuries
-            .iter()
-            .map(|treasury| YieldCurvePointDto {
-                tenor: treasury.name.replace("US ", ""),
-                yield_pct: treasury.yield_to_maturity,
-                price: Some(treasury.price),
-                change_bps: None,
-            })
-            .collect();
-
-        let overnight_rates_data = fs.calculate_overnight_rates();
-        let overnight_rates_dto = OvernightRatesDto {
-            effr: overnight_rates_data.effr,
-            sofr: overnight_rates_data.sofr,
-            iorb: Some(overnight_rates_data.iorb),
-            discount_rate: Some(overnight_rates_data.discount_rate),
-            overnight_RRP: Some(overnight_rates_data.overnight_rrp),
-        };
-
-        let markets_dto = MarketsPageDto { 
-            treasuries, 
-            yield_curve, 
-            overnight_rates: overnight_rates_dto,
-            market_summary: None,
-        };
-
-        (StatusCode::OK, headers, Json(serde_json::to_value(markets_dto).unwrap()))
-    } else {
-        let err = ApiError { code: "NOT_INITIALIZED", message: "Simulation is not initialized." };
-        (StatusCode::CONFLICT, headers, Json(serde_json::json!({ "error": err })))
+    let query_service = match get_qs(&state).await {
+        Ok(qs) => qs,
+        Err(response) => return response,
+    };
+    match query_service.get_market_summaries().await {
+        Ok(overview) => {
+            (StatusCode::OK, headers, Json(serde_json::to_value(overview).unwrap()))
+        }
+        Err(e) => {
+            let err = json!({ "error": format!("Database error: {}", e) });
+            (StatusCode::INTERNAL_SERVER_ERROR, headers, Json(err))
+        }
     }
 }
 
@@ -69,65 +33,20 @@ pub async fn get_goods_catalogue(
     State(state): State<Arc<AppState>>,
 ) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
     let headers = with_epoch_header(HeaderMap::new(), state.epoch);
-    let engine_guard = state.sim_engine.read().await;
+    
+    let query_service = match get_qs(&state).await {
+        Ok(qs) => qs,
+        Err(response) => return response,
+    };
 
-    if let Some(engine) = engine_guard.as_ref() {
-        let goods = engine
-            .state
-            .financial_system
-            .goods
-            .goods
-            .values()
-            .map(|good| GoodsDto { 
-                id: good.id.to_string(), 
-                name: good.name.clone(), 
-                unit: good.unit.clone() 
-            })
-            .collect::<Vec<_>>();
-        
-        let recipies = engine
-            .state
-            .financial_system
-            .goods
-            .recipes
-            .values()
-            .map(|recipe| RecipiesDto {
-                id: recipe.id.to_string(),
-                name: recipe.name.clone(),
-                inputs: recipe
-                    .inputs
-                    .iter()
-                    .map(|recipe_item| {
-                        let good = engine.state.financial_system.goods.get_good_by_id(&recipe_item.good_id).unwrap();
-                        GoodsDto { 
-                            id: good.id.to_string(), 
-                            name: good.name.clone(), 
-                            unit: good.unit.clone() 
-                        }
-                    })
-                    .collect(),
-                outputs: recipe
-                    .outputs
-                    .iter()
-                    .map(|recipe_item| {
-                        let good = engine.state.financial_system.goods.get_good_by_id(&recipe_item.good_id).unwrap();
-                        GoodsDto { 
-                            id: good.id.to_string(), 
-                            name: good.name.clone(), 
-                            unit: good.unit.clone() 
-                        }
-                    })
-                    .collect(),
-                efficiency: recipe.efficiency,
-                labour_hours: recipe.labour_hours,
-            })
-            .collect::<Vec<_>>();
-        
-        let goods_page = GoodsPageDto { goods, recipies };
-        (StatusCode::OK, headers, Json(serde_json::to_value(goods_page).unwrap()))
-    } else {
-        let err = ApiError { code: "NOT_INITIALIZED", message: "Simulation is not initialized." };
-        (StatusCode::CONFLICT, headers, Json(json!({ "error": err })))
+    match query_service.get_goods_catalogue().await {
+        Ok(goods_page) => {
+            (StatusCode::OK, headers, Json(serde_json::to_value(goods_page).unwrap()))
+        }
+        Err(e) => {
+            let err = json!({ "error": format!("Database error: {}", e) });
+            (StatusCode::INTERNAL_SERVER_ERROR, headers, Json(err))
+        }
     }
 }
 
@@ -136,94 +55,64 @@ pub async fn get_market_goods_overview(
     State(state): State<Arc<AppState>>,
 ) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
     let headers = with_epoch_header(HeaderMap::new(), state.epoch);
-    let engine_guard = state.sim_engine.read().await;
-
-    if let Some(engine) = engine_guard.as_ref() {
-        let exchange = &engine.state.financial_system.exchange;
-        let goods = &engine.state.financial_system.goods;
-
-        let markets = exchange
-            .goods_markets
-            .iter()
-            .map(|(good_id, market)| {
-                let summary = market.summary();
-                let depth = summary.depth;
-                let g = goods.get_good_by_id(good_id);
-
-                crate::dto::GoodsMarketSummaryDto {
-                    market_id: good_id.to_string(),
-                    good_id: good_id.to_string(),
-                    name: g.map_or_else(|| format!("{good_id}"), |x| x.name.clone()),
-                    unit: g.map_or_else(|| "".to_string(), |x| x.unit.clone()),
-                    best_bid: depth.best_bid,
-                    best_ask: depth.best_ask,
-                    spread: summary.spread,
-                    mid: summary.mid,
-                    last: summary.last_price,
-                    depth: crate::dto::DepthDto {
-                        bid_size_at_best: depth.bid_size_at_best,
-                        ask_size_at_best: depth.ask_size_at_best,
-                        bid_levels: depth.bid_levels,
-                        ask_levels: depth.ask_levels,
-                    },
-                    volume_24h: None,
-                    price_change_24h: None,
-                }
-            })
-            .collect::<Vec<_>>();
-
-        let page = crate::dto::GoodsMarketsPageDto { markets };
-        (StatusCode::OK, headers, Json(serde_json::to_value(page).unwrap()))
-    } else {
-        let err = ApiError { code: "NOT_INITIALIZED", message: "Simulation is not initialized." };
-        (StatusCode::CONFLICT, headers, Json(json!({ "error": err })))
-    }
+    let err = ApiError { code: "NOT_IMPLEMENTED_CQRS", message: "Goods market overview query is pending migration to QueryService." };
+    (StatusCode::NOT_IMPLEMENTED, headers, Json(json!({ "error": err })))
 }
 
 pub async fn get_market_goods_orderbook(
     State(state): State<Arc<AppState>>, Path(good_id_str): Path<String>,
 ) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
     let headers = with_epoch_header(HeaderMap::new(), state.epoch);
-    let engine_guard = state.sim_engine.read().await;
+    
+    let good_id: GoodId = good_id_str.parse().unwrap_or_else(|_| GoodId::from_slug(&good_id_str));
+    let market_id_str = MarketId::Goods(good_id).to_string();
+    
+    let query_service = match get_qs(&state).await {
+        Ok(qs) => qs,
+        Err(response) => return response,
+    };
 
-    if let Some(engine) = engine_guard.as_ref() {
-        let good_id: GoodId = good_id_str.parse().map_err(|_| ()).unwrap_or_else(|_| GoodId::from_slug(&good_id_str));
-        if let Some(market) = engine.state.financial_system.exchange.goods_market(&good_id) {
-            let book = &market.order_book;
-            let bids = book
-                .bids
-                .iter()
-                .map(|b| crate::dto::MarketBidDto {
-                    agent_id: b.agent_id.to_string(),
-                    quantity: b.quantity,
-                    price: b.price,
-                })
-                .collect::<Vec<_>>();
+    match query_service.get_order_book(&market_id_str).await {
+        Ok(Some(record)) => {
+            let bids_res: Result<Vec<Bid>, _> = record.bids.into_iter().map(serde_json::from_value).collect();
+            let asks_res: Result<Vec<Ask>, _> = record.asks.into_iter().map(serde_json::from_value).collect();
 
-            let asks = book
-                .asks
-                .iter()
-                .map(|a| crate::dto::MarketAskDto {
-                    agent_id: a.agent_id.to_string(),
-                    quantity: a.quantity,
-                    price: a.price,
-                })
-                .collect::<Vec<_>>();
+            match (bids_res, asks_res) {
+                (Ok(bids_orders), Ok(asks_orders)) => {
+                    let bids_dto: Vec<MarketBidDto> = bids_orders.iter().map(|b| MarketBidDto {
+                        agent_id: b.agent_id.to_string(),
+                        quantity: b.quantity,
+                        price: b.price,
+                    }).collect();
 
-            let dto = crate::dto::OrderbookDto {
-                market_id: format!("Goods({good_id})"),
-                market_name: market.name.clone(),
-                bids,
-                asks,
-            };
-            (StatusCode::OK, headers, Json(serde_json::to_value(dto).unwrap()))
-        } else {
-            let err = ApiError { code: "NOT_FOUND", message: "Goods market not found." };
+                    let asks_dto: Vec<MarketAskDto> = asks_orders.iter().map(|a| MarketAskDto {
+                        agent_id: a.agent_id.to_string(),
+                        quantity: a.quantity,
+                        price: a.price,
+                    }).collect();
+
+                    let dto = OrderbookDto {
+                        market_id: market_id_str.clone(),
+                        market_name: market_id_str, // TODO: Enhance QS to join with good name
+                        bids: bids_dto,
+                        asks: asks_dto,
+                    };
+                    (StatusCode::OK, headers, Json(serde_json::to_value(dto).unwrap()))
+                }
+                _ => {
+                     let err = json!({ "error": "Failed to deserialize order book data from database." });
+                    (StatusCode::INTERNAL_SERVER_ERROR, headers, Json(err))
+                }
+            }
+        }
+        Ok(None) => {
+            let err = ApiError { code: "NOT_FOUND", message: "Order book not found for this market at the latest tick." };
             (StatusCode::NOT_FOUND, headers, Json(json!({ "error": err })))
         }
-    } else {
-        let err = ApiError { code: "NOT_INITIALIZED", message: "Simulation is not initialized." };
-        (StatusCode::CONFLICT, headers, Json(json!({ "error": err })))
+        Err(e) => {
+            let err = json!({ "error": format!("Database error: {}", e) });
+            (StatusCode::INTERNAL_SERVER_ERROR, headers, Json(err))
+        }
     }
 }
 
@@ -235,99 +124,19 @@ pub struct HistoryQuery {
 }
 
 pub async fn get_market_goods_history(
-    State(state): State<Arc<AppState>>, Path(good_id_str): Path<String>, Query(q): Query<HistoryQuery>,
+    State(state): State<Arc<AppState>>, Path(_good_id_str): Path<String>, Query(_q): Query<HistoryQuery>,
 ) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
     let headers = with_epoch_header(HeaderMap::new(), state.epoch);
-    let engine_guard = state.sim_engine.read().await;
-
-    if let Some(engine) = engine_guard.as_ref() {
-        let good_id: GoodId = good_id_str.parse().unwrap_or_else(|_| GoodId::from_slug(&good_id_str));
-        let exchange = &engine.state.financial_system.exchange;
-        let market_id = MarketId::Goods(good_id);
-        
-        let limit = q.limit.unwrap_or(200);
-        let trades = exchange.trade_tape.get(&market_id).cloned().unwrap_or_default()
-            .iter().rev().take(limit).rev()
-            .map(|t| crate::dto::TradeDto {
-                price: t.trade.price,
-                quantity: t.trade.quantity,
-                market_id: market_id.to_string(),
-                buyer_id: t.trade.buyer.to_string(),
-                seller_id: t.trade.seller.to_string(),
-            }).collect();
-
-        let bucket = q.bucket_secs.unwrap_or(0);
-        let core_candles = exchange.calculate_candles(&market_id, bucket, limit);
-        let candles = core_candles.into_iter().map(|c| CandleDto {
-            ts: c.ts, open: c.open, high: c.high, low: c.low, close: c.close,
-            volume: c.volume, vwap: c.vwap, trades_count: Some(c.trades_count),
-        }).collect();
-
-        let dto = crate::dto::MarketHistoryDto {
-            market_id: format!("Goods({good_id})"),
-            good_id: good_id.to_string(),
-            name: exchange.goods_markets.get(&good_id).unwrap().name.to_string(),
-            trades,
-            candles,
-        };
-        (StatusCode::OK, headers, Json(serde_json::to_value(dto).unwrap()))
-    } else {
-        let err = ApiError { code: "NOT_INITIALIZED", message: "Simulation is not initialized." };
-        (StatusCode::CONFLICT, headers, Json(json!({ "error": err })))
-    }
+    let err = ApiError { code: "NOT_IMPLEMENTED_CQRS", message: "Market history query is pending migration to QueryService." };
+    (StatusCode::NOT_IMPLEMENTED, headers, Json(json!({ "error": err })))
 }
 
 pub async fn get_market_financial_overview(
     State(state): State<Arc<AppState>>,
 ) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
     let headers = with_epoch_header(HeaderMap::new(), state.epoch);
-    let engine_guard = state.sim_engine.read().await;
-
-    if let Some(engine) = engine_guard.as_ref() {
-        let exchange = &engine.state.financial_system.exchange;
-        let fs = &engine.state.financial_system;
-
-        let markets = exchange.financial_markets.iter().map(|(instr_id, market)| {
-            let summary = market.summary();
-            let depth = summary.depth;
-
-            let yield_to_maturity = if let FinancialMarketId::Treasury { .. } = instr_id {
-                market.calculate_ytm(fs).or(Some(market.default_yield())).map(|y| y * 100.0)
-            } else { None };
-            let bid_yield = if let FinancialMarketId::Treasury { .. } = instr_id {
-                market.calculate_ytm_with_price(fs, depth.best_bid.unwrap_or(0.0)).or(Some(market.default_yield())).map(|y| y * 100.0)
-            } else { None };
-            let ask_yield = if let FinancialMarketId::Treasury { .. } = instr_id {
-                market.calculate_ytm_with_price(fs, depth.best_ask.unwrap_or(0.0)).or(Some(market.default_yield())).map(|y| y * 100.0)
-            } else { None };
-
-            crate::dto::FinancialMarketSummaryDto {
-                market_id: format!("Financial({})", instr_id),
-                instrument_id: instr_id.to_string(),
-                name: market.name.clone(),
-                best_bid: depth.best_bid,
-                best_bid_yield: bid_yield,
-                best_ask: depth.best_ask,
-                best_ask_yield: ask_yield,
-                spread: summary.spread,
-                mid: summary.mid,
-                last: summary.last_price,
-                depth: crate::dto::DepthDto {
-                    bid_size_at_best: depth.bid_size_at_best,
-                    ask_size_at_best: depth.ask_size_at_best,
-                    bid_levels: depth.bid_levels,
-                    ask_levels: depth.ask_levels,
-                },
-                volume_24h: None, price_change_24h: None, yield_to_maturity, duration: None,
-            }
-        }).collect::<Vec<_>>();
-
-        let page = crate::dto::FinancialMarketsPageDto { markets };
-        (StatusCode::OK, headers, Json(serde_json::to_value(page).unwrap()))
-    } else {
-        let err = ApiError { code: "NOT_INITIALIZED", message: "Simulation is not initialized." };
-        (StatusCode::CONFLICT, headers, Json(serde_json::to_value(json!({ "error": err })).unwrap()))
-    }
+    let err = ApiError { code: "NOT_IMPLEMENTED_CQRS", message: "Financial market overview query is pending migration to QueryService." };
+    (StatusCode::NOT_IMPLEMENTED, headers, Json(json!({ "error": err })))
 }
 
 pub async fn get_market_financial_orderbook(
@@ -335,44 +144,62 @@ pub async fn get_market_financial_orderbook(
     Path(instr_id_str): Path<String>,
 ) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
     let headers = with_epoch_header(HeaderMap::new(), state.epoch);
-    let engine_guard = state.sim_engine.read().await;
+    
+    let fm_id = match FinancialMarketId::from_str(&instr_id_str) {
+        Ok(id) => id,
+        Err(_) => {
+            let err = ApiError { code: "BAD_REQUEST", message: "Invalid financial market id" };
+            return (StatusCode::BAD_REQUEST, headers, Json(json!({ "error": err })));
+        }
+    };
+    let market_id_str = MarketId::Financial(fm_id).to_string();
 
-    if let Some(engine) = engine_guard.as_ref() {
-        let fm_id = match FinancialMarketId::from_str(&instr_id_str) {
-            Ok(id) => id,
-            Err(_) => {
-                let err = ApiError { code: "BAD_REQUEST", message: "Invalid financial market id" };
-                return (StatusCode::BAD_REQUEST, headers, Json(json!({ "error": err })));
+    let query_service = match get_qs(&state).await {
+        Ok(qs) => qs,
+        Err(response) => return response,
+    };
+    
+    match query_service.get_order_book(&market_id_str).await {
+        Ok(Some(record)) => {
+            let bids_res: Result<Vec<Bid>, _> = record.bids.into_iter().map(serde_json::from_value).collect();
+            let asks_res: Result<Vec<Ask>, _> = record.asks.into_iter().map(serde_json::from_value).collect();
+
+            match (bids_res, asks_res) {
+                (Ok(bids_orders), Ok(asks_orders)) => {
+                    let bids_dto: Vec<MarketBidDto> = bids_orders.iter().map(|b| MarketBidDto {
+                        agent_id: b.agent_id.to_string(),
+                        quantity: b.quantity,
+                        price: b.price,
+                    }).collect();
+
+                    let asks_dto: Vec<MarketAskDto> = asks_orders.iter().map(|a| MarketAskDto {
+                        agent_id: a.agent_id.to_string(),
+                        quantity: a.quantity,
+                        price: a.price,
+                    }).collect();
+
+                    let dto = OrderbookDto {
+                        market_id: market_id_str.clone(),
+                        market_name: market_id_str,
+                        bids: bids_dto,
+                        asks: asks_dto,
+                    };
+                    (StatusCode::OK, headers, Json(serde_json::to_value(dto).unwrap()))
+                }
+                _ => {
+                     let err = json!({ "error": "Failed to deserialize order book data from database." });
+                    (StatusCode::INTERNAL_SERVER_ERROR, headers, Json(err))
+                }
             }
-        };
-
-        if let Some(market) = engine.state.financial_system.exchange.financial_markets.get(&fm_id) {
-            let bids = market.order_book.bids.iter().map(|b| crate::dto::MarketBidDto {
-                agent_id: b.agent_id.to_string(),
-                quantity: b.quantity,
-                price: b.price,
-            }).collect::<Vec<_>>();
-
-            let asks = market.order_book.asks.iter().map(|a| crate::dto::MarketAskDto {
-                agent_id: a.agent_id.to_string(),
-                quantity: a.quantity,
-                price: a.price,
-            }).collect::<Vec<_>>();
-
-            let dto = crate::dto::OrderbookDto {
-                market_id: format!("Financial({fm_id})"),
-                market_name: market.name.clone(),
-                bids,
-                asks,
-            };
-            (StatusCode::OK, headers, Json(serde_json::to_value(dto).unwrap()))
-        } else {
-            let err = ApiError { code: "NOT_FOUND", message: "Financial market not found." };
+        }
+        Ok(None) => {
+            let err = ApiError { code: "NOT_FOUND", message: "Order book not found for this market at the latest tick." };
             (StatusCode::NOT_FOUND, headers, Json(json!({ "error": err })))
         }
-    } else {
-        let err = ApiError { code: "NOT_INITIALIZED", message: "Simulation is not initialized." };
-        (StatusCode::CONFLICT, headers, Json(json!({ "error": err })))
+        Err(e) => {
+            let err = json!({ "error": format!("Database error: {}", e) });
+            (StatusCode::INTERNAL_SERVER_ERROR, headers, Json(err))
+        }
     }
 }
 
@@ -385,111 +212,18 @@ pub struct FinHistoryQuery {
 
 pub async fn get_market_financial_history(
     State(state): State<Arc<AppState>>,
-    Path(instr_id_str): Path<String>,
-    Query(q): Query<FinHistoryQuery>,
+    Path(_instr_id_str): Path<String>,
+    Query(_q): Query<FinHistoryQuery>,
 ) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
     let headers = with_epoch_header(HeaderMap::new(), state.epoch);
-    let engine_guard = state.sim_engine.read().await;
-
-    if let Some(engine) = engine_guard.as_ref() {
-        let fm_id = match FinancialMarketId::from_str(&instr_id_str) {
-            Ok(id) => id,
-            Err(_) => {
-                let err = ApiError { code: "BAD_REQUEST", message: "Invalid financial market id" };
-                return (StatusCode::BAD_REQUEST, headers, Json(json!({ "error": err })));
-            }
-        };
-
-        let exchange = &engine.state.financial_system.exchange;
-        let market_id = MarketId::Financial(fm_id.clone());
-
-        let limit = q.limit.unwrap_or(200);
-        let trades = exchange.trade_tape.get(&market_id).cloned().unwrap_or_default()
-            .iter().rev().take(limit).rev()
-            .map(|t| crate::dto::TradeDto {
-                market_id: market_id.to_string(), price: t.trade.price, quantity: t.trade.quantity,
-                buyer_id: t.trade.buyer.to_string(), seller_id: t.trade.seller.to_string(),
-            }).collect();
-        
-        let bucket = q.bucket_secs.unwrap_or(0);
-        let core_candles = exchange.calculate_candles(&market_id, bucket, limit);
-        let candles = core_candles.into_iter().map(|c| CandleDto {
-            ts: c.ts, open: c.open, high: c.high, low: c.low, close: c.close,
-            volume: c.volume, vwap: c.vwap, trades_count: Some(c.trades_count),
-        }).collect();
-        
-        let name = exchange.financial_markets.get(&fm_id)
-            .map(|m| m.name.clone())
-            .unwrap_or_else(|| fm_id.to_string());
-
-        let dto = crate::dto::MarketHistoryDto {
-            market_id: format!("Financial({fm_id})"),
-            good_id: fm_id.to_string(), name, trades, candles,
-        };
-
-        (StatusCode::OK, headers, Json(serde_json::to_value(dto).unwrap()))
-    } else {
-        let err = ApiError { code: "NOT_INITIALIZED", message: "Simulation is not initialized." };
-        (StatusCode::CONFLICT, headers, Json(json!({ "error": err })))
-    }
+    let err = ApiError { code: "NOT_IMPLEMENTED_CQRS", message: "Market history query is pending migration to QueryService." };
+    (StatusCode::NOT_IMPLEMENTED, headers, Json(json!({ "error": err })))
 }
 
 pub async fn get_market_labour_overview(
     State(state): State<Arc<AppState>>,
 ) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
     let headers = with_epoch_header(HeaderMap::new(), state.epoch);
-    let engine_guard = state.sim_engine.read().await;
-
-    if let Some(engine) = engine_guard.as_ref() {
-        let exchange = &engine.state.financial_system.exchange;
-        let markets = exchange.labour_markets.iter().map(|(id, market)| {
-            LabourMarketSummaryDto {
-                market_id: id.to_string(),
-                name: market.name.clone(),
-                job_applications: market.job_applications.iter().map(|app| {
-                    JobApplicationDto {
-                        application_id: app.application_id.to_string(),
-                        consumer_id: app.consumer_id.to_string(),
-                        reservation_wage: app.reservation_wage,
-                        hours_desired: app.hours_desired,
-                    }
-                }).collect(),
-                job_offers: market.job_offers.iter().map(|offer| {
-                    JobOfferDto {
-                        offer_id: offer.offer_id.to_string(),
-                        firm_id: offer.firm_id.to_string(),
-                        wage_rate: offer.wage_rate,
-                        hours_required: offer.hours_required,
-                        quantity: offer.quantity,
-                    }
-                }).collect(),
-            }
-        }).collect::<Vec<_>>();
-
-        let page = LabourMarketPageDto { markets };
-        (StatusCode::OK, headers, Json(serde_json::to_value(page).unwrap()))
-    } else {
-        let err = ApiError { code: "NOT_INITIALIZED", message: "Simulation is not initialized." };
-        (StatusCode::CONFLICT, headers, Json(json!({ "error": err })))
-    }
-}
-
-pub async fn get_goods_id_map(
-    State(state): State<Arc<AppState>>,
-) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
-    let headers = with_epoch_header(HeaderMap::new(), state.epoch);
-    let engine_guard = state.sim_engine.read().await;
-    let mut map_items: Vec<(String, &str)> = Vec::new();
-
-    if let Some(engine) = engine_guard.as_ref() {
-
-        let _ = engine.state.financial_system.goods.goods.iter()
-            .map(|(id, good)| { 
-                map_items.push((id.to_string(), good.name.as_str()));
-            });
-        (StatusCode::OK, headers, Json(serde_json::to_value(map_items).unwrap()))
-    } else {
-        let err = ApiError { code: "NOT_INITIALIZED", message: "Simulation is not initialized." };
-        (StatusCode::CONFLICT, headers, Json(json!({ "error": err })))
-    }
+    let err = ApiError { code: "NOT_IMPLEMENTED_CQRS", message: "Labour market overview query is pending migration to QueryService." };
+    (StatusCode::NOT_IMPLEMENTED, headers, Json(json!({ "error": err })))
 }

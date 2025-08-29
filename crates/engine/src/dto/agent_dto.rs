@@ -1,5 +1,5 @@
 use serde::Serialize;
-
+use sim_core::prelude::*;
 #[derive(Serialize, Clone)]
 pub struct AgentCounts {
     pub banks: usize,
@@ -14,7 +14,6 @@ pub struct ProductionMetrics {
     pub industrial_production: f64,
     pub manufacturing_pmi: Option<f64>,
     pub services_pmi: Option<f64>,
-    pub housing_starts: f64,
     pub building_permits: Option<f64>,
     pub existing_home_sales: Option<f64>,
     pub new_home_sales: Option<f64>,
@@ -37,7 +36,7 @@ pub struct AgentSummaryDto {
     pub name: String,
     pub agent_type: String,
     pub decision_model: String,
-    pub balance_sheet: BalanceSheetSummary,
+    pub balance_sheet: BalanceSheet,
 }
 
 #[derive(Serialize, Clone)]

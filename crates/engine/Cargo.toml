@@ -23,10 +23,9 @@ uuid = { workspace = true }
 rand = { workspace = true }
 toml = { workspace = true }
 thiserror = { workspace = true }
-crossbeam-channel = { workspace = true }
-fake = { workspace = true }
 typetag = { workspace = true }
 serde_with = { workspace = true }
+once_cell = { workspace = true }
 rand_chacha = "0.9.0"
 rand_core = "0.9.3"
 inventory = "0.3"
@@ -34,3 +33,4 @@ tokio-util = "0.7.16"
 anyhow = "1.0.98"
 surrealdb = "2.3.7"
 ordered-float = "5.0.0"
+petgraph = { workspace = true }

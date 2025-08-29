@@ -11,6 +11,8 @@ pub struct MonetaryStats {
     pub monetary_base: f64,
     pub currency_in_circulation: f64,
     pub bank_reserves: f64,
+    pub bank_credit: f64,
+    pub bank_liabilities: f64,
 }
 
 #[derive(Serialize, Clone)]
@@ -81,12 +83,9 @@ pub struct CoreStats {
 
     pub capacity_utilization: f64,
     pub industrial_production: f64,
-    pub housing_starts: f64,
 
     pub retail_sales: f64,
     pub consumer_spending: f64,
-
-    pub trade_balance: f64,
 
     pub credit_growth: f64,
     pub household_debt: f64,

@@ -1,9 +1,9 @@
-use std::collections::HashMap;
-use crate::*;
 use super::*;
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+use crate::*;
 use ordered_float::NotNan;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct MarketTick {
@@ -34,14 +34,24 @@ pub struct MarketView {
 }
 
 impl MarketView {
-    pub fn last_or_mid(&self) -> Option<f64> { self.last.or(self.mid) }
+    pub fn last_or_mid(&self) -> Option<f64> {
+        self.last.or(self.mid)
+    }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MarketSnapshot {
     pub best_bid: Option<f64>,
     pub best_ask: Option<f64>,
+    pub mid_price: Option<f64>,
+    pub last_price: Option<f64>,
     pub spread: Option<f64>,
+    pub volume_24h: f64,
+    pub depth: MarketDepthSummary,
+    pub best_bid_yield: Option<f64>,
+    pub best_ask_yield: Option<f64>,
+    pub mid_yield: Option<f64>,
+    pub last_yield: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -50,7 +60,7 @@ pub struct TimedTrade {
     pub trade: Trade,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct MarketDepthSummary {
     pub best_bid: Option<f64>,
     pub best_ask: Option<f64>,
@@ -91,8 +101,6 @@ pub struct Candle {
     pub trades_count: u32,
 }
 
-
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GoodsMarket {
     pub good_id: GoodId,
@@ -101,9 +109,15 @@ pub struct GoodsMarket {
 }
 
 impl GoodsMarket {
-    pub fn new(good_id: GoodId, name: String) -> Self { Self { good_id, name, order_book: OrderBook::new() } }
-    pub fn best_ask(&self) -> Option<&Ask> { self.order_book.best_ask() }
-    pub fn current_price(&self) -> Option<f64> { self.order_book.representative_price() }
+    pub fn new(good_id: GoodId, name: String) -> Self {
+        Self { good_id, name, order_book: OrderBook::new() }
+    }
+    pub fn best_ask(&self) -> Option<&Ask> {
+        self.order_book.best_ask()
+    }
+    pub fn current_price(&self) -> Option<f64> {
+        self.order_book.representative_price()
+    }
 }
 
 impl MarketSnapshotProvider for GoodsMarket {
@@ -111,7 +125,15 @@ impl MarketSnapshotProvider for GoodsMarket {
         MarketSnapshot {
             best_bid: self.order_book.best_bid().map(|b| b.price),
             best_ask: self.order_book.best_ask().map(|a| a.price),
+            mid_price: self.order_book.mid_price(),
+            last_price: self.current_price(),
             spread: self.order_book.spread(),
+            volume_24h: 0.0,
+            depth: self.order_book.depth_summary(),
+            best_ask_yield: None,
+            best_bid_yield: None,
+            mid_yield: None,
+            last_yield: None,
         }
     }
 }
@@ -127,7 +149,6 @@ impl MarketSummaryProvider for GoodsMarket {
     }
 }
 
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FinancialMarket {
     pub market_id: FinancialMarketId,
@@ -136,19 +157,30 @@ pub struct FinancialMarket {
 }
 
 impl FinancialMarket {
-    pub fn new(market_id: FinancialMarketId, name: String) -> Self { Self { market_id, name, order_book: OrderBook::new() } }
-    pub fn current_price(&self) -> f64 { self.order_book.representative_price().unwrap_or(100.0) }
+    pub fn new(market_id: FinancialMarketId, name: String) -> Self {
+        Self { market_id, name, order_book: OrderBook::new() }
+    }
+    pub fn current_price(&self) -> f64 {
+        self.order_book.representative_price().unwrap_or(100.0)
+    }
     pub fn last_or_mid(&self) -> Option<f64> {
-        self.order_book.mid_price()
+        self.order_book
+            .mid_price()
             .or_else(|| self.order_book.best_bid().map(|b| b.price))
             .or_else(|| self.order_book.best_ask().map(|a| a.price))
     }
-    pub fn best_ask(&self) -> Option<f64> { self.order_book.best_ask().map(|a| a.price) }
-    pub fn best_bid(&self) -> Option<f64> { self.order_book.best_bid().map(|b| b.price) }
+    pub fn best_ask(&self) -> Option<f64> {
+        self.order_book.best_ask().map(|a| a.price)
+    }
+    pub fn best_bid(&self) -> Option<f64> {
+        self.order_book.best_bid().map(|b| b.price)
+    }
     pub fn spread_bps(&self) -> f64 {
         if let Some(spread) = self.order_book.spread() {
             if let Some(mid) = self.order_book.mid_price() {
-                if mid > 0.0 { return (spread / mid) * 10000.0; }
+                if mid > 0.0 {
+                    return (spread / mid) * 10000.0;
+                }
             }
             spread * 100.0
         } else {
@@ -186,12 +218,99 @@ impl FinancialMarket {
     pub fn default_yield(&self) -> f64 {
         if let FinancialMarketId::Treasury { tenor } = &self.market_id {
             match tenor {
-                Tenor::T2Y => 0.025, Tenor::T5Y => 0.030,
-                Tenor::T10Y => 0.035, Tenor::T30Y => 0.040,
+                Tenor::T1M => 0.021,
+                Tenor::T2M => 0.022,
+                Tenor::T3M => 0.022,
+                Tenor::T6M => 0.022,
+                Tenor::T1Y => 0.023,
+                Tenor::T2Y => 0.025,
+                Tenor::T5Y => 0.030,
+                Tenor::T10Y => 0.035,
+                Tenor::T30Y => 0.040,
             }
         } else {
             0.0
         }
+    }
+    pub fn snapshot_with_instruments(
+        &self, instruments: &HashMap<InstrumentId, FinancialInstrument>,
+    ) -> MarketSnapshot {
+        let (best_bid_yield, best_ask_yield, mid_yield, last_yield) = match &self.market_id {
+            FinancialMarketId::FederalFundsOvernight | FinancialMarketId::TreasuryRepoOvernight => {
+                let calc_rate = |price: Option<f64>| -> Option<f64> {
+                    price.map(|p| {
+                        let daily_rate = self.market_id.price_to_daily_rate(p);
+                        bps_to_decimal(self.market_id.daily_rate_to_annual_bps(daily_rate))
+                    })
+                };
+                (
+                    calc_rate(self.best_bid()),
+                    calc_rate(self.best_ask()),
+                    calc_rate(self.order_book.mid_price()),
+                    calc_rate(Some(self.current_price())),
+                )
+            }
+            FinancialMarketId::Treasury { .. } => {
+                let calc_ytm = |price: Option<f64>| -> Option<f64> {
+                    price.and_then(|p| self.calculate_ytm_with_price_and_instruments(instruments, p))
+                };
+                (
+                    calc_ytm(self.best_bid()),
+                    calc_ytm(self.best_ask()),
+                    calc_ytm(self.order_book.mid_price()),
+                    calc_ytm(Some(self.current_price())),
+                )
+            }
+            _ => (None, None, None, None),
+        };
+
+        MarketSnapshot {
+            best_bid: self.order_book.best_bid().map(|b| b.price),
+            best_ask: self.order_book.best_ask().map(|a| a.price),
+            mid_price: self.order_book.mid_price(),
+            last_price: Some(self.current_price()),
+            spread: self.order_book.spread(),
+            volume_24h: 0.0, // This is updated later in clear_markets
+            depth: self.order_book.depth_summary(),
+            best_bid_yield,
+            best_ask_yield,
+            mid_yield,
+            last_yield,
+        }
+    }
+
+    pub fn calculate_ytm_with_instruments(
+        &self, instruments: &HashMap<InstrumentId, FinancialInstrument>,
+    ) -> Option<f64> {
+        if let FinancialMarketId::Treasury { tenor } = &self.market_id {
+            if let Some(bond_details) = Exchange::get_treasury_bond_details_from_instruments(instruments, tenor) {
+                return Some(pricing::ytm_bond(
+                    self.current_price(),
+                    bond_details.face_value,
+                    bond_details.coupon_rate_bps / 10000.0,
+                    tenor.to_years(),
+                    bond_details.frequency,
+                ));
+            }
+        }
+        None
+    }
+
+    pub fn calculate_ytm_with_price_and_instruments(
+        &self, instruments: &HashMap<InstrumentId, FinancialInstrument>, price: f64,
+    ) -> Option<f64> {
+        if let FinancialMarketId::Treasury { tenor } = &self.market_id {
+            if let Some(bond_details) = Exchange::get_treasury_bond_details_from_instruments(instruments, tenor) {
+                return Some(pricing::ytm_bond(
+                    price,
+                    bond_details.face_value,
+                    bond_details.coupon_rate_bps / 10000.0,
+                    tenor.to_years(),
+                    bond_details.frequency,
+                ));
+            }
+        }
+        None
     }
 }
 
@@ -200,7 +319,15 @@ impl MarketSnapshotProvider for FinancialMarket {
         MarketSnapshot {
             best_bid: self.order_book.best_bid().map(|b| b.price),
             best_ask: self.order_book.best_ask().map(|a| a.price),
+            mid_price: self.order_book.mid_price(),
+            last_price: Some(self.current_price()),
             spread: self.order_book.spread(),
+            volume_24h: 0.0,
+            depth: self.order_book.depth_summary(),
+            best_bid_yield: None,
+            best_ask_yield: None,
+            mid_yield: None,
+            last_yield: None,
         }
     }
 }
@@ -215,7 +342,6 @@ impl MarketSummaryProvider for FinancialMarket {
         }
     }
 }
-
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct JobOffer {
@@ -245,7 +371,8 @@ pub struct LabourMarket {
 impl LabourMarket {
     pub fn clear_and_match(&mut self, state: &SimState) -> Vec<StateEffect> {
         let mut effects = Vec::new();
-        self.job_applications.sort_by(|a, b| a.reservation_wage.partial_cmp(&b.reservation_wage).unwrap_or(std::cmp::Ordering::Equal));
+        self.job_applications
+            .sort_by(|a, b| a.reservation_wage.partial_cmp(&b.reservation_wage).unwrap_or(std::cmp::Ordering::Equal));
         self.job_offers.sort_by(|a, b| b.wage_rate.partial_cmp(&a.wage_rate).unwrap_or(std::cmp::Ordering::Equal));
 
         let mut filled_application_ids = Vec::new();

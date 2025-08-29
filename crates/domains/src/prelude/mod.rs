@@ -1,4 +1,4 @@
-
+#![doc(hidden)]
 pub use crate::{Domain, DomainResult, DomainValidator, DomainRegistration};
 
 pub use crate::{ResolutionContext, ResolutionResult, ResolutionPhase};

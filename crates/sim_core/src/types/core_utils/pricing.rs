@@ -145,14 +145,3 @@ pub fn years_to_maturity(current_date: chrono::NaiveDate, maturity_date: chrono:
         days_diff as f64 / 365.25
     }
 }
-
-#[deprecated(note = "Use ytm_bond or ytm_approximation instead")]
-pub fn ytm(c: f64, pv: f64, fv: f64, n: u32) -> f64 {
-    if n == 0 {
-        return 0.0;
-    }
-    
-    let coupon_rate = c / 100.0;
-    let years = n as f64;
-    ytm_approximation(pv, fv, coupon_rate, years)
-}

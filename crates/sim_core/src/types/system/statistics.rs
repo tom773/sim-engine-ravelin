@@ -3,7 +3,7 @@ use crate::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct OvernightRates {
     pub effr: Option<f64>,
     pub sofr: Option<f64>,
@@ -23,8 +23,6 @@ pub struct CoreEconomicStats {
     pub job_openings: f64,
     pub capacity_utilization: f64,
     pub industrial_production: f64,
-    pub housing_starts: f64,
-    pub trade_balance: f64,
     pub credit_growth: f64,
     pub household_debt: f64,
     pub corporate_debt: f64,
@@ -82,7 +80,6 @@ impl FinancialStatistics for FinancialSystem {
                 .map(|inst| inst.principal).sum::<f64>()
         }).sum()
     }
-
     fn currency_in_circulation(&self, cb_id: AgentId) -> f64 {
         self.balance_sheets.get(&cb_id).map_or(0.0, |bs| {
             bs.liabilities.values()
