@@ -1,0 +1,199 @@
+use crate::prelude::*;
+use crate::types::money::Money;
+use super::*;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Bank {
+    pub id: AgentId,
+    pub name: String,
+    pub lending_spread_bps: BasisPoints,
+    pub deposit_spread_bps: BasisPoints,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ConsumerPreferences {
+    pub alpha_consumption: f64,
+    pub alpha_leisure: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ConsumerExpectations {
+    pub expected_inflation: f64,
+    pub expected_wage_growth: f64,
+    pub expected_job_finding_rate: f64,
+}
+
+impl Default for ConsumerExpectations {
+    fn default() -> Self {
+        Self {
+            expected_inflation: 0.02,
+            expected_wage_growth: 0.03,
+            expected_job_finding_rate: 0.8,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Consumer {
+    pub id: AgentId,
+    pub age: u32,
+    pub bank_id: AgentId,
+    pub income: f64,
+    pub personality: PersonalityArchetype,
+    pub preferences: ConsumerPreferences,
+    pub expectations: ConsumerExpectations,
+    pub employed_by: Option<AgentId>,
+    pub hours_worked: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EmploymentContract {
+    pub employee_id: AgentId,
+    pub wage_rate: f64,
+    pub hours: f64,
+    pub start_date: chrono::NaiveDate,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Firm {
+    pub id: AgentId,
+    pub bank_id: AgentId,
+    pub name: String,
+    pub employees: HashMap<AgentId, EmploymentContract>,
+    pub wage_rate: f64,
+    pub productivity: f64,
+    pub recipe: Option<RecipeId>,
+    pub capital_stock: f64,
+    pub desired_markup: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Government {
+    pub id: AgentId,
+    pub tax_rates: TaxRates,
+    pub spending_targets: SpendingTargets,
+    pub debt_ceiling: Option<Money>,
+    pub fiscal_policy: FiscalPolicy,
+}
+
+impl Bank {
+    pub fn new(name: String, lending_spread_bps: BasisPoints, deposit_spread_bps: BasisPoints) -> Self {
+        Self { 
+            id: AgentId(uuid::Uuid::new_v4()), 
+            name, 
+            lending_spread_bps,
+            deposit_spread_bps, 
+        }
+    }
+}
+
+impl Consumer {
+
+    pub fn new(age: u32, bank_id: AgentId, personality: PersonalityArchetype) -> Self {
+        Self {
+            id: AgentId(uuid::Uuid::new_v4()),
+            age,
+            bank_id,
+            income: 0.0,
+            personality,
+
+            preferences: ConsumerPreferences { alpha_consumption: 0.5, alpha_leisure: 0.5 },
+            expectations: ConsumerExpectations::default(),
+            employed_by: None,
+            hours_worked: 0.0,
+        }
+    }
+    pub fn update_employment(&mut self, firm_id: Option<AgentId>, hours_worked: f64) {
+        if firm_id.is_none() {
+            self.employed_by = None;
+            self.hours_worked = 0.0;
+            return;
+        }
+        self.employed_by = firm_id;
+        self.hours_worked = hours_worked;
+    }
+}
+
+impl Firm {
+
+    pub fn new(bank_id: AgentId, name: String, recipe: Option<RecipeId>, wage_rate: f64) -> Self {
+        Self {
+            id: AgentId(uuid::Uuid::new_v4()),
+            bank_id,
+            name,
+            employees: HashMap::new(),
+            wage_rate,
+            productivity: 1.0,
+            recipe,
+            capital_stock: 10000.0,
+            desired_markup: 0.20,
+        }
+    }
+    pub fn get_employees(&self) -> Vec<AgentId> {
+        self.employees.keys().cloned().collect()
+    }
+    pub fn calculate_profits(&self, revenues: f64, costs: f64) -> FirmProfits {
+        let gross_profit = revenues - costs;
+        let tax_liability = gross_profit * 0.21;
+        let net_profit = gross_profit - tax_liability;
+        
+        FirmProfits {
+            gross: gross_profit,
+            tax: tax_liability,
+            net: net_profit,
+            retained_earnings_ratio: 0.6,
+        }
+    }
+    pub fn add_employee(&mut self, contract: EmploymentContract) {
+        self.employees.insert(contract.employee_id, contract);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FirmProfits {
+    pub gross: f64,
+    pub tax: f64,
+    pub net: f64,
+    pub retained_earnings_ratio: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CentralBank {
+    pub id: AgentId,
+    pub policy_rate_bps: BasisPoints,
+    pub reserve_requirement: f64,
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum PersonalityArchetype {
+    Balanced,
+    Spender,
+    Saver,
+}
+
+impl Government {
+    pub fn new(tax_rates: TaxRates, spending_targets: SpendingTargets, fiscal_policy: FiscalPolicy) -> Self {
+        Self {
+            id: AgentId(uuid::Uuid::new_v4()),
+            tax_rates,
+            spending_targets,
+            debt_ceiling: None,
+            fiscal_policy,
+        }
+    }
+    pub fn get_id(&self) -> &AgentId {
+        &self.id
+    }
+}
+impl Default for Government {
+    fn default() -> Self {
+        Self {
+            id: AgentId(uuid::Uuid::new_v4()),
+            tax_rates: TaxRates::default(),
+            spending_targets: SpendingTargets::default(),
+            debt_ceiling: None,
+            fiscal_policy: FiscalPolicy::default(),
+        }
+    }
+}
