@@ -1,4 +1,7 @@
-use crate::{Any, Domain, DomainResult, inventory};
+use crate::{
+    Any, Domain, DomainResult, inventory,
+    banking::BankingDomain 
+};
 use serde::{Deserialize, Serialize};
 use sim_core::*;
 use rust_decimal::prelude::*;
@@ -173,16 +176,14 @@ impl SettlementDomain {
                             return DomainResult::empty();
                         }
 
-                        let effects = vec![
-                            StateEffect::Financial(FinancialEffect::TransferFunds { 
-                                from: debtor, 
-                                to: creditor, 
-                                amount: interest_amount.to_f64(),
-                                context: "InterestPayment".to_string() 
-                            })
-                        ];
-                        
-                        return DomainResult::success(effects);
+                        let banking_domain = BankingDomain::new();
+                        return banking_domain.execute_initiate_payment(
+                            debtor,
+                            creditor,
+                            interest_amount.to_f64(),
+                            TransactionContext::GenericTransfer,
+                            state,
+                        );
                     }
                 }
                 _ => return DomainResult::failure(vec!["PayInterest is typically for deposits/loans, not other instruments.".to_string()])
@@ -220,9 +221,16 @@ impl SettlementDomain {
                     if total_payment <= Money::from_f64(1e-9).unwrap_or_default() {
                         return DomainResult::empty();
                     }
+                    
+                    let banking_domain = BankingDomain::new();
+                    return banking_domain.execute_initiate_payment(
+                        debtor,
+                        creditor,
+                        total_payment.to_f64(),
+                        TransactionContext::CouponPayment { instrument_id: *instrument_id },
+                        state,
+                    );
 
-                    let effects = self.create_payment_effects(debtor, creditor, total_payment.to_f64());
-                    return DomainResult::success(effects);
                 } else {
                      return DomainResult::failure(vec!["Parties not found for bond.".to_string()]);
                 }
@@ -238,17 +246,6 @@ impl SettlementDomain {
     fn get_coupon_payment_amount(&self, details: &BondDetails) -> Money {
         if details.frequency == 0 { return Money::ZERO; }
         details.face_value * bps_to_decimal(details.coupon_rate_bps) / Decimal::from(details.frequency)
-    }
-
-    fn create_payment_effects(&self, from: AgentId, to: AgentId, amount: f64) -> Vec<StateEffect> {
-        vec![
-            StateEffect::Financial(FinancialEffect::TransferFunds {
-                from,
-                to,
-                amount,
-                context: "CouponPayment".to_string(),
-            }),
-        ]
     }
 }
 

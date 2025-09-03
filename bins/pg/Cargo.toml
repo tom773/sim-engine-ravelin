@@ -1,0 +1,14 @@
+[package]
+name = "pg"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+sim_core = { workspace = true }
+domains = { workspace = true }
+engine_v3 = { workspace = true }
+
+uuid = { workspace = true }
+chrono = { workspace = true }
+rust_decimal = { workspace = true }
+rust_decimal_macros = { workspace = true }

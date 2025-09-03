@@ -6,9 +6,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 use rust_decimal::prelude::*;
 
-// Helper for labour market identification.
 fn find_general_labour_market(state: &SimState) -> Option<LabourMarketId> {
-    // In a simple simulation, we might just take the first available labour market.
     state.financial_system.exchange.labour_markets.keys().next().cloned()
 }
 
@@ -16,13 +14,11 @@ fn find_general_labour_market(state: &SimState) -> Option<LabourMarketId> {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SimpleConsumerDecisionModel {
     pub mpc: f64,
-    // Configured with GoodIds instead of relying on static slug lookup which is removed.
-    pub consumption_basket: HashMap<GoodId, f64>, // GoodId -> Budget Share
+    pub consumption_basket: HashMap<GoodId, f64>,
 }
 
 impl Default for SimpleConsumerDecisionModel {
     fn default() -> Self {
-        // Default is empty; must be configured by the scenario setup as we cannot access GoodsRegistry here.
         Self { mpc: 0.7, consumption_basket: HashMap::new() }
     }
 }
@@ -41,9 +37,7 @@ impl DecisionModel for SimpleConsumerDecisionModel {
         self.handle_employment(consumer, state, &mut intentions);
 
         let fs = &state.financial_system;
-        // Simplified income calculation (assuming income is annual).
         let weekly_income = consumer.income / 52.0;
-        // Liquid assets are primarily Demand Deposits.
         let liquid_assets = fs.get_liquid_assets(&consumer.id);
         let total_resources = weekly_income + liquid_assets;
         
@@ -56,12 +50,7 @@ impl DecisionModel for SimpleConsumerDecisionModel {
 
         self.make_purchases(consumer, budget, &mut intentions);
 
-        // Deposit savings if the consumer holds physical cash they wish to deposit.
-        // This action is likely to fail execution due to sim_core limitations (Partial Transfers).
         if save_amount > 1.0 {
-            // We only attempt deposit if the consumer actually has physical cash (Currency) to deposit.
-            // In many models, income is received directly as deposits, so explicit deposit action might be unnecessary unless modeling physical cash economy.
-            // Assuming income is received as deposits, we skip explicit deposit intention.
         }
 
         intentions
@@ -72,10 +61,9 @@ impl SimpleConsumerDecisionModel {
     fn handle_employment(&self, consumer: &Consumer, state: &SimState, intentions: &mut Vec<SimIntention>) {
         if consumer.employed_by.is_none() {
             
-            // Find the labour market to apply to.
             let market_id = match find_general_labour_market(state) {
                 Some(id) => id,
-                None => return, // Cannot apply if no labour market exists.
+                None => return,
             };
 
             let expected_hourly_wage = match consumer.personality {
@@ -100,7 +88,6 @@ impl SimpleConsumerDecisionModel {
     }
 
     fn make_purchases(&self, consumer: &Consumer, budget: f64, intentions: &mut Vec<SimIntention>) {
-        // Use the configured consumption basket.
         for (good_id, budget_share) in &self.consumption_basket {
             let allocation = budget * budget_share;
             
@@ -124,7 +111,6 @@ pub struct CESConsumerDecisionModel {
 
 impl Default for CESConsumerDecisionModel {
     fn default() -> Self {
-        // Default is empty; must be configured by the scenario setup.
         Self {
             sigma: 1.5,
             weights: HashMap::new(),
@@ -146,7 +132,6 @@ impl DecisionModel for CESConsumerDecisionModel {
 
         self.handle_employment(consumer, state, &mut intentions);
 
-        // Intertemporal consumption choice based on real interest rate.
         let nominal_rate_bps = state.financial_system.central_bank.policy_rate_bps;
         let nominal_rate = bps_to_decimal(nominal_rate_bps);
         let expected_inflation = consumer.expectations.expected_inflation;
@@ -167,7 +152,6 @@ impl DecisionModel for CESConsumerDecisionModel {
             return intentions;
         }
 
-        // Intra-period consumption choice (CES optimization).
         let market_data = self.collect_market_data(state);
         if !market_data.is_empty() {
             self.optimize_ces_consumption(consumer, budget, &market_data, &mut intentions);
@@ -180,11 +164,9 @@ impl DecisionModel for CESConsumerDecisionModel {
 }
 
 impl CESConsumerDecisionModel {
-    // Uses the shared helper for labour market ID.
     fn handle_employment(&self, consumer: &Consumer, state: &SimState, intentions: &mut Vec<SimIntention>) {
         if consumer.employed_by.is_none() {
             
-            // Find the labour market.
             let market_id = match find_general_labour_market(state) {
                 Some(id) => id,
                 None => return,
@@ -215,7 +197,6 @@ impl CESConsumerDecisionModel {
         let mut market_data = Vec::new();
 
         for (good_id, weight) in &self.weights {
-            // Access goods market view via the state analytics trait.
             if let Some(view) = state.market_view(&MarketId::Goods(*good_id)) {
                 if let Some(price) = view.last_or_mid() {
                     if price > 1e-6 {
@@ -258,9 +239,7 @@ impl CESConsumerDecisionModel {
     }
 
     fn handle_savings(&self, _consumer: &Consumer, save_amount: f64, _intentions: &mut Vec<SimIntention>) {
-        // Similar to SimpleConsumerDecisionModel, explicit deposit might be unnecessary or fail.
         if save_amount > 1.0 {
-            // If we wanted to model investment decisions (e.g., buying bonds instead of saving), it would happen here.
         }
     }
 }

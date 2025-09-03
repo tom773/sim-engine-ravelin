@@ -28,7 +28,7 @@ pub struct ConsumerExpectations {
 impl Default for ConsumerExpectations {
     fn default() -> Self {
         Self {
-            expected_inflation: 0.02, // Initial assumption
+            expected_inflation: 0.02,
             expected_wage_growth: 0.03,
             expected_job_finding_rate: 0.8,
         }
@@ -43,7 +43,7 @@ pub struct Consumer {
     pub income: f64,
     pub personality: PersonalityArchetype,
     pub preferences: ConsumerPreferences,
-    pub expectations: ConsumerExpectations, // Added field
+    pub expectations: ConsumerExpectations,
     pub employed_by: Option<AgentId>,
     pub hours_worked: f64,
 }
@@ -74,7 +74,7 @@ pub struct Government {
     pub id: AgentId,
     pub tax_rates: TaxRates,
     pub spending_targets: SpendingTargets,
-    pub debt_ceiling: Option<Money>, // Changed from f64 to Money
+    pub debt_ceiling: Option<Money>,
     pub fiscal_policy: FiscalPolicy,
 }
 

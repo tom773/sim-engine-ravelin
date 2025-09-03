@@ -5,13 +5,25 @@ use uuid::Uuid;
 use typetag::serde;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ActionContext {
+    pub action_instance_id: Uuid,
+    pub action_name: String,
+    pub agent_id: AgentId,
+    pub tick: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum SimEvent {
     MatchedTrade(MatchedTradeEvent),
     CashFlow(CashFlowEvent),
     InstrumentLifecycle(InstrumentLifecycleEvent),
     TransactionRecord(Transaction),
-    BalanceSheetUpdate(BalanceSheetUpdateEvent)
+    BalanceSheetUpdate(BalanceSheetUpdateEvent),
+    FinancialTransaction {
+        context: ActionContext,
+        effects: Vec<FinancialEffect>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

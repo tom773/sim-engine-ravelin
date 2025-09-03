@@ -70,11 +70,11 @@ fn handle_funding(
             return;
         }
 
-        let deficit = (min_balance_threshold - current_balance).max(0.0) + 500_000.0; // Raise enough to cover deficit and have a buffer
+        let deficit = (min_balance_threshold - current_balance).max(0.0) + 500_000.0;
         let current_date = state.current_date;
 
         let maturity_date = TimePeriod::Years(5).add_to_date(current_date);
-        let coupon_rate = fs.central_bank.policy_rate_bps; // Coupon based on policy rate
+        let coupon_rate = fs.central_bank.policy_rate_bps;
         const FACE_VALUE: f64 = 1000.0;
         
         let quantity_to_issue = (deficit / FACE_VALUE).ceil() as u32;

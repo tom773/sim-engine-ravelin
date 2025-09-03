@@ -1,28 +1,18 @@
-// crates/sim_core/src/types/analytics.rs
-
 use crate::prelude::*;
 use std::collections::{HashMap, HashSet};
 
-/// Defines a set of functions for calculating high-level economic statistics from the simulation state.
-/// This trait keeps the core SimState struct clean by separating data from complex calculations.
 pub trait EconomicAnalytics {
-    /// Calculates a core set of economic statistics used by other, higher-level calculations.
     fn calculate_core_stats(&self) -> CoreEconomicStats;
 
-    /// Generates a comprehensive snapshot of macroeconomic indicators for the current tick.
     fn macro_stats(&self) -> MacroStats;
 
-    /// Calculates a view of a specific market's recent performance.
     fn market_view(&self, market_id: &MarketId) -> Option<MarketView>;
 
-    /// Calculates the current Consumer Price Index (CPI) and inflation rate.
     fn cpi_view(&self) -> InflationView;
 
-    /// Generates market views for all markets present in the simulation history.
     fn all_market_views(&self) -> HashMap<String, MarketView>;
 }
 
-/// A struct to hold intermediate economic calculations.
 #[derive(Clone, Debug, Default)]
 pub struct CoreEconomicStats {
     pub gdp: f64,
@@ -106,21 +96,7 @@ impl EconomicAnalytics for SimState {
     fn cpi_view(&self) -> InflationView {
         let total_weight = 0.0;
         
-        // This assumes a `goods` catalog exists on the financial system.
-        // If not, you may need to adjust where goods are stored.
-        // for (good_id, good) in &self.financial_system.goods.goods {
-        //     if good.cpi_weight > 0.0 {
-        //         let market_id = MarketId::Goods(*good_id);
-        //         if let Some(market_view) = self.market_view(&market_id) {
-        //             if let Some(price) = market_view.ma_20.or(market_view.last_or_mid()) {
-        //                 current_cpi += price * good.cpi_weight;
-        //                 total_weight += good.cpi_weight;
-        //             }
-        //         }
-        //     }
-        // }
         
-        // Placeholder until goods catalog is confirmed
         let mut current_cpi = 100.0;
 
         if total_weight > 0.0 && (total_weight < 0.99 || total_weight > 1.01) {
@@ -177,7 +153,6 @@ impl EconomicAnalytics for SimState {
             household_debt: core_stats.household_debt,
             corporate_debt: core_stats.corporate_debt,
             government_debt: core_stats.government_debt,
-            // overnight_rates: self.financial_system.calculate_overnight_rates(), // This needs to be implemented
             overnight_rates: Default::default(),
             bank_credit: self.financial_system.all_bank_assets(&banks_map),
             bank_liabilities: self.financial_system.all_bank_deposits(&banks_map),
@@ -217,24 +192,14 @@ impl EconomicAnalytics for SimState {
 
         let employed_count: usize = self.agents.firms.values().map(|f| f.employees.len()).sum();
         
-        // NOTE: The structure for job applications needs to be confirmed in the new market system.
-        // Assuming MarketGeneric for LabourProduct will have a `job_applications` field.
         let seeking_work_count: usize = 0;
-            // fs.exchange.labour_markets.values()
-            // .flat_map(|m| m.job_applications.iter().map(|app| app.consumer_id))
-            // .collect::<HashSet<_>>().len();
             
         let labor_force = (employed_count + seeking_work_count) as f64;
         let total_population = self.agents.consumers.len() as f64;
         let labor_force_participation = if total_population > 0.0 { labor_force / total_population } else { 0.0 };
         let unemployment_rate = if labor_force > 0.0 { (labor_force - employed_count as f64) / labor_force } else { 0.0 };
 
-        // NOTE: The structure for job offers needs to be confirmed.
         let job_openings: u32 = 0; 
-            // fs.exchange.labour_markets.values()
-            // .flat_map(|m| &m.job_offers)
-            // .map(|offer| offer.quantity)
-            // .sum();
 
         let household_debt: f64 = self.agents.consumers.values().map(|c| fs.get_total_liabilities(&c.id)).sum();
         let corporate_debt: f64 = self.agents.firms.values().map(|f| fs.get_total_liabilities(&f.id)).sum();

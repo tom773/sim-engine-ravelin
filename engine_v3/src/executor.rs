@@ -5,6 +5,7 @@ use domains::prelude::*;
 use rand::RngCore;
 use rand::prelude::{SliceRandom, ThreadRng};
 use std::collections::HashMap;
+use uuid::Uuid;
 
 pub struct SimulationEngine {
     pub state: SimState,
@@ -150,6 +151,7 @@ impl SimulationEngine {
             let agent_id = action.agent_id();
             let (agent_type, agent_name) = self.get_agent_info(&agent_id);
             action_records.push(ActionRecord {
+                id: Uuid::new_v4(),
                 action: action.clone(),
                 agent_id,
                 agent_type,

@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MarketId {
-    Financial(InstrumentId), // Uniquely identifies a financial market via one of its instruments
+    Financial(InstrumentId),
     Goods(GoodId),
     Labour(LabourMarketId),
 }
@@ -44,13 +44,13 @@ impl std::str::FromStr for MarketId {
     }
 }
 
-// Helper function to convert Money to NotNan<f64> for BTreeMap keys
+
 #[inline]
 fn money_to_key(money: Money) -> NotNan<f64> {
     NotNan::new(money.to_f64()).expect("Money value was NaN")
 }
 
-// Helper function to convert NotNan<f64> back to Money
+
 #[inline]
 fn key_to_money(key: NotNan<f64>) -> Money {
     Money::from_f64(key.into_inner()).unwrap_or(Money::ZERO)
@@ -75,7 +75,7 @@ pub struct MarketDepthSummary {
     pub bid_size_at_best: f64,
     pub ask_size_at_best: f64,
     #[serde(serialize_with = "notnan_map_as_money")]
-    pub bid_levels: HashMap<NotNan<f64>, f64>, // Key represents Money as f64, value is quantity
+    pub bid_levels: HashMap<NotNan<f64>, f64>,
     #[serde(serialize_with = "notnan_map_as_money")]
     pub ask_levels: HashMap<NotNan<f64>, f64>,
 }
@@ -122,8 +122,8 @@ pub struct Order {
     pub id: Uuid,
     pub agent_id: AgentId,
     pub side: Side,
-    pub quantity: f64,           // Remaining quantity
-    pub price: Option<Money>,    // None for Market orders, Some for Limit orders
+    pub quantity: f64,
+    pub price: Option<Money>,
     pub order_type: OrderType,
 }
 
@@ -143,7 +143,7 @@ impl Default for Order {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 pub struct OrderBook {
     #[serde(with = "order_book_side_serde")]
-    pub bids: BTreeMap<NotNan<f64>, Vec<Order>>, // Key is Money converted to NotNan<f64>
+    pub bids: BTreeMap<NotNan<f64>, Vec<Order>>,
     #[serde(with = "order_book_side_serde")]
     pub asks: BTreeMap<NotNan<f64>, Vec<Order>>,
     pub last_price: Option<Money>,
@@ -227,7 +227,7 @@ impl OrderBook {
                     }
 
                     let trade_qty = incoming_bid.quantity.min(resting_ask.quantity);
-                    let trade_price = ask_price; // Trades execute at the resting order's price
+                    let trade_price = ask_price;
 
                     trades.push(Trade {
                         trade_id: Uuid::new_v4(),
@@ -373,7 +373,7 @@ impl OrderBook {
                 let bid_price_nn = money_to_key(bid_price);
                 let mut aggressing_bid = {
                     let bid_queue = self.bids.get_mut(&bid_price_nn).unwrap();
-                    let order = bid_queue.remove(0); // FIFO
+                    let order = bid_queue.remove(0);
                     if bid_queue.is_empty() {
                         self.bids.remove(&bid_price_nn);
                     }

@@ -56,10 +56,11 @@ impl Domain for BankingDomain {
                 employee,
                 amount,
             } => {
-                vec![SimAction::Banking(BankingAction::PayWages {
-                    agent_id: *employer,
-                    employee: *employee,
+                vec![SimAction::Banking(BankingAction::InitiatePayment {
+                    from: *employer,
+                    to: *employee,
                     amount: *amount,
+                    context: TransactionContext::WagePayment,
                 })]
             }
 
@@ -68,10 +69,11 @@ impl Domain for BankingDomain {
                 target,
                 amount,
             } => {
-                vec![SimAction::Banking(BankingAction::Transfer {
+                vec![SimAction::Banking(BankingAction::InitiatePayment {
                     from: *target,
                     to: *government_id,
                     amount: *amount,
+                    context: TransactionContext::TaxPayment,
                 })]
             }
 
@@ -128,17 +130,12 @@ impl Domain for BankingDomain {
         match banking_action {
             BankingAction::Deposit { .. } => self.execute_deposit(),
             BankingAction::Withdraw { .. } => self.execute_withdraw(),
-            BankingAction::Transfer { from, to, amount } => {
-                self.execute_transfer(*from, *to, *amount)
-            }
-            BankingAction::PayWages {
-                agent_id,
-                employee,
+            BankingAction::InitiatePayment {
+                from,
+                to,
                 amount,
-            } => self.execute_pay_wages(*agent_id, *employee, *amount),
-            BankingAction::UpdateReserves { .. } => DomainResult::failure(vec![
-                "UpdateReserves action execution is not implemented via this domain.".to_string(),
-            ]),
+                context,
+            } => self.execute_initiate_payment(*from, *to, *amount, context.clone(), state),
             BankingAction::InjectLiquidity => self.execute_inject_liquidity(state),
 
             BankingAction::ExecuteInterbankLoan {
@@ -292,20 +289,13 @@ impl BankingDomain {
 
                 Ok(())
             }
-
-            BankingAction::Transfer { from, to, amount }
-            | BankingAction::PayWages {
-                agent_id: from,
-                employee: to,
-                amount,
+            BankingAction::InitiatePayment {
+                from, to, amount, ..
             } => {
                 DomainValidator::positive_amount(*amount)?;
                 DomainValidator::agent_exists(*from, state)?;
                 DomainValidator::agent_exists(*to, state)?;
                 Ok(())
-            }
-            BankingAction::UpdateReserves { bank, .. } => {
-                DomainValidator::bank_exists(*bank, state)
             }
             BankingAction::InjectLiquidity => Ok(()),
 
@@ -346,23 +336,173 @@ impl BankingDomain {
         DomainResult::failure(vec!["Withdraw action cannot be executed. Missing core support for partial instrument transfers.".to_string()])
     }
 
-    fn execute_transfer(&self, from: AgentId, to: AgentId, amount: f64) -> DomainResult {
-        let effect = StateEffect::Financial(FinancialEffect::TransferFunds {
-            from,
-            to,
-            amount,
-            context: "GenericTransfer".to_string(),
-        });
-        DomainResult::success(vec![effect])
-    }
+    pub fn execute_initiate_payment(
+        &self,
+        from: AgentId,
+        to: AgentId,
+        amount: f64,
+        context: TransactionContext,
+        state: &SimState,
+    ) -> DomainResult {
+        if amount <= 1e-9 {
+            return DomainResult::empty();
+        }
 
-    fn execute_pay_wages(&self, employer: AgentId, employee: AgentId, amount: f64) -> DomainResult {
-        let effect = StateEffect::Financial(FinancialEffect::PayWages {
-            employer,
-            employee,
-            amount,
-        });
-        DomainResult::success(vec![effect])
+        let (from_account_id, from_settlement_agent_id) =
+            match state.financial_system.find_agent_liquid_account(&from) {
+                Some(acc) => acc,
+                None => {
+                    return DomainResult::failure(vec![format!(
+                        "Sender {} has no liquid account.",
+                        from
+                    )]);
+                }
+            };
+
+        let (to_account_id, to_settlement_agent_id) =
+            match state.financial_system.find_agent_liquid_account(&to) {
+                Some(acc) => acc,
+                None => state
+                    .financial_system
+                    .find_any_bank_account()
+                    .ok_or_else(|| "No banks in simulation to open account with.".to_string())
+                    .unwrap(),
+            };
+
+        let from_bs = state.financial_system.balance_sheets.get(&from).unwrap();
+        if let Some(pos) = from_bs.assets.get(&from_account_id) {
+            if pos.quantity < amount {
+                return DomainResult::failure(vec![format!(
+                    "Insufficient funds for agent {}: has {:.2}, needs {:.2}",
+                    from, pos.quantity, amount
+                )]);
+            }
+        } else {
+            return DomainResult::failure(vec![format!(
+                "Sender {} position not found for account {}",
+                from, from_account_id
+            )]);
+        }
+
+        let mut effects = Vec::new();
+
+        if from_settlement_agent_id == to_settlement_agent_id {
+            let bank_id = from_settlement_agent_id;
+
+            effects.push(StateEffect::Financial(FinancialEffect::AdjustPosition {
+                owner: from,
+                instrument_id: from_account_id,
+                delta_quantity: -amount,
+                side: PositionSide::Asset,
+                cost_per_unit: None,
+            }));
+            effects.push(StateEffect::Financial(FinancialEffect::AdjustPosition {
+                owner: to,
+                instrument_id: to_account_id,
+                delta_quantity: amount,
+                side: PositionSide::Asset,
+                cost_per_unit: None,
+            }));
+            effects.push(StateEffect::Financial(FinancialEffect::AdjustPosition {
+                owner: bank_id,
+                instrument_id: from_account_id,
+                delta_quantity: -amount,
+                side: PositionSide::Liability,
+                cost_per_unit: None,
+            }));
+            effects.push(StateEffect::Financial(FinancialEffect::AdjustPosition {
+                owner: bank_id,
+                instrument_id: to_account_id,
+                delta_quantity: amount,
+                side: PositionSide::Liability,
+                cost_per_unit: None,
+            }));
+        } else {
+            let from_bank_reserves_id = match state
+                .financial_system
+                .find_bank_reserves_account(&from_settlement_agent_id)
+            {
+                Some(id) => id,
+                None => {
+                    return DomainResult::failure(vec![format!(
+                        "Sending bank {} has no reserves.",
+                        from_settlement_agent_id
+                    )]);
+                }
+            };
+            let to_bank_reserves_id = match state
+                .financial_system
+                .find_bank_reserves_account(&to_settlement_agent_id)
+            {
+                Some(id) => id,
+                None => {
+                    return DomainResult::failure(vec![format!(
+                        "Receiving bank {} has no reserves.",
+                        to_settlement_agent_id
+                    )]);
+                }
+            };
+
+            effects.push(StateEffect::Financial(FinancialEffect::AdjustPosition {
+                owner: from,
+                instrument_id: from_account_id,
+                delta_quantity: -amount,
+                side: PositionSide::Asset,
+                cost_per_unit: None,
+            }));
+            effects.push(StateEffect::Financial(FinancialEffect::AdjustPosition {
+                owner: from_settlement_agent_id,
+                instrument_id: from_account_id,
+                delta_quantity: -amount,
+                side: PositionSide::Liability,
+                cost_per_unit: None,
+            }));
+
+            effects.push(StateEffect::Financial(FinancialEffect::AdjustPosition {
+                owner: from_settlement_agent_id,
+                instrument_id: from_bank_reserves_id,
+                delta_quantity: -amount,
+                side: PositionSide::Asset,
+                cost_per_unit: None,
+            }));
+            effects.push(StateEffect::Financial(FinancialEffect::AdjustPosition {
+                owner: to_settlement_agent_id,
+                instrument_id: to_bank_reserves_id,
+                delta_quantity: amount,
+                side: PositionSide::Asset,
+                cost_per_unit: None,
+            }));
+
+            effects.push(StateEffect::Financial(FinancialEffect::AdjustPosition {
+                owner: to,
+                instrument_id: to_account_id,
+                delta_quantity: amount,
+                side: PositionSide::Asset,
+                cost_per_unit: None,
+            }));
+            effects.push(StateEffect::Financial(FinancialEffect::AdjustPosition {
+                owner: to_settlement_agent_id,
+                instrument_id: to_account_id,
+                delta_quantity: amount,
+                side: PositionSide::Liability,
+                cost_per_unit: None,
+            }));
+        }
+
+        effects.push(StateEffect::Financial(FinancialEffect::RecordTransaction(
+            Transaction {
+                id: Uuid::new_v4(),
+                from_agent: from,
+                to_agent: to,
+                amount,
+                transaction_type: format!("{:?}", context),
+                timestamp: state.current_date,
+                instrument_id: None,
+                ref_id: None,
+            },
+        )));
+
+        DomainResult::success(effects)
     }
 
     fn execute_inject_liquidity(&self, state: &SimState) -> DomainResult {
@@ -370,19 +510,25 @@ impl BankingDomain {
         let amount_per_recipient = 1000.0;
         let cb_id = state.financial_system.central_bank.id;
 
-        let mut effects = Vec::new();
+        let mut all_effects = Vec::new();
         for recipient in recipients {
-            effects.push(StateEffect::Financial(FinancialEffect::TransferFunds {
-                from: cb_id,
-                to: recipient,
-                amount: amount_per_recipient,
-                context: "LiquidityInjection".to_string(),
-            }));
+            let result = self.execute_initiate_payment(
+                cb_id,
+                recipient,
+                amount_per_recipient,
+                TransactionContext::GovTranseferPayment,
+                state,
+            );
+            
+            if result.success {
+                all_effects.extend(result.effects);
+            } else {
+                println!("[BankingDomain] Failed to inject liquidity to {}: {:?}", recipient.0, result.errors);
+            }
         }
 
-        DomainResult::success(effects)
+        DomainResult::success(all_effects)
     }
-
 
     fn execute_interbank_loan(
         &self,
@@ -398,7 +544,7 @@ impl BankingDomain {
         let loan_instrument = match Instrument::bond(
             InstrumentId(Uuid::new_v4()),
             borrower_id,
-            BondType::Corporate,
+            BondType::InterbankLoan,
             Money::from((amount as u64).max(1)),
             current_date,
             maturity_date,
@@ -419,30 +565,39 @@ impl BankingDomain {
 
         let loan_id = loan_instrument.id;
 
-        let effects = vec![
+        let mut effects = vec![
             StateEffect::Financial(FinancialEffect::CreateInstrument {
                 instrument: loan_instrument,
                 creditor: lender_id,
                 debtor: borrower_id,
                 quantity: 1.0,
             }),
-            StateEffect::Financial(FinancialEffect::TransferFunds {
-                from: lender_id,
-                to: borrower_id,
-                amount,
-                context: "InterbankLoan".to_string(),
-            }),
-            StateEffect::Financial(FinancialEffect::RecordTransaction(Transaction {
-                id: Uuid::new_v4(),
-                from_agent: lender_id,
-                to_agent: borrower_id,
-                amount,
-                transaction_type: "InterbankLoan".to_string(),
-                timestamp: current_date,
-                instrument_id: Some(loan_id),
-                ref_id: None,
-            })),
         ];
+
+        let payment_result = self.execute_initiate_payment(
+            lender_id, 
+            borrower_id, 
+            amount, 
+            TransactionContext::GenericTransfer,
+            state
+        );
+
+        if payment_result.success {
+            effects.extend(payment_result.effects);
+        } else {
+            return DomainResult::failure(vec![format!("Failed to transfer interbank loan principal: {:?}", payment_result.errors)]);
+        }
+
+        effects.push(StateEffect::Financial(FinancialEffect::RecordTransaction(Transaction {
+            id: Uuid::new_v4(),
+            from_agent: lender_id,
+            to_agent: borrower_id,
+            amount,
+            transaction_type: "InterbankLoan".to_string(),
+            timestamp: current_date,
+            instrument_id: Some(loan_id),
+            ref_id: None,
+        })));
 
         DomainResult::success(effects)
     }

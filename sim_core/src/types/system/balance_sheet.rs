@@ -5,7 +5,7 @@ use serde_with::{serde_as, DisplayFromStr};
 use std::collections::HashMap;
 
 #[serde_as]
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
 pub struct Position {
     pub quantity: f64,
     pub book_value_per_unit: Money,
@@ -13,7 +13,7 @@ pub struct Position {
 }
 
 #[serde_as]
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct BalanceSheet {
     pub agent_id: AgentId,
     #[serde_as(as = "HashMap<DisplayFromStr, _>")]
@@ -23,7 +23,7 @@ pub struct BalanceSheet {
     pub income_statement: IncomeStatement,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
 pub struct IncomeStatement {
     pub revenue: Money,
     pub cost_of_goods_sold: Money,

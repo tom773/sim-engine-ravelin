@@ -11,10 +11,8 @@ impl ConsumptionDomain {
         Self {}
     }
 
-    // Helper function to retrieve agent inventory HashMap based on the new structure.
     fn get_agent_inventory(fs: &FinancialSystem, agent_id: &AgentId) -> HashMap<GoodId, InventoryItem> {
         if let Some(bs) = fs.balance_sheets.get(agent_id) {
-            // Iterate over assets to find the RealAsset::Inventory instrument.
             for inst_id in bs.assets.keys() {
                 if let Some(inst) = fs.instruments.get(inst_id) {
                     if let InstrumentType::RealAsset(RealAssetType::Inventory { goods, .. }) = &inst.instrument_type {
@@ -34,7 +32,6 @@ impl Domain for ConsumptionDomain {
 
     fn resolve_intention(&self, intention: &SimIntention, _context: &ResolutionContext) -> Option<ResolutionResult> {
         let actions = match intention {
-            // Resolves to LabourAction (cross-domain).
             SimIntention::ApplyForJob { agent_id: _, market_id, application } => {
                 vec![SimAction::Labour(LabourAction::ApplyForJob { 
                     market_id: *market_id, 
@@ -50,7 +47,6 @@ impl Domain for ConsumptionDomain {
                 })]
             },
 
-            // Resolves SpendOnGood into a market action (PurchaseAtBest).
             SimIntention::SpendOnGood { agent_id, good_id, max_notional } => {
                  vec![SimAction::Consumption(ConsumptionAction::PurchaseAtBest {
                     agent_id: *agent_id,
@@ -69,7 +65,7 @@ impl Domain for ConsumptionDomain {
         match intention {
             SimIntention::ApplyForJob { .. } => Some(ResolutionPhase::Independent),
             SimIntention::ConsumeGood { .. } => Some(ResolutionPhase::Independent),
-            SimIntention::SpendOnGood { .. } => Some(ResolutionPhase::Market), // Interacts with the market
+            SimIntention::SpendOnGood { .. } => Some(ResolutionPhase::Market),
             _ => None,
         }
     }
@@ -86,11 +82,9 @@ impl Domain for ConsumptionDomain {
 
         match consumption_action {
             ConsumptionAction::Purchase { agent_id, seller, good_id, amount } => {
-                // Direct, bilateral purchase.
                 self.execute_purchase(*agent_id, *seller, *good_id, *amount, state)
             },
             ConsumptionAction::PurchaseAtBest { agent_id, good_id, max_notional } => {
-                // Interacting with the market.
                 self.execute_purchase_at_best(*agent_id, *good_id, *max_notional, state)
             },
             ConsumptionAction::Consume { agent_id, good_id, amount } => {
@@ -112,7 +106,6 @@ impl ConsumptionDomain {
     fn validate(&self, action: &ConsumptionAction, state: &SimState) -> Result<(), String> {
         match action {
             ConsumptionAction::Purchase { .. } => {
-                // Validation for direct purchase is complex and often discouraged in favor of market interactions.
                 Err("Direct Purchase action (ConsumptionAction::Purchase) is not fully supported. Use PurchaseAtBest.".to_string())
             },
             
@@ -120,8 +113,6 @@ impl ConsumptionDomain {
                 DomainValidator::non_negative_amount(*max_notional)?;
                 DomainValidator::agent_exists(*agent_id, state)?;
                 
-                // We allow the action even if funds are insufficient for the full max_notional, 
-                // assuming the agent intends to spend UP TO that amount. Settlement will handle actual fund availability.
                 Ok(())
             },
             
@@ -129,7 +120,6 @@ impl ConsumptionDomain {
                 DomainValidator::positive_amount(*amount)?;
                 DomainValidator::agent_exists(*agent_id, state)?;
 
-                // Check inventory holdings.
                 let fs = &state.financial_system;
                 let inventory = Self::get_agent_inventory(fs, agent_id);
                 
@@ -149,11 +139,9 @@ impl ConsumptionDomain {
     }
 
     fn execute_purchase(&self, _buyer: AgentId, _seller: AgentId, _good_id: GoodId, _amount: f64, _state: &SimState) -> DomainResult {
-        // Implementation for direct purchase (DVP for goods).
         DomainResult::failure(vec!["Direct Purchase execution not implemented.".to_string()])
     }
 
-    // Execute PurchaseAtBest by placing aggressive orders on the market.
     fn execute_purchase_at_best(&self, buyer: AgentId, good_id: GoodId, max_notional: f64, state: &SimState) -> DomainResult {
         
         if max_notional <= 1e-9 {
@@ -165,15 +153,11 @@ impl ConsumptionDomain {
             None => return DomainResult::failure(vec![format!("Goods market for {:?} not found.", good_id)]),
         };
 
-        // We want to buy as much as possible up to max_notional. This is best represented by a Market Order.
-        // However, Market Orders don't have a price limit, only quantity. 
         
-        // To simulate "buy up to max_notional", we need to determine the quantity affordable by walking the book.
 
         let mut remaining_notional = max_notional;
         let mut total_quantity_to_buy = 0.0;
 
-        // Iterate over asks (sorted by price ascending).
         for (price_nn, orders) in &market.book.asks {
             let price = price_nn.into_inner();
             if remaining_notional < 1e-9 { break; }
@@ -193,17 +177,15 @@ impl ConsumptionDomain {
         }
 
         if total_quantity_to_buy > 1e-6 {
-            // Place a Market Order for the calculated quantity.
             let order = Order {
                 id: uuid::Uuid::new_v4(),
                 agent_id: buyer,
                 side: Side::Bid,
                 quantity: total_quantity_to_buy,
-                price: None, // Market order
+                price: None,
                 order_type: OrderType::Market,
             };
 
-            // Place the order in the goods market.
             let effect = StateEffect::Market(MarketEffect::PlaceOrderInBook {
                 market_id: MarketId::Goods(good_id),
                 order,
@@ -211,13 +193,11 @@ impl ConsumptionDomain {
 
             DomainResult::success(vec![effect])
         } else {
-            // Nothing affordable or available.
             DomainResult::empty()
         }
     }
 
     fn execute_consume(&self, agent_id: AgentId, good_id: GoodId, amount: f64) -> DomainResult {
-        // Consumption destroys the goods (removes from inventory).
         let effects = vec![
             StateEffect::Inventory(InventoryEffect::RemoveInventory { 
                 owner: agent_id, 

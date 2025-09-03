@@ -191,14 +191,49 @@ impl StepHandler for ApplyAllEffectsHandler {
     ) -> StepResult {
         execute_step(|| {
             let mut all_effects = context.get_all_effects().unwrap_or_default();
-
             let labour_effects = engine.match_labour_markets(rng);
             all_effects.extend(labour_effects);
-            for effect in &all_effects {
-                if let Some(event) = event_from_effect(effect) {
-                    engine.event_log.push(event);
+
+            let all_actions = context.get_all_actions().unwrap_or_default();
+            let mapping = context.get_action_to_effect_indices().unwrap_or_default();
+            
+            let mut new_events = Vec::new();
+
+            for (action_idx, action_record) in all_actions.iter().enumerate() {
+                if let Some(effect_indices) = mapping.get(&action_idx) {
+                    let financial_effects: Vec<FinancialEffect> = effect_indices
+                        .iter()
+                        .filter_map(|&effect_idx| {
+                            all_effects.get(effect_idx).and_then(|eff| match eff {
+                                StateEffect::Financial(fe) => Some(fe.clone()),
+                                _ => None,
+                            })
+                        })
+                        .collect();
+
+                    if !financial_effects.is_empty() {
+                        let action_context = ActionContext {
+                            action_instance_id: action_record.id,
+                            action_name: action_record.action.name(),
+                            agent_id: action_record.agent_id,
+                            tick: engine.state.ticknum,
+                        };
+                        new_events.push(SimEvent::FinancialTransaction {
+                            context: action_context,
+                            effects: financial_effects,
+                        });
+                    }
                 }
             }
+
+            for effect in &all_effects {
+                if let Some(event) = event_from_effect(effect) {
+                    new_events.push(event);
+                }
+            }
+
+            engine.event_log = new_events;
+            
             engine
                 .state
                 .apply_effects(&all_effects)
@@ -293,40 +328,6 @@ impl StepHandler for DebtAuctionsHandler {
 
 fn event_from_effect(effect: &StateEffect) -> Option<SimEvent> {
     match effect {
-        StateEffect::Financial(FinancialEffect::TransferFunds {
-            from,
-            to,
-            amount,
-            context,
-        }) => Some(SimEvent::CashFlow(sim_core::CashFlowEvent {
-            from_agent_id: *from,
-            to_agent_id: *to,
-            amount: *amount,
-            reason: context.clone(),
-            ts: chrono::Utc::now(),
-        })),
-        StateEffect::Financial(FinancialEffect::PayWages {
-            employer,
-            employee,
-            amount,
-        }) => Some(SimEvent::CashFlow(sim_core::CashFlowEvent {
-            from_agent_id: *employer,
-            to_agent_id: *employee,
-            amount: *amount,
-            reason: "WagePayment".to_string(),
-            ts: chrono::Utc::now(),
-        })),
-        StateEffect::Financial(FinancialEffect::DvP { trade }) => {
-            Some(SimEvent::MatchedTrade(sim_core::MatchedTradeEvent {
-                trade_id: trade.trade_id,
-                market_id: trade.market_id.clone(),
-                buyer_id: trade.buyer,
-                seller_id: trade.seller,
-                quantity: trade.quantity,
-                price: trade.price,
-                ts: chrono::Utc::now(),
-            }))
-        }
         StateEffect::Financial(FinancialEffect::CreateInstrument {
             instrument,
             creditor,

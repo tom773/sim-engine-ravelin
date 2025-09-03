@@ -1,7 +1,7 @@
 use crate::prelude::*;
 use crate::types::money::Money;
 use chrono::NaiveDate;
-use rust_decimal::prelude::*; // Import ToPrimitive trait
+use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DisplayFromStr};
@@ -25,7 +25,7 @@ pub struct FinancialSystem {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct YieldCurve {
     pub date: chrono::NaiveDate,
-    pub yields: HashMap<u16, f64>, // Yields remain as rates (f64)
+    pub yields: HashMap<u16, f64>,
 }
 
 impl Default for FinancialSystem {

@@ -1,6 +1,6 @@
 use crate::*;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid; // Import Uuid
+use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum MarketEffect {
@@ -118,7 +118,7 @@ impl StateEffectApplicator {
                     market: format!("{:?}", market_id),
                 })?;
                 book.bids.clear();
-                book.asks.clear(); // FIX: Clear both sides of the book
+                book.asks.clear();
                 Ok(())
             }
             MarketEffect::UpdateLabourMarket { market_id, update } => {

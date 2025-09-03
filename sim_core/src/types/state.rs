@@ -1,4 +1,3 @@
-
 use crate::prelude::*;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
@@ -110,6 +109,17 @@ impl AgentRegistry {
             .chain(self.firms.keys().cloned())
             .collect()
     }
+    pub fn get_agent_type_string(&self, id: &AgentId) -> Option<&'static str> {
+        if self.banks.contains_key(id) {
+            Some("Bank")
+        } else if self.consumers.contains_key(id) {
+            Some("Consumer")
+        } else if self.firms.contains_key(id) {
+            Some("Firm")
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -159,6 +169,7 @@ pub struct TickRecord {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ActionRecord {
+    pub id: Uuid,
     pub action: SimAction,
     pub agent_id: AgentId,
     pub agent_type: String,

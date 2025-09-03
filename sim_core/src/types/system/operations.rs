@@ -1,7 +1,7 @@
 use crate::prelude::*;
 use crate::types::money::Money;
 use chrono::{Months, NaiveDate};
-use rust_decimal::prelude::*; // Import ToPrimitive trait
+use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
 use std::collections::HashSet;
 use uuid::Uuid;
@@ -19,6 +19,18 @@ impl FinancialSystem {
 
         Some((creditor_id, debtor_id))
     }
+    pub fn find_global_consolidatable_instrument_id(
+        &self,
+        new_inst: &Instrument,
+    ) -> Option<InstrumentId> {
+        let new_key = new_inst.get_consolidation_key();
+        for (inst_id, existing_inst) in &self.instruments {
+            if existing_inst.get_consolidation_key() == new_key {
+                return Some(*inst_id);
+            }
+        }
+        None
+    }
 }
 
 impl FinancialSystem {
@@ -33,22 +45,21 @@ impl FinancialSystem {
     ) -> Result<InstrumentId, String> {
         let loan_instrument = Instrument::bond(
             InstrumentId(Uuid::new_v4()),
-            borrower, // The borrower is the issuer of the debt
+            borrower,
             BondType::Corporate,
-            Money::from(amount), // Convert u64 to Money
+            Money::from(amount),
             date,
             date.checked_add_months(Months::new(term_months)).unwrap(),
         )
-        .coupon_bps(Decimal::from_f64(interest_bps).unwrap_or(dec!(0))) // Convert f64 to Decimal
+        .coupon_bps(Decimal::from_f64(interest_bps).unwrap_or(dec!(0)))
         .frequency(12)
-        .rating(CreditRating::B) // Default rating for a simple loan
+        .rating(CreditRating::B)
         .build()
         .map_err(|e| e.to_string())?;
 
         let loan_id = loan_instrument.id;
 
         self.create_instrument(lender, borrower, loan_instrument, 1.0, amount as f64)?;
-
 
         Ok(loan_id)
     }
@@ -58,7 +69,10 @@ impl FinancialSystem {
         instrument_id: &InstrumentId,
         payment_date: NaiveDate,
     ) -> Result<(), String> {
-        let instrument = self.instruments.get_mut(instrument_id).ok_or("Instrument not found")?;
+        let instrument = self
+            .instruments
+            .get_mut(instrument_id)
+            .ok_or("Instrument not found")?;
 
         let (_debtor, _accrued_interest_payment) = {
             let bond_details = match &mut instrument.instrument_type {
@@ -88,7 +102,6 @@ impl FinancialSystem {
         Ok(())
     }
 
-
     pub fn enter_repo_agreement(
         &mut self,
         lender: AgentId,
@@ -104,7 +117,10 @@ impl FinancialSystem {
             return Err("Haircut must be between 0.0 and 1.0".to_string());
         }
 
-        let borrower_bs = self.balance_sheets.get(&borrower).ok_or("Borrower not found")?;
+        let borrower_bs = self
+            .balance_sheets
+            .get(&borrower)
+            .ok_or("Borrower not found")?;
         let collateral_pos = borrower_bs
             .assets
             .get(&collateral_id)
@@ -139,24 +155,29 @@ impl FinancialSystem {
 
         self.instruments.insert(repo_id, repo_instrument);
 
-
-        let lender_bs = self.balance_sheets.get_mut(&lender).ok_or("Lender not found")?;
+        let lender_bs = self
+            .balance_sheets
+            .get_mut(&lender)
+            .ok_or("Lender not found")?;
         lender_bs.assets.insert(
             repo_id,
             Position {
                 quantity: 1.0,
                 book_value_per_unit: loan_amount,
-                cost_basis_per_unit: loan_amount, // <-- Add this line
+                cost_basis_per_unit: loan_amount,
             },
         );
 
-        let borrower_bs = self.balance_sheets.get_mut(&borrower).ok_or("Borrower not found")?;
+        let borrower_bs = self
+            .balance_sheets
+            .get_mut(&borrower)
+            .ok_or("Borrower not found")?;
         borrower_bs.liabilities.insert(
             repo_id,
             Position {
                 quantity: 1.0,
                 book_value_per_unit: loan_amount,
-                cost_basis_per_unit: loan_amount, // <-- Add this line
+                cost_basis_per_unit: loan_amount,
             },
         );
         Ok(repo_id)
@@ -180,7 +201,6 @@ impl FinancialSystem {
         let duration_rate = annual_rate * Decimal::from_f64(duration_years).unwrap_or(dec!(0));
         let interest = details.loan_amount * duration_rate;
         let _repayment_amount = details.loan_amount + interest;
-
 
         self.instruments.remove(&repo_id);
         self.balance_sheets
@@ -215,24 +235,29 @@ impl FinancialSystem {
         self.instruments.insert(inst_id, instrument);
 
         let book_value_money = Money::from_f64(book_value_per_unit).unwrap_or(Money::ZERO);
-        let creditor_bs =
-            self.balance_sheets.get_mut(&creditor_id).ok_or("Creditor not found")?;
+        let creditor_bs = self
+            .balance_sheets
+            .get_mut(&creditor_id)
+            .ok_or("Creditor not found")?;
         creditor_bs.assets.insert(
             inst_id,
             Position {
                 quantity,
                 book_value_per_unit: book_value_money,
-                cost_basis_per_unit: book_value_money, // <-- Add this line
+                cost_basis_per_unit: book_value_money,
             },
         );
 
-        let debtor_bs = self.balance_sheets.get_mut(&debtor_id).ok_or("Debtor not found")?;
+        let debtor_bs = self
+            .balance_sheets
+            .get_mut(&debtor_id)
+            .ok_or("Debtor not found")?;
         debtor_bs.liabilities.insert(
             inst_id,
             Position {
                 quantity,
                 book_value_per_unit: book_value_money,
-                cost_basis_per_unit: book_value_money, // <-- Add this line
+                cost_basis_per_unit: book_value_money,
             },
         );
 
@@ -262,29 +287,29 @@ impl FinancialSystem {
         creditor_id: AgentId,
         debtor_id: AgentId,
         instrument: Instrument,
-        quantity_change: f64,
-        book_value_change: f64,
+        quantity: f64,
+        book_value_per_unit: f64,
     ) -> Result<InstrumentId, String> {
-        if let Some(existing_id) =
-            self.find_consolidatable_instrument_id(&instrument, &creditor_id)
-        {
-            let creditor_bs = self.balance_sheets.get_mut(&creditor_id).unwrap();
-            let asset_pos = creditor_bs.assets.entry(existing_id).or_default();
-            asset_pos.quantity += quantity_change;
 
-            let debtor_bs = self.balance_sheets.get_mut(&debtor_id).unwrap();
-            let liability_pos = debtor_bs.liabilities.entry(existing_id).or_default();
-            liability_pos.quantity += quantity_change;
+        if let Some(existing_id) = self.find_global_consolidatable_instrument_id(&instrument) {
 
+            self.create_or_consolidate_position(
+                &creditor_id,
+                &debtor_id,
+                &existing_id,
+                quantity,
+                book_value_per_unit,
+            )?;
             Ok(existing_id)
         } else {
+
             let id = instrument.id;
             self.create_instrument(
                 creditor_id,
                 debtor_id,
                 instrument,
-                quantity_change,
-                book_value_change,
+                quantity,
+                book_value_per_unit,
             )?;
             Ok(id)
         }
@@ -292,7 +317,7 @@ impl FinancialSystem {
 
     pub fn remove_instrument(&mut self, id: &InstrumentId) -> Result<(), String> {
         if let Some(instrument) = self.instruments.remove(id) {
-            let debtor = instrument.get_consolidation_key().issuer; // Issuer is the debtor
+            let debtor = instrument.get_consolidation_key().issuer;
 
             let creditor = self
                 .balance_sheets
@@ -306,7 +331,9 @@ impl FinancialSystem {
                     .and_then(|bs| bs.assets.remove(id));
             }
 
-            self.balance_sheets.get_mut(&debtor).and_then(|bs| bs.liabilities.remove(id));
+            self.balance_sheets
+                .get_mut(&debtor)
+                .and_then(|bs| bs.liabilities.remove(id));
             Ok(())
         } else {
             Err("Instrument not found".to_string())
@@ -345,16 +372,24 @@ impl FinancialSystem {
         self.balance_sheets.get_mut(agent_id)
     }
     pub fn get_total_assets(&self, agent_id: &AgentId) -> f64 {
-        self.balance_sheets.get(agent_id).map_or(0.0, |bs| bs.total_assets(self))
+        self.balance_sheets
+            .get(agent_id)
+            .map_or(0.0, |bs| bs.total_assets(self))
     }
     pub fn get_total_liabilities(&self, agent_id: &AgentId) -> f64 {
-        self.balance_sheets.get(agent_id).map_or(0.0, |bs| bs.total_liabilities(self))
+        self.balance_sheets
+            .get(agent_id)
+            .map_or(0.0, |bs| bs.total_liabilities(self))
     }
     pub fn get_liquid_assets(&self, agent_id: &AgentId) -> f64 {
-        self.balance_sheets.get(agent_id).map_or(0.0, |bs| bs.liquid_assets(self).to_f64())
+        self.balance_sheets
+            .get(agent_id)
+            .map_or(0.0, |bs| bs.liquid_assets(self).to_f64())
     }
     pub fn get_total_deposits(&self, agent_id: &AgentId) -> f64 {
-        self.balance_sheets.get(agent_id).map_or(0.0, |bs| bs.total_deposits(self))
+        self.balance_sheets
+            .get(agent_id)
+            .map_or(0.0, |bs| bs.total_deposits(self))
     }
 
     pub fn get_cash_assets(&self, agent_id: &AgentId) -> f64 {
@@ -382,8 +417,10 @@ impl FinancialSystem {
                 .filter_map(|(id, pos)| {
                     self.instruments.get(id).and_then(|inst| {
                         if let InstrumentType::Cash(d) = &inst.instrument_type {
-                            if matches!(d.cash_type, CashType::Currency | CashType::CentralBankReserves)
-                            {
+                            if matches!(
+                                d.cash_type,
+                                CashType::Currency | CashType::CentralBankReserves
+                            ) {
                                 return Some(pos.quantity);
                             }
                         }
@@ -397,7 +434,9 @@ impl FinancialSystem {
 
 impl FinancialSystem {
     pub fn m0(&self) -> f64 {
-        self.balance_sheets.get(&self.central_bank.id).map_or(0.0, |bs| bs.total_liabilities(self))
+        self.balance_sheets
+            .get(&self.central_bank.id)
+            .map_or(0.0, |bs| bs.total_liabilities(self))
     }
 
     pub fn m1(&self, bank_ids: &HashSet<AgentId>) -> f64 {
@@ -410,8 +449,10 @@ impl FinancialSystem {
                     .filter_map(|(id, pos)| {
                         self.instruments.get(id).and_then(|inst| {
                             if let InstrumentType::Cash(d) = &inst.instrument_type {
-                                if matches!(d.cash_type, CashType::Currency | CashType::DemandDeposit)
-                                {
+                                if matches!(
+                                    d.cash_type,
+                                    CashType::Currency | CashType::DemandDeposit
+                                ) {
                                     return Some(pos.quantity);
                                 }
                             }
@@ -457,7 +498,10 @@ impl FinancialSystem {
     }
 
     pub fn all_bank_reserves(&self, bank_ids: &HashSet<AgentId>) -> f64 {
-        bank_ids.iter().filter_map(|id| self.get_bank_reserves(id)).sum()
+        bank_ids
+            .iter()
+            .filter_map(|id| self.get_bank_reserves(id))
+            .sum()
     }
 
     pub fn all_bank_deposits(&self, bank_ids: &HashSet<AgentId>) -> f64 {
@@ -470,8 +514,10 @@ impl FinancialSystem {
                     .filter_map(|(id, pos)| {
                         self.instruments.get(id).and_then(|inst| {
                             if let InstrumentType::Cash(d) = &inst.instrument_type {
-                                if matches!(d.cash_type, CashType::DemandDeposit | CashType::SavingsDeposit)
-                                {
+                                if matches!(
+                                    d.cash_type,
+                                    CashType::DemandDeposit | CashType::SavingsDeposit
+                                ) {
                                     return Some(pos.quantity);
                                 }
                             }

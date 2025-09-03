@@ -1,5 +1,3 @@
-// In crates/sim_core/src/types/goods.rs
-
 use crate::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

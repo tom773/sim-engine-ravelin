@@ -3,7 +3,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use sim_core::*;
-use uuid::Uuid; // Make sure Uuid is in scope
+use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FiscalDomain {}
@@ -132,7 +132,7 @@ impl Domain for FiscalDomain {
                 let effects = vec![
                     StateEffect::Financial(FinancialEffect::CreateInstrument {
                         instrument: new_instrument,
-                        creditor: *government_id, // Initially held by gov
+                        creditor: *government_id,
                         debtor: *government_id,
                         quantity: *quantity as f64,
                     }),
