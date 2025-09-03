@@ -1,0 +1,260 @@
+// crates/sim_core/src/types/analytics.rs
+
+use crate::prelude::*;
+use std::collections::{HashMap, HashSet};
+
+/// Defines a set of functions for calculating high-level economic statistics from the simulation state.
+/// This trait keeps the core SimState struct clean by separating data from complex calculations.
+pub trait EconomicAnalytics {
+    /// Calculates a core set of economic statistics used by other, higher-level calculations.
+    fn calculate_core_stats(&self) -> CoreEconomicStats;
+
+    /// Generates a comprehensive snapshot of macroeconomic indicators for the current tick.
+    fn macro_stats(&self) -> MacroStats;
+
+    /// Calculates a view of a specific market's recent performance.
+    fn market_view(&self, market_id: &MarketId) -> Option<MarketView>;
+
+    /// Calculates the current Consumer Price Index (CPI) and inflation rate.
+    fn cpi_view(&self) -> InflationView;
+
+    /// Generates market views for all markets present in the simulation history.
+    fn all_market_views(&self) -> HashMap<String, MarketView>;
+}
+
+/// A struct to hold intermediate economic calculations.
+#[derive(Clone, Debug, Default)]
+pub struct CoreEconomicStats {
+    pub gdp: f64,
+    pub consumption: f64,
+    pub cpi: f64,
+    pub ppi: f64,
+    pub unemployment_rate: f64,
+    pub labor_force_participation: f64,
+    pub job_openings: f64,
+    pub capacity_utilization: f64,
+    pub industrial_production: f64,
+    pub credit_growth: f64,
+    pub household_debt: f64,
+    pub corporate_debt: f64,
+    pub government_debt: f64,
+    pub bank_liabilities: f64,
+}
+
+impl EconomicAnalytics for SimState {
+    fn market_view(&self, market_id: &MarketId) -> Option<MarketView> {
+        self.history.market_ticks.get(market_id).map(|ticks| {
+            if ticks.is_empty() {
+                return MarketView::default();
+            }
+
+            let latest = ticks.back().unwrap();
+            let (volume, turnover) = ticks.iter().fold((0.0, 0.0), |(vol, turn), tick| {
+                (vol + tick.volume, turn + tick.turnover)
+            });
+
+            let calculate_ma = |n: usize| -> Option<f64> {
+                let relevant_ticks: Vec<_> = ticks.iter().rev().take(n).filter_map(|t| t.close).collect();
+                if relevant_ticks.is_empty() {
+                    return None;
+                }
+                let sum: f64 = relevant_ticks.iter().sum();
+                Some(sum / relevant_ticks.len() as f64)
+            };
+
+            let calculate_vwap = |n: usize| -> Option<f64> {
+                let (total_turnover, total_volume) = ticks.iter().rev().take(n).fold((0.0, 0.0), |(turn, vol), tick| {
+                    (turn + tick.turnover, vol + tick.volume)
+                });
+                if total_volume > 1e-6 {
+                    Some(total_turnover / total_volume)
+                } else {
+                    None
+                }
+            };
+
+            let calculate_vol = |n: usize| -> Option<f64> {
+                let prices: Vec<f64> = ticks.iter().rev().take(n + 1).filter_map(|t| t.close).collect();
+                if prices.len() < 2 { return None; }
+
+                let returns: Vec<f64> = prices.windows(2).filter_map(|w| {
+                    if w[1] > 1e-9 { Some((w[0] / w[1]).ln()) } else { None }
+                }).collect();
+
+                if returns.is_empty() { return None; }
+
+                let mean_return = returns.iter().sum::<f64>() / returns.len() as f64;
+                let divisor = if returns.len() > 1 { (returns.len() - 1) as f64 } else { 1.0 };
+                let variance = returns.iter().map(|r| (r - mean_return).powi(2)).sum::<f64>() / divisor;
+                
+                Some(variance.sqrt() * (365.0_f64).sqrt())
+            };
+
+            MarketView {
+                last: latest.close,
+                mid: latest.best_bid.and_then(|bid| latest.best_ask.map(|ask| (bid + ask) / 2.0)),
+                spread: latest.spread,
+                volume,
+                turnover,
+                vwap_5: calculate_vwap(5),
+                ma_20: calculate_ma(20),
+                realized_vol_20: calculate_vol(20),
+            }
+        })
+    }
+
+    fn cpi_view(&self) -> InflationView {
+        let total_weight = 0.0;
+        
+        // This assumes a `goods` catalog exists on the financial system.
+        // If not, you may need to adjust where goods are stored.
+        // for (good_id, good) in &self.financial_system.goods.goods {
+        //     if good.cpi_weight > 0.0 {
+        //         let market_id = MarketId::Goods(*good_id);
+        //         if let Some(market_view) = self.market_view(&market_id) {
+        //             if let Some(price) = market_view.ma_20.or(market_view.last_or_mid()) {
+        //                 current_cpi += price * good.cpi_weight;
+        //                 total_weight += good.cpi_weight;
+        //             }
+        //         }
+        //     }
+        // }
+        
+        // Placeholder until goods catalog is confirmed
+        let mut current_cpi = 100.0;
+
+        if total_weight > 0.0 && (total_weight < 0.99 || total_weight > 1.01) {
+             current_cpi /= total_weight;
+        }
+
+        let inflation_rate = 0.02; // Placeholder
+
+        InflationView { cpi: current_cpi, inflation_rate }
+    }
+
+    fn all_market_views(&self) -> HashMap<String, MarketView> {
+        let mut views = HashMap::new();
+        for (market_id, _) in &self.history.market_ticks {
+            if let Some(market_view) = self.market_view(market_id) {
+                views.insert(market_id.to_string(), market_view);
+            }
+        }
+        views
+    }
+
+    fn macro_stats(&self) -> MacroStats {
+        let core_stats = self.calculate_core_stats();
+        let banks_map = HashSet::from_iter(self.agents.banks.keys().cloned());
+        
+        let m0 = self.financial_system.m0();
+        let m1 = self.financial_system.m1(&banks_map);
+        let m2 = self.financial_system.m2(&banks_map);
+
+        let (velocity, velocity_note) = if m1 > 1e-9 {
+            (core_stats.consumption / m1, "proxy: daily nominal spending divided by M1 (cash+DDs, non-banks)")
+        } else {
+            (0.0, "proxy: velocity undefined with zero M1; returning 0.0")
+        };
+        
+        let labour_force = self.agents.consumers.len();
+        let employment = self.agents.firms.values().map(|f| f.employees.len()).sum();
+
+        MacroStats {
+            as_of: self.current_date,
+            nominal_gdp_proxy: core_stats.gdp,
+            nominal_gdp_note: "proxy: C (daily) + I(dummy) + G(proxy) + NX(dummy)",
+            consumer_spending_daily: core_stats.consumption,
+            consumer_spending_note: "proxy: sum of turnover over CPI-weighted goods for the last simulated day",
+            cpi: core_stats.cpi,
+            ppi: core_stats.ppi,
+            inflation_rate: self.cpi_view().inflation_rate,
+            employment,
+            unemployment: labour_force.saturating_sub(employment),
+            labour_force,
+            unemployment_rate: core_stats.unemployment_rate / 100.0,
+            labor_force_participation: core_stats.labor_force_participation / 100.0,
+            job_openings: core_stats.job_openings,
+            household_debt: core_stats.household_debt,
+            corporate_debt: core_stats.corporate_debt,
+            government_debt: core_stats.government_debt,
+            // overnight_rates: self.financial_system.calculate_overnight_rates(), // This needs to be implemented
+            overnight_rates: Default::default(),
+            bank_credit: self.financial_system.all_bank_assets(&banks_map),
+            bank_liabilities: self.financial_system.all_bank_deposits(&banks_map),
+            bank_reserves: self.financial_system.all_bank_reserves(&banks_map),
+            m0,
+            m1,
+            m2,
+            velocity,
+            velocity_note,
+            avg_wage_rate: 0.0, // Placeholder
+            payroll_proxy: 0.0, // Placeholder
+            business_investment: 0.0, // Placeholder
+            business_investment_note: "dummy: capital formation flows not implemented yet",
+            government_spending: self.financial_system.government.spending_targets.purchases,
+            government_spending_note: "proxy: uses current SpendingTargets (not realized fiscal outlays)",
+        }
+    }
+
+    fn calculate_core_stats(&self) -> CoreEconomicStats {
+        let fs = &self.financial_system;
+        let _last_tick = self.history.tick_records.back();
+
+        let consumer_spending_daily: f64 = self.history.market_ticks
+            .iter()
+            .filter(|(market_id, _)| matches!(market_id, MarketId::Goods(_)))
+            .flat_map(|(_, ticks)| ticks.iter())
+            .filter(|tick| tick.date == self.current_date)
+            .map(|tick| tick.turnover)
+            .sum();
+
+        let st = &fs.government.spending_targets;
+        let government_spending_proxy = st.transfers + st.purchases + st.investment + st.debt_service;
+        let gdp = consumer_spending_daily + 0.0 + government_spending_proxy + 0.0;
+        let cpi = self.cpi_view().cpi;
+
+        let ppi = 100.0; // Placeholder until goods catalog confirmed
+
+        let employed_count: usize = self.agents.firms.values().map(|f| f.employees.len()).sum();
+        
+        // NOTE: The structure for job applications needs to be confirmed in the new market system.
+        // Assuming MarketGeneric for LabourProduct will have a `job_applications` field.
+        let seeking_work_count: usize = 0;
+            // fs.exchange.labour_markets.values()
+            // .flat_map(|m| m.job_applications.iter().map(|app| app.consumer_id))
+            // .collect::<HashSet<_>>().len();
+            
+        let labor_force = (employed_count + seeking_work_count) as f64;
+        let total_population = self.agents.consumers.len() as f64;
+        let labor_force_participation = if total_population > 0.0 { labor_force / total_population } else { 0.0 };
+        let unemployment_rate = if labor_force > 0.0 { (labor_force - employed_count as f64) / labor_force } else { 0.0 };
+
+        // NOTE: The structure for job offers needs to be confirmed.
+        let job_openings: u32 = 0; 
+            // fs.exchange.labour_markets.values()
+            // .flat_map(|m| &m.job_offers)
+            // .map(|offer| offer.quantity)
+            // .sum();
+
+        let household_debt: f64 = self.agents.consumers.values().map(|c| fs.get_total_liabilities(&c.id)).sum();
+        let corporate_debt: f64 = self.agents.firms.values().map(|f| fs.get_total_liabilities(&f.id)).sum();
+        let government_debt = fs.get_total_liabilities(&fs.government.id);
+
+        CoreEconomicStats {
+            gdp,
+            consumption: consumer_spending_daily,
+            cpi,
+            ppi,
+            unemployment_rate: unemployment_rate * 100.0,
+            labor_force_participation: labor_force_participation * 100.0,
+            job_openings: job_openings as f64,
+            capacity_utilization: 0.0, // Placeholder
+            industrial_production: 0.0, // Placeholder
+            credit_growth: 0.0, // Placeholder
+            household_debt,
+            corporate_debt,
+            government_debt,
+            bank_liabilities: 0.0, // Placeholder
+        }
+    }
+}

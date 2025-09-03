@@ -1,93 +1,147 @@
-name = "Base Scenario"
-description = "A simple economy with two banks, one oil refinery, and a few consumers."
+# --- Simulation v3 Configuration File ---
 
+name = "Basic Economy"
+description = "A simple setup with 2 banks, 3 firms, and 5 consumers for engine_v3."
+
+# General simulation settings
 [config]
-iterations = 100
-treasury_tenors_to_register = ["T1M", "T2M", "T3M", "T6M", "T1Y", "T2Y", "T5Y", "T10Y", "T30Y"]
+iterations = 100 # The simulation will run for 100 ticks (days)
+
+# --- Goods & Production Recipes ---
+# Define the raw materials and finished goods available in the economy.
+
+[[goods]]
+id = "raw_material"
+name = "Raw Material"
+unit = "unit"
+category = "RawMaterial"
+cpi_weight = 0.0 # Raw materials don't directly contribute to CPI
+
+[[goods]]
+id = "general_good"
+name = "General Purpose Good"
+unit = "item"
+category = "ConsumerGood"
+cpi_weight = 1.0 # This is the only consumer good, so it has 100% CPI weight
+
+# Define how goods are produced.
+[[recipes]]
+id = "basic_manufacturing_recipe"
+name = "Basic Manufacturing"
+inputs = [
+  { good_id = "raw_material", quantity = 2.0 }
+]
+outputs = [
+  { good_id = "general_good", quantity = 1.0 }
+]
+labour_hours = 8.0
+
+# --- Banks ---
+# Define the banks in the economy. Their initial liabilities (deposits) will be
+# created automatically when firms and consumers are given deposit assets.
 
 [[banks]]
 id = "bank_a"
-name = "Ravelin National Bank"
+name = "Bank A"
 initial_assets = [
-    { type = "Reserves", amount = 500000.0 },
-    { type = "Cash", amount = 200000.0 },
-    { type = "Bond", tenor = "T10Y", quantity = 500 },
-    { type = "Bond", tenor = "T30Y", quantity = 200 },
-    { type = "Bond", tenor = "T5Y", quantity = 300 },
-    { type = "Bond", tenor = "T2Y", quantity = 400 }
+  { type = "Reserves", amount = 1_000_000.0 },
 ]
 initial_liabilities = []
 
 [[banks]]
 id = "bank_b"
-name = "Economic Sim Savings & Loan"
+name = "Bank B"
 initial_assets = [
-    { type = "Reserves", amount = 300000.0 },
-    { type = "Cash", amount = 150000.0 },
-    { type = "Bond", tenor = "T2Y", quantity = 200 },
-    { type = "Bond", tenor = "T5Y", quantity = 300 },
-    { type = "Bond", tenor = "T10Y", quantity = 150 },
-    { type = "Bond", tenor = "T30Y", quantity = 100 }
+  { type = "Reserves", amount = 500_000.0 }
 ]
 initial_liabilities = []
 
-[[firms]]
-id = "global_oil"
-name = "Global Oil Corp"
-bank_id = "bank_a"
-recipe_name = "Oil Refining"
-desired_markup = 0.20
-initial_assets = [
-    { type = "Deposit", bank_id = "bank_a", amount = 250000.0 },
-    { type = "Inventory", good_slug = "oil", quantity = 1000.0, unit_cost = 50.0 }
-]
-initial_liabilities = []
-[firms.decision_model]
-type = "SimpleFirmDecisionModel"
+
+# --- Firms ---
+# Define the firms. We have two production firms and one investment firm.
 
 [[firms]]
-id = "bread_petrol_yum"
-name = "Bread & Petrol Co."
+id = "producer_1"
+name = "General Goods Inc."
+bank_id = "bank_a" # This firm banks with Bank A
+recipe_name = "Basic Manufacturing" # It knows how to produce goods
+initial_assets = [
+  { type = "Deposit", bank_id = "bank_a", amount = 100_000.0 },
+  { type = "Inventory", good_slug = "raw_material", quantity = 50.0, unit_cost = 10.0 }
+]
+decision_model = { type = "ProductionFirm" }
+
+[[firms]]
+id = "producer_2"
+name = "Reliable Wares Co."
 bank_id = "bank_b"
-recipe_name = "Bread Production"
-desired_markup = 0.15
+recipe_name = "Basic Manufacturing"
 initial_assets = [
-    { type = "Deposit", bank_id = "bank_b", amount = 150000.0 },
-    { type = "Inventory", good_slug = "bread", quantity = 500.0, unit_cost = 2.0 },
-    { type = "Inventory", good_slug = "petrol", quantity = 300.0, unit_cost = 3.0 }
+  { type = "Deposit", bank_id = "bank_b", amount = 75_000.0 },
+  { type = "Inventory", good_slug = "raw_material", quantity = 20.0, unit_cost = 10.0 }
 ]
-initial_liabilities = []
-[firms.decision_model]
-type = "SimpleFirmDecisionModel"
+decision_model = { type = "ProductionFirm" }
 
 [[firms]]
-id = "goldman_stanley"
-name = "Goldman Stanley"
+id = "investment_firm_1"
+name = "Capital Investments"
 bank_id = "bank_a"
 initial_assets = [
-    { type = "Deposit", bank_id = "bank_a", amount = 100_000.0 },
-    { type = "Bond", tenor = "T10Y", quantity = 1000 },
-    { type = "Bond", tenor = "T30Y", quantity = 500 }
+  { type = "Deposit", bank_id = "bank_a", amount = 2_000_000.0 }
 ]
-initial_liabilities = []
-decision_model = { type = "InvestmentFirmDecisionModel", min_liquidity = 20000.0, quote_qty = 5.0 }
+# This firm uses the InvestmentFirm decision model to trade financial assets
+decision_model = { type = "InvestmentFirm", min_liquidity = 50000.0, quote_qty = 10.0 }
+
+
+# --- Consumers ---
+# Define the 5 consumers who will work, earn, and spend.
 
 [[consumers]]
 id = "consumer_1"
 bank_id = "bank_a"
-income = 60000.0 # Annual
+income = 50000.0 # Annual income
 initial_assets = [
-    { type = "Deposit", bank_id = "bank_a", amount = 5000.0 },
-    { type = "Cash", amount = 200.0 }
+  { type = "Deposit", bank_id = "bank_a", amount = 5000.0 }
 ]
 initial_liabilities = []
+consumption_basket = { general_good = 1.0 } # 100% of their budget goes to the only good
 
 [[consumers]]
 id = "consumer_2"
-bank_id = "bank_b"
-income = 85000.0 # Annual
+bank_id = "bank_a"
+income = 65000.0
 initial_assets = [
-    { type = "Deposit", bank_id = "bank_b", amount = 7500.0 },
-    { type = "Cash", amount = 345.0 }
+  { type = "Deposit", bank_id = "bank_a", amount = 8000.0 }
 ]
 initial_liabilities = []
+consumption_basket = { general_good = 1.0 }
+
+[[consumers]]
+id = "consumer_3"
+bank_id = "bank_b"
+income = 80000.0
+initial_assets = [
+  { type = "Deposit", bank_id = "bank_b", amount = 12000.0 }
+]
+initial_liabilities = []
+consumption_basket = { general_good = 1.0 }
+
+[[consumers]]
+id = "consumer_4"
+bank_id = "bank_b"
+income = 45000.0
+initial_assets = [
+  { type = "Deposit", bank_id = "bank_b", amount = 2000.0 }
+]
+initial_liabilities = []
+consumption_basket = { general_good = 1.0 }
+
+[[consumers]]
+id = "consumer_5"
+bank_id = "bank_a"
+income = 120000.0
+initial_assets = [
+  { type = "Deposit", bank_id = "bank_a", amount = 25000.0 }
+]
+initial_liabilities = []
+consumption_basket = { general_good = 1.0 }

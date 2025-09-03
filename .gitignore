@@ -4,6 +4,9 @@
 ref.md
 */debug
 */target
+/target/*
+target/*
+**/target
 **/*.rs.bk
 .tmux-layout
 *.pdb
@@ -58,3 +61,5 @@ ALL_README.md
 /crates/**/*.md
 target/doc/*
 target/doc/**/*
+sim_core.md
+target/debug/.fingerprint/ahash-ecf52de1f1f7f207/invoked.timestamp
