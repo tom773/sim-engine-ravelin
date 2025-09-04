@@ -6,11 +6,6 @@ use std::collections::HashMap;
 use uuid::Uuid;
 use rust_decimal::prelude::*;
 
-fn find_general_labour_market(state: &SimState) -> Option<LabourMarketId> {
-    state.financial_system.exchange.labour_markets.keys().next().cloned()
-}
-
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SimpleConsumerDecisionModel {
     pub mpc: f64,
@@ -61,7 +56,7 @@ impl SimpleConsumerDecisionModel {
     fn handle_employment(&self, consumer: &Consumer, state: &SimState, intentions: &mut Vec<SimIntention>) {
         if consumer.employed_by.is_none() {
             
-            let market_id = match find_general_labour_market(state) {
+            let market_id = match state.financial_system.find_general_labour_market() {
                 Some(id) => id,
                 None => return,
             };
@@ -167,7 +162,7 @@ impl CESConsumerDecisionModel {
     fn handle_employment(&self, consumer: &Consumer, state: &SimState, intentions: &mut Vec<SimIntention>) {
         if consumer.employed_by.is_none() {
             
-            let market_id = match find_general_labour_market(state) {
+            let market_id = match state.financial_system.find_general_labour_market() {
                 Some(id) => id,
                 None => return,
             };

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use sim_core::*;
-use crate::{Any, inventory, Domain, DomainResult, DomainValidator, ResolutionContext, ResolutionResult, ResolutionPhase};
+use crate::{Any, inventory, Domain, DomainResult, ResolutionContext, ResolutionResult, ResolutionPhase};
 use std::collections::HashMap;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -110,15 +110,15 @@ impl ConsumptionDomain {
             },
             
             ConsumptionAction::PurchaseAtBest { agent_id, good_id: _, max_notional } => {
-                DomainValidator::non_negative_amount(*max_notional)?;
-                DomainValidator::agent_exists(*agent_id, state)?;
+                Validator::non_negative_amount(*max_notional)?;
+                Validator::agent_exists(*agent_id, state)?;
                 
                 Ok(())
             },
             
             ConsumptionAction::Consume { agent_id, good_id, amount } => {
-                DomainValidator::positive_amount(*amount)?;
-                DomainValidator::agent_exists(*agent_id, state)?;
+                Validator::positive_amount(*amount)?;
+                Validator::agent_exists(*agent_id, state)?;
 
                 let fs = &state.financial_system;
                 let inventory = Self::get_agent_inventory(fs, agent_id);

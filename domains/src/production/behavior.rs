@@ -4,32 +4,6 @@ use rust_decimal::prelude::*;
 use serde::{Deserialize, Serialize};
 use sim_core::*;
 use std::any::Any;
-use std::collections::HashMap;
-
-fn find_general_labour_market(state: &SimState) -> Option<LabourMarketId> {
-    state
-        .financial_system
-        .exchange
-        .labour_markets
-        .keys()
-        .next()
-        .cloned()
-}
-
-fn get_agent_inventory(fs: &FinancialSystem, agent_id: &AgentId) -> HashMap<GoodId, InventoryItem> {
-    if let Some(bs) = fs.balance_sheets.get(agent_id) {
-        for inst_id in bs.assets.keys() {
-            if let Some(inst) = fs.instruments.get(inst_id) {
-                if let InstrumentType::RealAsset(RealAssetType::Inventory { goods, .. }) =
-                    &inst.instrument_type
-                {
-                    return goods.clone();
-                }
-            }
-        }
-    }
-    HashMap::new()
-}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProductionFirmDecisionModel {
@@ -80,7 +54,7 @@ impl ProductionFirmDecisionModel {
     fn handle_hiring(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
         let current_employees = firm.employees.len();
         if current_employees < self.target_employees {
-            if find_general_labour_market(state).is_none() {
+            if state.financial_system.find_general_labour_market().is_none() {
                 return;
             }
 
@@ -103,7 +77,7 @@ impl ProductionFirmDecisionModel {
 
         if let Some(recipe_id) = firm.recipe {
             if let Some(recipe) = fs.goods.recipes.get(&recipe_id) {
-                let inventory = get_agent_inventory(fs, &firm.id);
+                let inventory = fs.get_agent_inventory(&firm.id);
 
                 let can_produce = recipe.inputs.iter().all(|input| {
                     inventory
@@ -139,7 +113,7 @@ impl ProductionFirmDecisionModel {
 
     fn handle_sales(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
         let fs = &state.financial_system;
-        let inventory = get_agent_inventory(fs, &firm.id);
+        let inventory = fs.get_agent_inventory(&firm.id);
 
         for (good_id, item) in inventory {
             if item.quantity > 0.1 {
@@ -164,7 +138,7 @@ impl ProductionFirmDecisionModel {
 
         if let Some(recipe_id) = firm.recipe {
             if let Some(recipe) = fs.goods.recipes.get(&recipe_id) {
-                let inventory = get_agent_inventory(fs, &firm.id);
+                let inventory = fs.get_agent_inventory(&firm.id);
 
                 for input in &recipe.inputs {
                     let current_qty = inventory

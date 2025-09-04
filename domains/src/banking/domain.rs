@@ -1,4 +1,4 @@
-use crate::{Any, Domain, DomainResult, DomainValidator, ResolutionContext, ResolutionPhase, ResolutionResult};
+use crate::{Any, Domain, DomainResult, ResolutionContext, ResolutionPhase, ResolutionResult};
 use chrono::Duration;
 use serde::{Deserialize, Serialize};
 use sim_core::*;
@@ -175,9 +175,9 @@ impl BankingDomain {
         let fs = &state.financial_system;
         match action {
             BankingAction::Deposit { agent_id, bank, amount } => {
-                DomainValidator::positive_amount(*amount)?;
-                DomainValidator::agent_exists(*agent_id, state)?;
-                DomainValidator::bank_exists(*bank, state)?;
+                Validator::positive_amount(*amount)?;
+                Validator::agent_exists(*agent_id, state)?;
+                Validator::bank_exists(*bank, state)?;
 
                 let cb_id = fs.central_bank.id;
                 let currency_pos = Self::find_instrument_position(fs, agent_id, CashType::Currency, cb_id);
@@ -195,9 +195,9 @@ impl BankingDomain {
                 Ok(())
             }
             BankingAction::Withdraw { agent_id, bank, amount } => {
-                DomainValidator::positive_amount(*amount)?;
-                DomainValidator::agent_exists(*agent_id, state)?;
-                DomainValidator::bank_exists(*bank, state)?;
+                Validator::positive_amount(*amount)?;
+                Validator::agent_exists(*agent_id, state)?;
+                Validator::bank_exists(*bank, state)?;
 
                 let deposit_pos = Self::find_instrument_position(fs, agent_id, CashType::DemandDeposit, *bank);
 
@@ -215,25 +215,25 @@ impl BankingDomain {
                 Ok(())
             }
             BankingAction::InitiatePayment { from, to, amount, .. } => {
-                DomainValidator::positive_amount(*amount)?;
-                DomainValidator::agent_exists(*from, state)?;
-                DomainValidator::agent_exists(*to, state)?;
+                Validator::positive_amount(*amount)?;
+                Validator::agent_exists(*from, state)?;
+                Validator::agent_exists(*to, state)?;
                 Ok(())
             }
             BankingAction::InjectLiquidity => Ok(()),
 
             BankingAction::PostInterbankLendingOffer { lender_id, amount, .. } => {
-                DomainValidator::positive_amount(*amount)?;
-                DomainValidator::bank_exists(*lender_id, state)
+                Validator::positive_amount(*amount)?;
+                Validator::bank_exists(*lender_id, state)
             }
             BankingAction::PostInterbankBorrowingRequest { borrower_id, amount, .. } => {
-                DomainValidator::positive_amount(*amount)?;
-                DomainValidator::bank_exists(*borrower_id, state)
+                Validator::positive_amount(*amount)?;
+                Validator::bank_exists(*borrower_id, state)
             }
             BankingAction::ExecuteInterbankLoan { lender_id, borrower_id, amount, .. } => {
-                DomainValidator::positive_amount(*amount)?;
-                DomainValidator::bank_exists(*lender_id, state)?;
-                DomainValidator::bank_exists(*borrower_id, state)
+                Validator::positive_amount(*amount)?;
+                Validator::bank_exists(*lender_id, state)?;
+                Validator::bank_exists(*borrower_id, state)
             }
         }
     }

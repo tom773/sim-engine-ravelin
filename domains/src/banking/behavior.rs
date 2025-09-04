@@ -4,14 +4,10 @@ use rust_decimal::prelude::*;
 use serde::{Deserialize, Serialize};
 use sim_core::*;
 use std::any::Any;
-use chrono::NaiveDate;
 
 #[derive(Clone, Debug, Serialize, Default, Deserialize)]
 pub struct BasicBankDecisionModel;
 
-fn years_to_maturity(current_date: NaiveDate, maturity_date: NaiveDate) -> f64 {
-    pricing::years_to_maturity(current_date, maturity_date)
-}
 
 #[typetag::serde]
 impl DecisionModel for BasicBankDecisionModel {

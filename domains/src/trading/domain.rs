@@ -1,5 +1,5 @@
 use crate::{
-    Any, Domain, DomainResult, DomainValidator, ResolutionContext, ResolutionPhase,
+    Any, Domain, DomainResult, ResolutionContext, ResolutionPhase,
     ResolutionResult, inventory,
 };
 use chrono::NaiveDate;
@@ -204,9 +204,9 @@ impl TradingDomain {
                 price,
                 ..
             } => {
-                DomainValidator::positive_amount(*quantity)?;
-                DomainValidator::positive_amount(price.to_f64())?;
-                DomainValidator::agent_exists(*agent_id, state)?;
+               Validator::positive_amount(*quantity)?;
+               Validator::positive_amount(price.to_f64())?;
+               Validator::agent_exists(*agent_id, state)?;
                 Ok(())
             }
         }

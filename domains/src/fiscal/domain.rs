@@ -1,5 +1,5 @@
 use crate::{
-    Any, Domain, DomainResult, DomainValidator, ResolutionContext, ResolutionPhase, ResolutionResult, inventory,
+    Any, Domain, DomainResult, ResolutionContext, ResolutionPhase, ResolutionResult, inventory,
 };
 use serde::{Deserialize, Serialize};
 use sim_core::*;
@@ -171,7 +171,7 @@ impl FiscalDomain {
                 Ok(())
             }
             FiscalAction::BidInDebtAuction { agent_id, auction_id, .. } => {
-                DomainValidator::agent_exists(*agent_id, state)?;
+                Validator::agent_exists(*agent_id, state)?;
                 if !state.financial_system.exchange.open_auctions.contains_key(auction_id) {
                     return Err(format!("Auction {} not found or not open.", auction_id));
                 }

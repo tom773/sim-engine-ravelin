@@ -1,6 +1,7 @@
 use crate::prelude::*;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -197,5 +198,20 @@ impl FinancialSystem {
         }
 
         Some(info)
+    }
+    pub fn get_agent_inventory(&self, agent_id: &AgentId) -> HashMap<GoodId, InventoryItem> {
+        if let Some(bs) = self.balance_sheets.get(agent_id) {
+            for inst_id in bs.assets.keys() {
+                if let Some(inst) = self.instruments.get(inst_id) {
+                    if let InstrumentType::RealAsset(RealAssetType::Inventory { goods, .. }) = &inst.instrument_type {
+                        return goods.clone();
+                    }
+                }
+            }
+        }
+        HashMap::new()
+    }
+    pub fn find_general_labour_market(&self) -> Option<LabourMarketId> {
+        self.exchange.labour_markets.keys().next().cloned()
     }
 }

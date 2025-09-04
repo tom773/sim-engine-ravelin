@@ -1,5 +1,5 @@
 use crate::{
-    inventory, Any, Domain, DomainResult, DomainValidator, ResolutionContext, ResolutionPhase,
+    inventory, Any, Domain, DomainResult, ResolutionContext, ResolutionPhase,
     ResolutionResult,
 };
 use serde::{Deserialize, Serialize};
@@ -14,28 +14,6 @@ impl ProductionDomain {
     pub fn new() -> Self {
         Self {}
     }
-}
-
-fn find_general_labour_market(state: &SimState) -> Option<LabourMarketId> {
-    state.financial_system.exchange.labour_markets.keys().next().cloned()
-}
-
-fn get_agent_inventory(
-    fs: &FinancialSystem,
-    agent_id: &AgentId,
-) -> HashMap<GoodId, InventoryItem> {
-    if let Some(bs) = fs.balance_sheets.get(agent_id) {
-        for inst_id in bs.assets.keys() {
-            if let Some(inst) = fs.instruments.get(inst_id) {
-                if let InstrumentType::RealAsset(RealAssetType::Inventory { goods, .. }) =
-                    &inst.instrument_type
-                {
-                    return goods.clone();
-                }
-            }
-        }
-    }
-    HashMap::new()
 }
 
 fn get_unit_cost(inventory: &HashMap<GoodId, InventoryItem>, good_id: &GoodId) -> Money {
@@ -70,7 +48,7 @@ impl Domain for ProductionDomain {
                 count,
                 wage_rate,
             } => {
-                let market_id = match find_general_labour_market(context.state) {
+                let market_id = match context.state.financial_system.find_general_labour_market() {
                     Some(id) => id,
                     None => {
                         return Some(ResolutionResult::failure(vec![
@@ -172,7 +150,7 @@ impl ProductionDomain {
                 if *count == 0 {
                     Err("Cannot hire zero workers".to_string())
                 } else {
-                    DomainValidator::firm_exists(*agent_id, state)
+                    Validator::firm_exists(*agent_id, state)
                 }
             }
             ProductionAction::Produce {
@@ -184,14 +162,14 @@ impl ProductionDomain {
                     return Err("Cannot produce zero batches".to_string());
                 }
 
-                DomainValidator::firm_exists(*agent_id, state)?;
+                Validator::firm_exists(*agent_id, state)?;
 
                 if !fs.goods.recipes.contains_key(recipe_id) {
                     return Err("Recipe not found".to_string());
                 }
 
                 let recipe = fs.goods.recipes.get(recipe_id).unwrap();
-                let inventory = get_agent_inventory(fs, agent_id);
+                let inventory = fs.get_agent_inventory(agent_id);
 
                 for input in &recipe.inputs {
                     let available =
@@ -226,7 +204,7 @@ impl ProductionDomain {
     }
 
     fn execute_hire(&self, agent_id: AgentId, count: u32, state: &SimState) -> DomainResult {
-        let market_id = match find_general_labour_market(state) {
+        let market_id = match state.financial_system.find_general_labour_market() {
             Some(id) => id,
             None => return DomainResult::failure(vec!["No labour market found.".to_string()]),
         };
@@ -258,7 +236,7 @@ impl ProductionDomain {
         let fs = &state.financial_system;
         if let Some(recipe) = fs.goods.recipes.get(&recipe_id) {
             let mut effects = Vec::new();
-            let inventory = get_agent_inventory(fs, &agent_id);
+            let inventory = fs.get_agent_inventory(&agent_id);
 
             let input_cost: Money =
                 recipe.inputs.iter().map(|input| get_unit_cost(&inventory, &input.good_id) * input.quantity).sum();
