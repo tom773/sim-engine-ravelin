@@ -92,3 +92,18 @@ pub enum TransactionContext {
     },
     GenericTransfer,
 }
+
+impl TransactionContext {
+    pub fn name(&self) -> &'static str {
+        match self {
+            TransactionContext::GoodsPurchase { .. } => "GoodsPurchase",
+            TransactionContext::TradeSettlement { .. } => "TradeSettlement",
+            TransactionContext::WagePayment => "WagePayment",
+            TransactionContext::TaxPayment => "TaxPayment",
+            TransactionContext::GovTranseferPayment => "GovTranseferPayment",
+            TransactionContext::CouponPayment { .. } => "CouponPayment",
+            TransactionContext::PrincipalRepayment { .. } => "PrincipalRepayment",
+            TransactionContext::GenericTransfer => "GenericTransfer",
+        }
+    }
+}

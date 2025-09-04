@@ -24,6 +24,9 @@ pub enum SimEvent {
         context: ActionContext,
         effects: Vec<FinancialEffect>,
     },
+    Intention(SimIntention),
+    Action(ActionRecord),
+    Effect(StateEffect),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

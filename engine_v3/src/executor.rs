@@ -60,13 +60,12 @@ impl SimulationEngine {
         scheduler.register_handler(TickStep::FinalizeSettlement, FinalizeSettlementHandler); 
         scheduler.register_handler(TickStep::ApplyAllEffects, ApplyAllEffectsHandler);
         scheduler.register_handler(TickStep::UpdateHistory, UpdateHistoryHandler);
-        scheduler.print_execution_plan();
         scheduler
     }
 
     pub fn run_tick(&mut self, rng: &mut dyn RngCore) -> (TickExecutionResult, Vec<SimEvent>) {
         self.event_log.clear();
-
+        println!("\n===Tick {} ({})===\n", self.state.ticknum, self.state.current_date);
         let scheduler = std::mem::take(&mut self.scheduler);
         let execution_result = scheduler.execute_tick(self, rng);
         self.scheduler = scheduler;

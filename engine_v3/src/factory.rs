@@ -258,13 +258,6 @@ impl<'a> AgentFactory<'a> {
 
         self.state.financial_system.clearing_house.csd.initialize_government_account(gov_id);
 
-        tracing::info!(
-            "Initialized TGA for government {} with balance {:.2} at central bank {}",
-            gov_id.0,
-            initial_balance,
-            cb_id.0
-        );
-
         Ok(())
     }
 }

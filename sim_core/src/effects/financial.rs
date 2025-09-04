@@ -168,7 +168,7 @@ impl StateEffectApplicator {
     }
 
     pub fn apply_adjust_position(
-        state: &mut SimState, owner: AgentId, instrument_id: InstrumentId, delta_quantity: f64, side: &PositionSide,
+        state: &mut SimState, owner: AgentId, instrument_id: InstrumentId, _delta_quantity: f64, side: &PositionSide,
         cost_per_unit: Option<Money>,
     ) -> Result<(), EffectError> {
         let _slc = state.clone();
@@ -197,14 +197,6 @@ impl StateEffectApplicator {
             
         });
 
-        position.quantity += delta_quantity;
-        /*tracing::event!(
-            tracing::Level::INFO,
-            "[POS ADJ] {:?} | {} ${} ",
-            &slc.get_agent_type_string(&owner),
-            ii,
-            delta_quantity,
-        );*/
         if position.quantity <= 1e-9 {
             position_map.remove(&instrument_id);
         }

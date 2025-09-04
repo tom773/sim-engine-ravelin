@@ -76,12 +76,6 @@ impl StepHandler for ApplyInstrumentCreationHandler {
 
             let count = instrument_effects.len();
             
-            tracing::event!(
-                tracing::Level::INFO,
-                "Applying {} CreateInstrument effects immediately",
-                count
-            );
-
             engine.state.apply_effects(&instrument_effects)
                 .map_err(|e| e.to_string())?;
             
@@ -136,13 +130,6 @@ impl StepHandler for ApplyMarketEffectsHandler {
             let market_effects: Vec<StateEffect> =
                 all_effects.into_iter().filter(|e| matches!(e, StateEffect::Market(_))).collect();
 
-            let _effects_str = market_effects.iter().map(|e| e.name()).collect::<Vec<_>>().join(", ");
-            /*tracing::event!(
-                tracing::Level::INFO,
-                "Applying {} market effects: [{}]",
-                market_effects.len(),
-                effects_str
-            );*/
 
             engine.state.apply_effects(&market_effects).map_err(|e| e.to_string())?;
             Ok(serde_json::json!({ "market_effects_applied": market_effects.len() }))
@@ -159,13 +146,6 @@ impl StepHandler for ClearMarketsHandler {
 
             let snapshots_s: std::collections::HashMap<String, MarketView> =
                 snapshots.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
-
-            tracing::event!(
-                tracing::Level::INFO,
-                "Markets cleared. Generated {} trades and {} snapshots.",
-                market_trades.len(),
-                snapshots_s.len()
-            );
 
             let mut all_trades = context.get_trades().unwrap_or_default();
 
@@ -239,11 +219,6 @@ impl StepHandler for StartSettlementHandler {
             }
 
             if !payment_effects.is_empty() {
-                tracing::event!(
-                    tracing::Level::INFO,
-                    "Queueing {} payments in RTGS",
-                    payment_effects.len()
-                );
                 engine.state.apply_effects(&payment_effects)
                     .map_err(|e| format!("Failed to queue payments: {}", e))?;
             }
@@ -288,12 +263,6 @@ impl StepHandler for RunRTGSHandler {
             context.store("all_effects", &all_effects)?;
             let final_pending = engine.state.financial_system.rtgs.pending.len();
             let settled_count = initial_pending - final_pending;
-            tracing::event!(
-                tracing::Level::INFO,
-                "RTGS run complete. Settled: {}, Remaining: {}.",
-                settled_count,
-                final_pending
-            );
 
             Ok(serde_json::json!({
                 "payments_settled": settled_count,
@@ -351,9 +320,14 @@ impl StepHandler for ApplyAllEffectsHandler {
             all_effects.extend(labour_effects);
 
             let all_actions = context.get_all_actions().unwrap_or_default();
+            let all_intentions = context.get_intentions().unwrap_or_default();
             let mapping = context.get_action_to_effect_indices().unwrap_or_default();
 
-            let mut new_events = Vec::new();
+            let mut new_events: Vec<SimEvent> = Vec::new();
+            
+            new_events.extend(all_intentions.into_iter().map(SimEvent::Intention));
+            new_events.extend(all_actions.clone().into_iter().map(SimEvent::Action));
+            new_events.extend(all_effects.clone().into_iter().map(SimEvent::Effect));
 
             for (action_idx, action_record) in all_actions.iter().enumerate() {
                 if let Some(effect_indices) = mapping.get(&action_idx) {
@@ -381,13 +355,7 @@ impl StepHandler for ApplyAllEffectsHandler {
                     }
                 }
             }
-
-            for effect in &all_effects {
-                if let Some(event) = event_from_effect(effect) {
-                    new_events.push(event);
-                }
-            }
-
+            
             engine.event_log = new_events;
 
             engine.state.apply_effects(&all_effects).map_err(|e| e.to_string())?;
@@ -417,16 +385,6 @@ impl StepHandler for UpdateHistoryHandler {
                 trades,
                 events: engine.event_log.clone(),
             };
-
-            /*tracing::event!(
-                tracing::Level::INFO,
-                "Updating history for tick {}. Intentions: {}, Actions: {}, Effects: {}, Trades: {}",
-                tick_record.tick_number,
-                tick_record.intentions.len(),
-                tick_record.actions.len(),
-                tick_record.effects.len(),
-                tick_record.trades.len()
-            );*/
 
             engine.state.history.add_tick_record(tick_record);
             Ok(serde_json::Value::Null)
@@ -460,12 +418,6 @@ impl StepHandler for DebtAuctionsHandler {
                 auction_trades.extend(trades);
             }
 
-            tracing::event!(
-                tracing::Level::INFO,
-                "Conducted {} debt auctions, generating {} trades.",
-                open_auction_ids.len(),
-                auction_trades.len()
-            );
 
             if !auction_trades.is_empty() {
                 let mut all_trades = context.get_trades().unwrap_or_default();
@@ -477,35 +429,5 @@ impl StepHandler for DebtAuctionsHandler {
                 serde_json::json!({ "debt_auctions_conducted": open_auction_ids.len(), "auction_trades_generated": auction_trades.len() }),
             )
         })
-    }
-}
-
-fn event_from_effect(effect: &StateEffect) -> Option<SimEvent> {
-    match effect {
-        StateEffect::Financial(FinancialEffect::CreateInstrument { instrument, creditor, debtor, quantity }) => {
-            Some(SimEvent::InstrumentLifecycle(sim_core::InstrumentLifecycleEvent::Created {
-                instrument_id: instrument.id,
-                creditor_id: *creditor,
-                debtor_id: *debtor,
-                quantity: *quantity,
-                instrument_type: instrument.type_as_string().to_string(),
-            }))
-        }
-        StateEffect::Financial(FinancialEffect::RemoveInstrument(instrument_id)) => {
-            Some(SimEvent::InstrumentLifecycle(sim_core::InstrumentLifecycleEvent::Removed {
-                instrument_id: *instrument_id,
-            }))
-        }
-        StateEffect::Financial(FinancialEffect::RecordTransaction(tx)) => Some(SimEvent::TransactionRecord(tx.clone())),
-        StateEffect::Financial(FinancialEffect::AdjustPosition {
-            owner, instrument_id, delta_quantity, side, ..
-        }) => Some(SimEvent::BalanceSheetUpdate(sim_core::BalanceSheetUpdateEvent {
-            owner_id: *owner,
-            instrument_id: *instrument_id,
-            quantity_change: *delta_quantity,
-            new_total_quantity: 0.0,
-            side: side.clone(),
-        })),
-        _ => None,
     }
 }

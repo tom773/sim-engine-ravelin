@@ -36,7 +36,16 @@ fn run_pure_rtgs(state: &mut SimState) -> Result<(), EffectError> {
                 i += 1;
                 continue;
             }
-
+            tracing::event!(
+                Level::INFO, "\n\nPayment {} - {:?}\nFrom {} -> To {} \nAmount: ${}\nToBank: {} | FromBank: {}\n", 
+                &pi.id.to_string()[..4],
+                pi.context.name(),
+                state.get_agent_type_string(&pi.payer).unwrap(),
+                state.get_agent_type_string(&pi.payee).unwrap(),
+                pi.amount,
+                state.get_agent_type_string(&pi.to_bank).unwrap(),
+                state.get_agent_type_string(&pi.from_bank).unwrap()
+            );
             if can_fund(state, &pi)? || can_use_daylight_credit(state, &pi)? {
                 apply_cash_movements_immediately(state, &pi)?;
                 maybe_complete_dvp(state, &pi.context)?;
@@ -463,16 +472,6 @@ pub fn complete_dvp_asset_leg(state: &mut SimState, trade_id: Uuid) -> Result<()
         &PositionSide::Asset,
         Some(price),
     )?;
-
-    event!(
-        Level::INFO,
-        "DvP asset leg completed for trade {}: {} units of instrument {} transferred from {} to {}",
-        trade_id,
-        quantity,
-        instrument_id.0,
-        seller.0,
-        buyer.0
-    );
 
     Ok(())
 }

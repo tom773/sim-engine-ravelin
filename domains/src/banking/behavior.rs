@@ -25,7 +25,6 @@ impl DecisionModel for BasicBankDecisionModel {
         self.handle_debt_auctions(state, bank, fs.get_liquid_assets(&bank.id), &mut intentions, rng);
         self.consider_treasury_market_making(bank, state, &mut intentions, rng);
         self.evaluate_lending_opportunities(bank, fs, &mut intentions);
-        tracing::event!(tracing::Level::INFO, "Bank {} generated intentions {:?}", bank.name, intentions.iter().map(|i| i.name()).collect::<Vec<_>>());
         intentions
     }
 }
