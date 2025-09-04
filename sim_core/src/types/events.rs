@@ -1,8 +1,9 @@
 use crate::prelude::*;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+use std::collections::HashMap;
 use typetag::serde;
+use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ActionContext {
@@ -20,13 +21,16 @@ pub enum SimEvent {
     InstrumentLifecycle(InstrumentLifecycleEvent),
     TransactionRecord(Transaction),
     BalanceSheetUpdate(BalanceSheetUpdateEvent),
-    FinancialTransaction {
-        context: ActionContext,
-        effects: Vec<FinancialEffect>,
-    },
+    FinancialTransaction { context: ActionContext, effects: Vec<FinancialEffect> },
     Intention(SimIntention),
     Action(ActionRecord),
     Effect(StateEffect),
+    PaymentLifecycle(PaymentLifecycleEvent),
+    BalanceChange(BalanceChangeEvent),
+    BankingSystem(BankingSystemEvent),
+    MarketActivity(MarketActivityEvent),
+    EconomicIndicator(EconomicIndicatorEvent),
+    MoneyFlowChain(MoneyFlowChainEvent),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -79,4 +83,142 @@ pub struct BalanceSheetUpdateEvent {
     pub quantity_change: f64,
     pub new_total_quantity: f64,
     pub side: PositionSide,
+}
+
+// Comprehensive TransactionEventContext, including chain_id for Phase 4
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TransactionEventContext {
+    pub purpose: String,
+    pub chain_id: Option<Uuid>,
+    pub metadata: HashMap<String, String>,
+}
+
+// 1. Payment Lifecycle Events
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PaymentLifecycleEvent {
+    pub payment_id: Uuid,
+    pub stage: PaymentStage,
+    pub from_agent: AgentId,
+    pub to_agent: AgentId,
+    pub amount: Money,
+    pub context: TransactionEventContext,
+    pub timestamp: DateTime<Utc>,
+    pub queue_position: Option<usize>,
+    pub failure_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum PaymentStage {
+    Initiated,
+    Queued { position: usize },
+    Processing,
+    Settled,
+    Failed { reason: String },
+    Rejected { reason: String },
+}
+
+// 2. Balance Sheet Change Events
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BalanceChangeEvent {
+    pub agent_id: AgentId,
+    pub account_type: String,
+    pub bank_id: Option<AgentId>,
+    pub previous_balance: Money,
+    pub new_balance: Money,
+    pub change_amount: Money,
+    pub change_reason: ChangeReason,
+    pub related_transaction_id: Option<Uuid>,
+    pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ChangeReason {
+    PaymentReceived { from: AgentId },
+    PaymentSent { to: AgentId },
+    InterestAccrual,
+    TradeSettlement { trade_id: Uuid },
+    LoanDisbursement { loan_id: InstrumentId },
+    WagePayment { employer: AgentId },
+    DepositCreation,
+    TaxPayment { government: AgentId },
+}
+
+// 3. Banking System Events
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BankingSystemEvent {
+    pub event_type: BankingEventType,
+    pub bank_id: AgentId,
+    pub amount: Money,
+    pub reserves_before: Money,
+    pub reserves_after: Money,
+    pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum BankingEventType {
+    ReserveMovement { to_bank: Option<AgentId>, reason: String },
+    DepositCreation { for_agent: AgentId, account_id: String },
+    LiquidityInjection { from_central_bank: bool },
+    InterbankTransfer { to_bank: AgentId, reference: String },
+}
+
+// 4. Market Activity Events
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum OrderSide {
+    Buy,
+    Sell,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MarketActivityEvent {
+    pub market_id: MarketId,
+    pub activity_type: MarketActivityType,
+    pub agent_id: AgentId,
+    pub instrument_id: InstrumentId,
+    pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum MarketActivityType {
+    OrderPlaced { order_id: Uuid, side: OrderSide, quantity: f64, price: Money },
+    OrderCancelled { order_id: Uuid },
+    OrderPartiallyFilled { order_id: Uuid, filled_quantity: f64, remaining_quantity: f64 },
+    PriceUpdate { new_bid: Option<Money>, new_ask: Option<Money> },
+}
+
+// 5. Economic Indicator Events
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EconomicIndicatorEvent {
+    pub indicator: IndicatorType,
+    pub value: f64,
+    pub previous_value: Option<f64>,
+    pub change_percent: Option<f64>,
+    pub measurement_period: String,
+    pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Hash, Eq, PartialEq)]
+pub enum IndicatorType {
+    TotalMoneySupplyM1,
+    InflationRateCPI,
+    UnemploymentRate,
+    BankReserveRatio,
+}
+
+// 6. Money Flow Chain Events
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MoneyFlowChainEvent {
+    pub chain_id: Uuid,
+    pub sequence_number: u32,
+    pub event_type: ChainEventType,
+    pub agent_id: AgentId,
+    pub amount: Money,
+    pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ChainEventType {
+    ChainStart { initiator: AgentId, purpose: String },
+    ChainLink { from: AgentId, to: AgentId, step: String },
+    ChainEnd { final_recipient: AgentId, outcome: String },
 }
