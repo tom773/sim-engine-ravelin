@@ -40,6 +40,7 @@ struct AgentQuery {
 
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::fmt::init();
     let scenario = Scenario::from_toml_str(include_str!("../../../config/config.toml"))
         .expect("Failed to load scenario");
     let engine = Arc::new(Mutex::new(scenario.initialize_engine()));

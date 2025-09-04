@@ -159,6 +159,28 @@ pub enum SimIntention {
 }
 
 impl SimIntention {
+    pub fn name(&self) -> String {
+        match self {
+            SimIntention::SpendOnGood { .. } => "SpendOnGood".to_string(),
+            SimIntention::PurchaseInputs { .. } => "PurchaseInputs".to_string(),
+            SimIntention::ConsumeGood { .. } => "ConsumeGood".to_string(),
+            SimIntention::PostGoodToMarket { .. } => "PostGoodToMarket".to_string(),
+            SimIntention::Produce { .. } => "Produce".to_string(),
+            SimIntention::ApplyForJob { .. } => "ApplyForJob".to_string(),
+            SimIntention::HireWorkers { .. } => "HireWorkers".to_string(),
+            SimIntention::IssueDebtToRaise { .. } => "IssueDebtToRaise".to_string(),
+            SimIntention::CollectTaxes { .. } => "CollectTaxes".to_string(),
+            SimIntention::LendExcessReserves { .. } => "LendExcessReserves".to_string(),
+            SimIntention::BorrowReserves { .. } => "BorrowReserves".to_string(),
+            SimIntention::MarketMakeTreasuries { .. } => "MarketMakeTreasuries".to_string(),
+            SimIntention::DepositFunds { .. } => "DepositFunds".to_string(),
+            SimIntention::WithdrawFunds { .. } => "WithdrawFunds".to_string(),
+            SimIntention::PayWages { .. } => "PayWages".to_string(),
+            SimIntention::InjectLiquidity => "InjectLiquidity".to_string(),
+            SimIntention::AnnounceDebtAuction { .. } => "AnnounceDebtAuction".to_string(),
+            SimIntention::BidInDebtAuction { .. } => "BidInDebtAuction".to_string(),
+        }
+    }
     pub fn agent_id(&self) -> AgentId {
         match self {
             SimIntention::SpendOnGood { agent_id, .. } => *agent_id,

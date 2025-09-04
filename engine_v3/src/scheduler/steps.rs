@@ -1,4 +1,4 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -11,7 +11,8 @@ pub enum TickStep {
     ResolveDependentPhase,
     Auction,
     ClearMarkets,
-    SettleTrades,
+    BuildSettlementObligations,
+    RunRTGS,
     ApplyAllEffects,
     UpdateHistory,
 }
@@ -20,28 +21,39 @@ impl TickStep {
     pub fn all() -> Vec<Self> {
         use TickStep::*;
         vec![
-            Upkeep, GatherIntentions, ResolveIndependentPhase, ResolveMarketPhase,
-            ApplyMarketEffectsForPriceDiscovery, ResolveDependentPhase, Auction, ClearMarkets,
-            SettleTrades, ApplyAllEffects, UpdateHistory,
+            Upkeep,
+            GatherIntentions,
+            ResolveIndependentPhase,
+            ResolveMarketPhase,
+            ApplyMarketEffectsForPriceDiscovery,
+            ResolveDependentPhase,
+            Auction,
+            ClearMarkets,
+            BuildSettlementObligations,
+            RunRTGS,
+            ApplyAllEffects,
+            UpdateHistory,
         ]
     }
 
-    pub fn dependencies(&self) -> Vec<Self> {
-        use TickStep::*;
-        match self {
-            Upkeep => vec![],
-            GatherIntentions => vec![Upkeep],
-            ResolveIndependentPhase => vec![GatherIntentions],
-            ResolveMarketPhase => vec![ResolveIndependentPhase],
-            ApplyMarketEffectsForPriceDiscovery => vec![ResolveMarketPhase],
-            ResolveDependentPhase => vec![ApplyMarketEffectsForPriceDiscovery],
-            Auction => vec![ResolveDependentPhase],
-            ClearMarkets => vec![Auction],
-            SettleTrades => vec![ClearMarkets],
-            ApplyAllEffects => vec![SettleTrades],
-            UpdateHistory => vec![ApplyAllEffects],
-        }
+pub fn dependencies(&self) -> Vec<Self> {
+    use TickStep::*;
+    match self {
+        Upkeep => vec![],
+        GatherIntentions => vec![Upkeep],
+        ResolveIndependentPhase => vec![GatherIntentions],
+        ResolveMarketPhase => vec![ResolveIndependentPhase],
+        ApplyMarketEffectsForPriceDiscovery => vec![ResolveMarketPhase],
+        ResolveDependentPhase => vec![ApplyMarketEffectsForPriceDiscovery],
+        Auction => vec![ResolveDependentPhase],
+        ClearMarkets => vec![Auction],
+        BuildSettlementObligations => vec![ClearMarkets],
+        
+        ApplyAllEffects => vec![BuildSettlementObligations],
+        RunRTGS => vec![ApplyAllEffects],
+        UpdateHistory => vec![RunRTGS],
     }
+}
 
     pub fn should_abort_on_failure(&self) -> bool {
         true
@@ -65,11 +77,9 @@ impl StepResult {
     }
 }
 
-pub trait StepHandler: Send + Sync + Debug{
+pub trait StepHandler: Send + Sync + Debug {
     fn execute(
-        &self,
-        engine: &mut crate::executor::SimulationEngine,
-        context: &mut super::StepContext,
+        &self, engine: &mut crate::executor::SimulationEngine, context: &mut super::StepContext,
         rng: &mut dyn rand::RngCore,
     ) -> StepResult;
 }

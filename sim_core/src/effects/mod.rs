@@ -3,7 +3,9 @@ pub mod application;
 pub mod financial;
 pub mod inventory;
 pub mod market_effects;
+pub mod rtgs;
 
+pub use rtgs::*;
 pub use agent_effects::*;
 pub use application::*;
 pub use financial::*;

@@ -35,21 +35,14 @@ impl Instrument {
             InstrumentType::Bond(d) => ConsolidationKey {
                 issuer: d.issuer,
                 instrument_type: "Bond".to_string(),
-                subtype: format!(
-                    "{:?}_{:?}_{:?}_{:?}",
-                    d.bond_type, d.rating, d.maturity_date, d.coupon_rate_bps
-                ),
+                subtype: format!("{:?}_{:?}_{:?}_{:?}", d.bond_type, d.rating, d.maturity_date, d.coupon_rate_bps),
             },
             InstrumentType::RealAsset(d) => {
                 let (owner, subtype) = match d {
                     RealAssetType::Inventory { owner, .. } => (*owner, "Inventory".to_string()),
                     RealAssetType::Property { owner, .. } => (*owner, "Property".to_string()),
                 };
-                ConsolidationKey {
-                    issuer: owner,
-                    instrument_type: "RealAsset".to_string(),
-                    subtype,
-                }
+                ConsolidationKey { issuer: owner, instrument_type: "RealAsset".to_string(), subtype }
             }
             InstrumentType::Equity(d) => ConsolidationKey {
                 issuer: d.issuer,
@@ -81,23 +74,25 @@ impl FinancialSystem {
         bs.assets.iter().find_map(|(id, _pos)| {
             let inst = self.instruments.get(id)?;
             match &inst.instrument_type {
-                InstrumentType::Cash(details)
-                    if details.cash_type == CashType::CentralBankReserves =>
-                {
-                    Some(*id)
-                }
+                InstrumentType::Cash(details) if details.cash_type == CashType::CentralBankReserves => Some(*id),
                 _ => None,
             }
         })
     }
 
     pub fn find_agent_liquid_account(&self, agent_id: &AgentId) -> Option<(InstrumentId, AgentId)> {
-        if let Some(reserves_id) = self.find_bank_reserves_account(agent_id) {
-            return Some((reserves_id, *agent_id));
+        let is_bank_or_gov = self
+            .balance_sheets
+            .get(agent_id)
+            .map_or(false, |bs| bs.agent_id == self.government.id || bs.agent_id == self.central_bank.id)
+            || self.find_bank_reserves_account(agent_id).is_some();
+
+        if is_bank_or_gov {
+            return self.find_bank_reserves_account(agent_id).map(|reserves_id| (reserves_id, self.central_bank.id));
         }
 
         let bs = self.balance_sheets.get(agent_id)?;
-        bs.assets.iter().find_map(|(id, _pos)| {
+        bs.assets.iter().find_map(|(id, _)| {
             let inst = self.instruments.get(id)?;
             match &inst.instrument_type {
                 InstrumentType::Cash(details) if details.cash_type == CashType::DemandDeposit => {
@@ -119,50 +114,31 @@ impl FinancialSystem {
         })
     }
     pub fn create_or_consolidate_position(
-        &mut self,
-        creditor_id: &AgentId,
-        debtor_id: &AgentId,
-        instrument_id: &InstrumentId,
-        quantity_change: f64,
+        &mut self, creditor_id: &AgentId, debtor_id: &AgentId, instrument_id: &InstrumentId, quantity_change: f64,
         book_value_per_unit: f64,
     ) -> Result<(), String> {
         let book_value_money = Money::from_f64(book_value_per_unit).unwrap_or(Money::ZERO);
 
-        let creditor_bs = self
-            .balance_sheets
-            .get_mut(creditor_id)
-            .ok_or("Creditor not found")?;
-        let asset_pos = creditor_bs
-            .assets
-            .entry(*instrument_id)
-            .or_insert_with(|| Position {
-                quantity: 0.0,
-                book_value_per_unit: book_value_money,
-                cost_basis_per_unit: book_value_money,
-            });
+        let creditor_bs = self.balance_sheets.get_mut(creditor_id).ok_or("Creditor not found")?;
+        let asset_pos = creditor_bs.assets.entry(*instrument_id).or_insert_with(|| Position {
+            quantity: 0.0,
+            book_value_per_unit: book_value_money,
+            cost_basis_per_unit: book_value_money,
+        });
         asset_pos.quantity += quantity_change;
 
-        let debtor_bs = self
-            .balance_sheets
-            .get_mut(debtor_id)
-            .ok_or("Debtor not found")?;
-        let liability_pos = debtor_bs
-            .liabilities
-            .entry(*instrument_id)
-            .or_insert_with(|| Position {
-                quantity: 0.0,
-                book_value_per_unit: book_value_money,
-                cost_basis_per_unit: book_value_money,
-            });
+        let debtor_bs = self.balance_sheets.get_mut(debtor_id).ok_or("Debtor not found")?;
+        let liability_pos = debtor_bs.liabilities.entry(*instrument_id).or_insert_with(|| Position {
+            quantity: 0.0,
+            book_value_per_unit: book_value_money,
+            cost_basis_per_unit: book_value_money,
+        });
         liability_pos.quantity += quantity_change;
 
         Ok(())
     }
     pub fn get_instrument_info(
-        &self,
-        instrument_id: &InstrumentId,
-        agents: &AgentRegistry,
-        current_date: NaiveDate,
+        &self, instrument_id: &InstrumentId, agents: &AgentRegistry, current_date: NaiveDate,
     ) -> Option<InstrumentInfo> {
         let instrument = self.instruments.get(instrument_id)?;
 

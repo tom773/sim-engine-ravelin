@@ -19,7 +19,9 @@ pub struct FinancialSystem {
     pub government: Government,
     pub exchange: Exchange,
     pub yield_curve: YieldCurve,
-    pub goods: GoodsRegistry
+    pub goods: GoodsRegistry,
+    pub rtgs: RtgsQueue,
+    pub rtgs_policy: RtgsPolicy,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -56,7 +58,9 @@ impl Default for FinancialSystem {
                 date: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
                 yields: HashMap::new(),
             },
-            goods: GoodsRegistry::default()
+            goods: GoodsRegistry::default(),
+            rtgs: RtgsQueue::default(),
+            rtgs_policy: RtgsPolicy::default(),
         }
     }
 }

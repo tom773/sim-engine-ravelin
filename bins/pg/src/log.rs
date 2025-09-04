@@ -340,9 +340,8 @@ fn log_position_changes(
     }
 }
 
-// In main.rs
 
-pub fn log_effects(effects: &[StateEffect], state: &SimState) {
+pub fn _log_effects(effects: &[StateEffect], state: &SimState) {
     println!("Generated {} Effects:", effects.len());
 
     const GREEN: &str = "\x1b[32m";
@@ -363,7 +362,6 @@ pub fn log_effects(effects: &[StateEffect], state: &SimState) {
                 let inst_info = state.financial_system.get_instrument_info(instrument_id, &state.agents, state.current_date);
                 let inst_type = inst_info.as_ref().map_or("Unknown Instrument", |i| i.instrument_type);
 
-                // Determine if it's a Debit or a Credit and set the color
                 let (verb, color) = match (side.clone(), *delta_quantity > 0.0) {
                     (PositionSide::Asset, true) | (PositionSide::Liability, false) => ("DEBIT", RED),
                     (PositionSide::Asset, false) | (PositionSide::Liability, true) => ("CREDIT", GREEN),
@@ -382,7 +380,6 @@ pub fn log_effects(effects: &[StateEffect], state: &SimState) {
                     tx.transaction_type, from_name, to_name, tx.amount
                 );
             }
-            // You can add more arms here to pretty-print other effects as needed
             _ => {
                 println!("  - {} [{:#?}]", effect.name(), effect);
             }

@@ -29,7 +29,7 @@ impl DecisionModel for BasicBankDecisionModel {
         self.handle_debt_auctions(state, bank, fs.get_liquid_assets(&bank.id), &mut intentions, rng);
         self.consider_treasury_market_making(bank, state, &mut intentions, rng);
         self.evaluate_lending_opportunities(bank, fs, &mut intentions);
-
+        tracing::event!(tracing::Level::INFO, "Bank {} generated intentions {:?}", bank.name, intentions.iter().map(|i| i.name()).collect::<Vec<_>>());
         intentions
     }
 }
@@ -93,17 +93,14 @@ impl BasicBankDecisionModel {
         rng: &mut dyn RngCore,
     ) {
         let fs = &state.financial_system;
-
         let auction_budget = liquid_assets * 0.15;
         if auction_budget < 1000.0 {
             return;
         }
-
         for auction in fs.exchange.open_auctions.values() {
             if auction.status != AuctionStatus::Open {
                 continue;
             }
-
             if let Some(instrument) = fs.instruments.get(&auction.instrument_id) {
                 if let InstrumentType::Bond(details) = &instrument.instrument_type {
                     let ytm = pricing::years_to_maturity(state.current_date, details.maturity_date);
@@ -122,7 +119,6 @@ impl BasicBankDecisionModel {
                     }
 
                     let quantity_to_bid = (auction_budget / bid_price.to_f64()).floor() as u32;
-
                     if quantity_to_bid > 0 {
                         intentions.push(SimIntention::BidInDebtAuction {
                             agent_id: bank.id,

@@ -1,4 +1,3 @@
-use crate::banking::BankingDomain;
 use crate::{
     Any, Domain, DomainResult, DomainValidator, ResolutionContext, ResolutionPhase,
     ResolutionResult, inventory,
@@ -7,7 +6,6 @@ use chrono::NaiveDate;
 use rust_decimal::prelude::*;
 use serde::{Deserialize, Serialize};
 use sim_core::*;
-use std::collections::HashMap;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TradingDomain {}
@@ -87,70 +85,6 @@ impl Domain for TradingDomain {
                 price,
             } => self.execute_post_ask(*agent_id, market_id.clone(), *quantity, *price),
         }
-    }
-
-    fn settle_trade(&self, trade: &Trade, state: &SimState) -> DomainResult {
-        if let Err(e) = self.validate_trade(trade, state) {
-            println!("[SETTLEMENT FAILED] Trade validation failed: {}", e);
-            return DomainResult::empty();
-        }
-
-        let mut effects = Vec::new();
-        let total_payment = (trade.price * trade.quantity).to_f64();
-
-        match &trade.market_id {
-            MarketId::Goods(good_id) => {
-                effects.push(StateEffect::Inventory(InventoryEffect::RemoveInventory {
-                    owner: trade.seller,
-                    good_id: *good_id,
-                    quantity: trade.quantity,
-                }));
-                effects.push(StateEffect::Inventory(InventoryEffect::AddInventory {
-                    owner: trade.buyer,
-                    good_id: *good_id,
-                    quantity: trade.quantity,
-                    unit_cost: trade.price.to_f64(),
-                }));
-            }
-            MarketId::Financial(instrument_id) => {
-                effects.push(StateEffect::Financial(FinancialEffect::AdjustPosition {
-                    owner: trade.seller,
-                    instrument_id: *instrument_id,
-                    delta_quantity: -trade.quantity,
-                    side: PositionSide::Asset,
-                    cost_per_unit: None,
-                }));
-                effects.push(StateEffect::Financial(FinancialEffect::AdjustPosition {
-                    owner: trade.buyer,
-                    instrument_id: *instrument_id,
-                    delta_quantity: trade.quantity,
-                    side: PositionSide::Asset,
-                    cost_per_unit: Some(trade.price),
-                }));
-            }
-            MarketId::Labour(_) => { /* No asset leg for labour trades */ }
-        }
-
-        if total_payment > 0.0 {
-            let banking_domain = BankingDomain::new();
-            let payment_result = banking_domain.execute_initiate_payment(
-                trade.buyer,
-                trade.seller,
-                total_payment,
-                TransactionContext::TradeSettlement {
-                    trade_id: trade.trade_id,
-                },
-                state,
-            );
-
-            if payment_result.success {
-                effects.extend(payment_result.effects);
-            } else {
-                return DomainResult::failure(payment_result.errors);
-            }
-        }
-
-        DomainResult::success(effects)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -253,64 +187,6 @@ impl TradingDomain {
         actions
     }
 
-    fn validate_trade(&self, trade: &Trade, state: &SimState) -> Result<(), String> {
-        let fs = &state.financial_system;
-
-        let buyer_cash = fs.get_liquid_assets(&trade.buyer);
-        let required_cash = (trade.price * trade.quantity).to_f64();
-        if buyer_cash < required_cash {
-            return Err(format!(
-                "Buyer {} has insufficient funds for trade. Needs {}, has {}",
-                trade.buyer, required_cash, buyer_cash
-            ));
-        }
-
-        match &trade.market_id {
-            MarketId::Goods(good_id) => {
-                let inventory = get_agent_inventory(fs, &trade.seller);
-                let available_qty = inventory.get(good_id).map_or(0.0, |item| item.quantity);
-                if available_qty < trade.quantity {
-                    return Err(format!(
-                        "Seller {} has insufficient inventory for trade. Needs {}, has {}",
-                        trade.seller, trade.quantity, available_qty
-                    ));
-                }
-            }
-            MarketId::Financial(instrument_id) => {
-                let seller_bs = fs
-                    .balance_sheets
-                    .get(&trade.seller)
-                    .ok_or("Seller BS not found")?;
-                let position = seller_bs
-                    .assets
-                    .get(instrument_id)
-                    .ok_or("Seller does not own the instrument")?;
-                if position.quantity < trade.quantity {
-                    return Err(format!(
-                        "Seller {} has insufficient position for trade. Needs {}, has {}",
-                        trade.seller, trade.quantity, position.quantity
-                    ));
-                }
-            }
-            MarketId::Labour(_) => {}
-        }
-        Ok(())
-    }
-}
-
-fn get_agent_inventory(fs: &FinancialSystem, agent_id: &AgentId) -> HashMap<GoodId, InventoryItem> {
-    if let Some(bs) = fs.balance_sheets.get(agent_id) {
-        for inst_id in bs.assets.keys() {
-            if let Some(inst) = fs.instruments.get(inst_id) {
-                if let InstrumentType::RealAsset(RealAssetType::Inventory { goods, .. }) =
-                    &inst.instrument_type
-                {
-                    return goods.clone();
-                }
-            }
-        }
-    }
-    HashMap::new()
 }
 
 impl TradingDomain {

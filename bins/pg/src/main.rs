@@ -1,12 +1,13 @@
+use engine_v3::DomainRegistry;
 use rust_decimal_macros::dec;
 use sim_core::prelude::*;
 use uuid::Uuid;
-use engine_v3::DomainRegistry;
 
 mod log;
 use log::*;
 
 fn main() {
+    tracing_subscriber::fmt::init();
     println!("--- playground binary starting ---");
 
     let mut state = setup();
@@ -27,23 +28,20 @@ fn main() {
 fn test_transfer(state: &mut SimState, from: AgentId, to: AgentId, amount: f64) {
     println!();
     println!("{:=<80}", "");
-    println!(
-        "{:.^80}",
-        format!(" TESTING TRANSFER: ${amount} from {from} to {to} ")
-    );
+    println!("{:.^80}", format!(" TESTING TRANSFER: ${amount} from {from} to {to} "));
     println!("{:=<80}\n", "");
 
     let domain_registry = DomainRegistry::new();
-    let action = SimAction::Banking(BankingAction::InitiatePayment { from, to, amount, context: TransactionContext::GenericTransfer });
-    
-    let effects = domain_registry
-        .execute_action(&action, state)
-        .expect("Action execution failed");
+    let action = SimAction::Banking(BankingAction::InitiatePayment {
+        from,
+        to,
+        amount,
+        context: TransactionContext::GenericTransfer,
+    });
 
-    log_effects(&effects, state);
-    state
-        .apply_effects(&effects)
-        .expect("Failed to apply effects");
-    
-    println!("\nTransfer applied to state.");
+    let effects = domain_registry.execute_action(&action, state).expect("Action execution failed");
+
+    state.apply_effects(&effects).expect("Failed to apply effects");
+    let _ = run_rtgs(state).map_err(|e| format!("RTGS execution failed: {:?}", e));
+
 }

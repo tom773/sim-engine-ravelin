@@ -8,3 +8,6 @@ pub mod financial_queries;
 pub use financial_queries::*;
 
 pub mod operations;
+
+pub mod rtgs_types;
+pub use rtgs_types::*;

@@ -41,29 +41,19 @@ impl SimulationEngine {
         scheduler.register_handler(TickStep::GatherIntentions, GatherIntentionsHandler);
         scheduler.register_handler(
             TickStep::ResolveIndependentPhase,
-            PhaseResolutionHandler {
-                phase: ResolutionPhase::Independent,
-            },
+            PhaseResolutionHandler { phase: ResolutionPhase::Independent },
         );
-        scheduler.register_handler(
-            TickStep::ResolveMarketPhase,
-            PhaseResolutionHandler {
-                phase: ResolutionPhase::Market,
-            },
-        );
-        scheduler.register_handler(
-            TickStep::ApplyMarketEffectsForPriceDiscovery,
-            ApplyMarketEffectsHandler,
-        );
+        scheduler
+            .register_handler(TickStep::ResolveMarketPhase, PhaseResolutionHandler { phase: ResolutionPhase::Market });
+        scheduler.register_handler(TickStep::ApplyMarketEffectsForPriceDiscovery, ApplyMarketEffectsHandler);
         scheduler.register_handler(
             TickStep::ResolveDependentPhase,
-            PhaseResolutionHandler {
-                phase: ResolutionPhase::Dependent,
-            },
+            PhaseResolutionHandler { phase: ResolutionPhase::Dependent },
         );
         scheduler.register_handler(TickStep::Auction, DebtAuctionsHandler);
         scheduler.register_handler(TickStep::ClearMarkets, ClearMarketsHandler);
-        scheduler.register_handler(TickStep::SettleTrades, SettleTradesHandler);
+        scheduler.register_handler(TickStep::BuildSettlementObligations, BuildSettlementObligationsHandler);
+        scheduler.register_handler(TickStep::RunRTGS, RunRTGSHandler);
         scheduler.register_handler(TickStep::ApplyAllEffects, ApplyAllEffectsHandler);
         scheduler.register_handler(TickStep::UpdateHistory, UpdateHistoryHandler);
         scheduler.print_execution_plan();
@@ -76,7 +66,6 @@ impl SimulationEngine {
         let scheduler = std::mem::take(&mut self.scheduler);
         let execution_result = scheduler.execute_tick(self, rng);
         self.scheduler = scheduler;
-
         self.scheduler_metrics.record_tick(&execution_result);
         if execution_result.success {
             self.state.ticknum += 1;
@@ -88,22 +77,14 @@ impl SimulationEngine {
     pub fn gather_intentions(&self, rng: &mut dyn RngCore) -> Vec<SimIntention> {
         let mut all_intentions = Vec::new();
         for agent_id in self.state.agents.all_agent_ids() {
-            if let (Some(model), Some(agent)) = (
-                self.decision_models.get(&agent_id),
-                self.state.agents.get_agent_as_any(&agent_id),
-            ) {
+            if let (Some(model), Some(agent)) =
+                (self.decision_models.get(&agent_id), self.state.agents.get_agent_as_any(&agent_id))
+            {
                 all_intentions.extend(model.decide(agent, &self.state, rng));
             }
         }
-        if let Some(model) = self
-            .decision_models
-            .get(&self.state.financial_system.government.id)
-        {
-            all_intentions.extend(model.decide(
-                &self.state.financial_system.government,
-                &self.state,
-                rng,
-            ));
+        if let Some(model) = self.decision_models.get(&self.state.financial_system.government.id) {
+            all_intentions.extend(model.decide(&self.state.financial_system.government, &self.state, rng));
         }
         all_intentions
     }
@@ -122,11 +103,9 @@ impl SimulationEngine {
                 }
                 InstrumentType::Bond(details) => {
                     if is_coupon_date(current_date, details) {
-                        actions.push(SimAction::Settlement(
-                            SettlementAction::ProcessCouponPayment {
-                                instrument_id: *instrument_id,
-                            },
-                        ));
+                        actions.push(SimAction::Settlement(SettlementAction::ProcessCouponPayment {
+                            instrument_id: *instrument_id,
+                        }));
                     }
                 }
                 _ => {}
@@ -136,13 +115,8 @@ impl SimulationEngine {
     }
 
     pub fn execute_actions(
-        &self,
-        actions: &[SimAction],
-    ) -> (
-        Vec<ActionRecord>,
-        HashMap<usize, Vec<usize>>,
-        Vec<StateEffect>,
-    ) {
+        &self, actions: &[SimAction],
+    ) -> (Vec<ActionRecord>, HashMap<usize, Vec<usize>>, Vec<StateEffect>) {
         let mut all_effects = Vec::new();
         let mut action_records = Vec::with_capacity(actions.len());
         let mut action_to_effect_indices = HashMap::new();
@@ -170,8 +144,7 @@ impl SimulationEngine {
 
             if !effects.is_empty() {
                 let effect_start_idx = all_effects.len();
-                let effect_indices: Vec<usize> =
-                    (effect_start_idx..effect_start_idx + effects.len()).collect();
+                let effect_indices: Vec<usize> = (effect_start_idx..effect_start_idx + effects.len()).collect();
                 action_to_effect_indices.insert(action_idx, effect_indices);
                 all_effects.extend(effects);
             }
@@ -180,16 +153,8 @@ impl SimulationEngine {
     }
 
     pub fn resolve_and_execute_phase(
-        &self,
-        intentions: &[SimIntention],
-        context: &ResolutionContext,
-        action_offset: usize,
-        effect_offset: usize,
-    ) -> (
-        Vec<ActionRecord>,
-        HashMap<usize, Vec<usize>>,
-        Vec<StateEffect>,
-    ) {
+        &self, intentions: &[SimIntention], context: &ResolutionContext, action_offset: usize, effect_offset: usize,
+    ) -> (Vec<ActionRecord>, HashMap<usize, Vec<usize>>, Vec<StateEffect>) {
         let mut phase_actions = Vec::new();
         for intention in intentions {
             let result = self.domain_registry.resolve_intention(intention, context);
@@ -198,17 +163,14 @@ impl SimulationEngine {
             }
             phase_actions.extend(result.actions);
         }
-        let (action_records, mut action_to_effect_indices, effects) =
-            self.execute_actions(&phase_actions);
+        let (action_records, mut action_to_effect_indices, effects) = self.execute_actions(&phase_actions);
         for indices in action_to_effect_indices.values_mut() {
             for index in indices {
                 *index += effect_offset;
             }
         }
-        let adjusted_indices: HashMap<usize, Vec<usize>> = action_to_effect_indices
-            .into_iter()
-            .map(|(k, v)| (k + action_offset, v))
-            .collect();
+        let adjusted_indices: HashMap<usize, Vec<usize>> =
+            action_to_effect_indices.into_iter().map(|(k, v)| (k + action_offset, v)).collect();
         (action_records, adjusted_indices, effects)
     }
 
@@ -222,14 +184,7 @@ impl SimulationEngine {
             .goods_markets
             .keys()
             .map(|id| MarketId::Goods(*id))
-            .chain(
-                self.state
-                    .financial_system
-                    .exchange
-                    .markets
-                    .keys()
-                    .map(|id| MarketId::Financial(*id)),
-            )
+            .chain(self.state.financial_system.exchange.markets.keys().map(|id| MarketId::Financial(*id)))
             .collect();
 
         for market_id in &market_ids {
@@ -255,10 +210,8 @@ impl SimulationEngine {
             all_trades.extend(trades);
         }
 
-        let all_snapshots: HashMap<MarketId, MarketView> = market_ids
-            .into_iter()
-            .map(|id| (id.clone(), self.state.market_view(&id).unwrap_or_default()))
-            .collect();
+        let all_snapshots: HashMap<MarketId, MarketView> =
+            market_ids.into_iter().map(|id| (id.clone(), self.state.market_view(&id).unwrap_or_default())).collect();
 
         (all_trades, all_snapshots)
     }
@@ -267,34 +220,24 @@ impl SimulationEngine {
         trades
             .iter()
             .flat_map(|trade| {
-                self.domain_registry
-                    .settle_trade(trade, &self.state)
-                    .unwrap_or_else(|e| {
-                        println!("[ERROR] Failed to settle trade: {}", e);
-                        vec![]
-                    })
+                self.domain_registry.settle_trade(trade, &self.state).unwrap_or_else(|e| {
+                    println!("[ERROR] Failed to settle trade: {}", e);
+                    vec![]
+                })
             })
             .collect()
     }
 
     pub fn match_labour_markets(&mut self, rng: &mut dyn RngCore) -> Vec<StateEffect> {
         let mut effects = Vec::new();
-        for market in self
-            .state
-            .financial_system
-            .exchange
-            .labour_markets
-            .values_mut()
-        {
+        for market in self.state.financial_system.exchange.labour_markets.values_mut() {
             market.job_offers.shuffle(rng);
             for offer in &mut market.job_offers {
                 if offer.quantity == 0 {
                     continue;
                 }
-                if let Some(app_idx) = market
-                    .job_applications
-                    .iter()
-                    .position(|app| app.reservation_wage <= offer.wage_rate)
+                if let Some(app_idx) =
+                    market.job_applications.iter().position(|app| app.reservation_wage <= offer.wage_rate)
                 {
                     let app = market.job_applications.remove(app_idx);
                     let contract = EmploymentContract {
@@ -315,22 +258,12 @@ impl SimulationEngine {
         effects
     }
 
-    pub fn update_market_history(
-        &mut self,
-        trades: &[Trade],
-        snapshots: &HashMap<MarketId, MarketView>,
-    ) {
+    pub fn update_market_history(&mut self, trades: &[Trade], snapshots: &HashMap<MarketId, MarketView>) {
         let current_date = self.state.current_date;
         let history = &mut self.state.history;
         for (market_id, snapshot) in snapshots {
-            let market_trades: Vec<&Trade> = trades
-                .iter()
-                .filter(|t| &t.market_id == market_id)
-                .collect();
-            let close = market_trades
-                .last()
-                .map(|t| t.price.to_f64())
-                .or(snapshot.last);
+            let market_trades: Vec<&Trade> = trades.iter().filter(|t| &t.market_id == market_id).collect();
+            let close = market_trades.last().map(|t| t.price.to_f64()).or(snapshot.last);
 
             // Create a temporary iterator for prices to avoid multiple maps
             let prices = market_trades.iter().map(|t| t.price);
@@ -354,20 +287,12 @@ impl SimulationEngine {
                 best_ask: snapshot.mid,
                 spread: snapshot.spread,
             };
-            history
-                .market_ticks
-                .entry(market_id.clone())
-                .or_default()
-                .push_back(tick);
+            history.market_ticks.entry(market_id.clone()).or_default().push_back(tick);
         }
     }
 
     pub fn get_agent_info(&self, agent_id: &AgentId) -> (String, Option<String>) {
-        let agent_type = self
-            .state
-            .get_agent_type_string(agent_id)
-            .unwrap_or("Unknown")
-            .to_string();
+        let agent_type = self.state.get_agent_type_string(agent_id).unwrap_or("Unknown").to_string();
 
         let agent_name = if let Some(bank) = self.state.agents.banks.get(agent_id) {
             Some(bank.name.clone())
@@ -394,11 +319,9 @@ fn is_coupon_date(date: NaiveDate, bond: &BondDetails) -> bool {
     if bond.frequency == 0 {
         return false;
     }
-    let months_since_issue = ((date.year() - bond.issue_date.year()) * 12 + date.month() as i32
-        - bond.issue_date.month() as i32) as u32;
-    date.day() == bond.issue_date.day()
-        && months_since_issue > 0
-        && months_since_issue % (12 / bond.frequency) == 0
+    let months_since_issue =
+        ((date.year() - bond.issue_date.year()) * 12 + date.month() as i32 - bond.issue_date.month() as i32) as u32;
+    date.day() == bond.issue_date.day() && months_since_issue > 0 && months_since_issue % (12 / bond.frequency) == 0
 }
 
 pub fn run_simulation(engine: &mut SimulationEngine) -> Vec<TickExecutionResult> {
@@ -406,12 +329,7 @@ pub fn run_simulation(engine: &mut SimulationEngine) -> Vec<TickExecutionResult>
     let total_ticks = engine.state.config.iterations;
     let mut results = Vec::with_capacity(total_ticks as usize);
     for i in 0..total_ticks {
-        println!(
-            "[RUNNER] Executing Tick {}/{} ({})",
-            i + 1,
-            total_ticks,
-            engine.state.current_date
-        );
+        println!("[RUNNER] Executing Tick {}/{} ({})", i + 1, total_ticks, engine.state.current_date);
         let result = engine.run_tick(&mut rng);
         if !result.0.success {
             results.push(result.0);
