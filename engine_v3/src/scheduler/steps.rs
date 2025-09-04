@@ -6,6 +6,7 @@ pub enum TickStep {
     Upkeep,
     GatherIntentions,
     ResolveIndependentPhase,
+    ApplyInstrumentCreation,
     ResolveMarketPhase,
     ApplyMarketEffectsForPriceDiscovery,
     ResolveDependentPhase,
@@ -25,6 +26,7 @@ impl TickStep {
             Upkeep,
             GatherIntentions,
             ResolveIndependentPhase,
+            ApplyInstrumentCreation,
             ResolveMarketPhase,
             ApplyMarketEffectsForPriceDiscovery,
             ResolveDependentPhase,
@@ -44,7 +46,8 @@ impl TickStep {
             Upkeep => vec![],
             GatherIntentions => vec![Upkeep],
             ResolveIndependentPhase => vec![GatherIntentions],
-            ResolveMarketPhase => vec![ResolveIndependentPhase],
+            ApplyInstrumentCreation => vec![ResolveIndependentPhase],
+            ResolveMarketPhase => vec![ApplyInstrumentCreation],
             ApplyMarketEffectsForPriceDiscovery => vec![ResolveMarketPhase],
             ResolveDependentPhase => vec![ApplyMarketEffectsForPriceDiscovery],
             Auction => vec![ResolveDependentPhase],
@@ -61,7 +64,6 @@ impl TickStep {
         true
     }
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StepResult {
     pub success: bool,

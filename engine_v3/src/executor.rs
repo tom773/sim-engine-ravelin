@@ -43,8 +43,11 @@ impl SimulationEngine {
             TickStep::ResolveIndependentPhase,
             PhaseResolutionHandler { phase: ResolutionPhase::Independent },
         );
-        scheduler
-            .register_handler(TickStep::ResolveMarketPhase, PhaseResolutionHandler { phase: ResolutionPhase::Market });
+        scheduler.register_handler(TickStep::ApplyInstrumentCreation, ApplyInstrumentCreationHandler);
+        scheduler.register_handler(
+            TickStep::ResolveMarketPhase, 
+            PhaseResolutionHandler { phase: ResolutionPhase::Market }
+        );
         scheduler.register_handler(TickStep::ApplyMarketEffectsForPriceDiscovery, ApplyMarketEffectsHandler);
         scheduler.register_handler(
             TickStep::ResolveDependentPhase,
@@ -266,11 +269,8 @@ impl SimulationEngine {
             let market_trades: Vec<&Trade> = trades.iter().filter(|t| &t.market_id == market_id).collect();
             let close = market_trades.last().map(|t| t.price.to_f64()).or(snapshot.last);
 
-            // Create a temporary iterator for prices to avoid multiple maps
             let prices = market_trades.iter().map(|t| t.price);
 
-            // Use iterator `max` and `min` which correctly handle empty lists and return Option<Money>
-            // Note: `copied()` is needed because `max` consumes the iterator and we need a value, not a reference.
             let high = prices.clone().max().map(|m| m.to_f64());
             let low = prices.min().map(|m| m.to_f64());
 

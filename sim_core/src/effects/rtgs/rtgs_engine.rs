@@ -343,6 +343,51 @@ fn maybe_complete_dvp(state: &mut SimState, context: &TransactionContext) -> Res
     }
 }
 
-pub fn complete_dvp_asset_leg(_state: &mut SimState, _trade_id: Uuid) -> Result<(), EffectError> {
+
+pub fn complete_dvp_asset_leg(state: &mut SimState, trade_id: Uuid) -> Result<(), EffectError> {
+    let settlement_instruction = state
+        .financial_system
+        .clearing_house
+        .csd
+        .pending_settlements
+        .iter()
+        .find(|si| si.1.trade_id == trade_id).unwrap().1
+        .clone();
+
+    let instrument_id = settlement_instruction.instrument_id;
+    let quantity = settlement_instruction.quantity;
+    let buyer = settlement_instruction.buyer;
+    let seller = settlement_instruction.seller;
+    let price = Money::from_f64(settlement_instruction.cash_amount / quantity).unwrap();
+
+    
+    StateEffectApplicator::apply_adjust_position(
+        state,
+        seller,
+        instrument_id,
+        -quantity,  // Decrease seller's asset position
+        &PositionSide::Asset,
+        Some(price),
+    )?;
+    
+    StateEffectApplicator::apply_adjust_position(
+        state,
+        buyer,
+        instrument_id,
+        quantity,  // Increase buyer's asset position
+        &PositionSide::Asset,
+        Some(price),
+    )?;
+
+    event!(
+        Level::INFO,
+        "DvP asset leg completed for trade {}: {} units of instrument {} transferred from {} to {}",
+        trade_id,
+        quantity,
+        instrument_id.0,
+        seller.0,
+        buyer.0
+    );
+
     Ok(())
 }
