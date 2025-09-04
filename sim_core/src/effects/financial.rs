@@ -2,7 +2,7 @@ use crate::types::money::Money;
 use crate::*;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-
+use tracing::{event, Level};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum FinancialEffect {
     CreateInstrument {
@@ -36,8 +36,12 @@ pub enum FinancialEffect {
     },
     QueuePayment(PaymentInstruction),
     SettlePayment(PaymentId),
-    DvPFinalize { trade_id: Uuid },
-    DvPCancel { trade_id: Uuid },
+    DvPFinalize {
+        trade_id: Uuid,
+    },
+    DvPCancel {
+        trade_id: Uuid,
+    },
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum PositionSide {
@@ -147,7 +151,7 @@ impl StateEffectApplicator {
                 Self::apply_market_effect(state, &market_effect)
             }
             FinancialEffect::DvPCancel { trade_id } => {
-                match state.financial_system.clearing_house.csd.cancel_security_reservation(trade_id){
+                match state.financial_system.clearing_house.csd.cancel_security_reservation(trade_id) {
                     Ok(_) => Ok(()),
                     Err(e) => {
                         tracing::error!("CSD cancel_security_reservation error: {:?}", e);
@@ -168,11 +172,13 @@ impl StateEffectApplicator {
     }
 
     pub fn apply_adjust_position(
-        state: &mut SimState, owner: AgentId, instrument_id: InstrumentId, _delta_quantity: f64, side: &PositionSide,
+        state: &mut SimState, owner: AgentId, instrument_id: InstrumentId, delta_quantity: f64, side: &PositionSide,
         cost_per_unit: Option<Money>,
     ) -> Result<(), EffectError> {
-        let _slc = state.clone();
-        let _ii = state.financial_system.clone().get_instrument_info(&instrument_id, &state.agents, state.current_date).unwrap().instrument_type;
+        let owner_type = state.get_agent_type_string(&owner).unwrap();
+        let owner_name = format!("{} ({})", owner_type, owner.0.to_string()[..4].to_string());
+        let instrument_name = state.financial_system.clone().get_instrument_info(&instrument_id, &state.agents, state.current_date).unwrap().instrument_type;
+
         let balance_sheet =
             state.financial_system.balance_sheets.get_mut(&owner).ok_or(EffectError::AgentNotFound { id: owner })?;
 
@@ -180,6 +186,19 @@ impl StateEffectApplicator {
             PositionSide::Asset => &mut balance_sheet.assets,
             PositionSide::Liability => &mut balance_sheet.liabilities,
         };
+
+        let old_quantity = position_map.get(&instrument_id).map(|p| p.quantity).unwrap_or(0.0);
+
+        event!(Level::DEBUG,
+            agent = %owner_name,
+            agent_id = %owner,
+            instrument = %instrument_name,
+            instrument_id = %instrument_id,
+            side = ?side,
+            current_quantity = old_quantity,
+            delta = delta_quantity,
+            "📊 Pre-adjustment position\n"
+        );
 
         let position = position_map.entry(instrument_id).or_insert_with(|| {
             let book_value = state
@@ -194,12 +213,42 @@ impl StateEffectApplicator {
                 book_value_per_unit: book_value,
                 cost_basis_per_unit: cost_per_unit.unwrap_or(book_value),
             }
-            
         });
 
+        position.quantity += delta_quantity;
+        let new_quantity = position.quantity;
+
+        let value_change = delta_quantity * position.book_value_per_unit.to_f64();
+        let impact = match side {
+            PositionSide::Asset => value_change,
+            PositionSide::Liability => -value_change,
+        };
+
+        event!(Level::INFO,
+            agent = %owner_name,
+            agent_id = %owner,
+            instrument = %instrument_name,
+            instrument_id = %instrument_id,
+            side = ?side,
+            old_quantity = old_quantity,
+            new_quantity = new_quantity,
+            delta = delta_quantity,
+            book_value_per_unit = ?position.book_value_per_unit,
+            cost_basis = ?position.cost_basis_per_unit,
+            net_worth_impact = impact,
+            "\n💰 Balance sheet adjusted"
+        );
+
         if position.quantity <= 1e-9 {
+            event!(Level::DEBUG,
+                agent = %owner_name,
+                instrument = %instrument_name,
+                side = ?side,
+                "🗑️ Position removed (quantity ~0)"
+            );
             position_map.remove(&instrument_id);
         }
+
         Ok(())
     }
 
@@ -354,5 +403,4 @@ impl StateEffectApplicator {
 
         Ok(())
     }
-
 }

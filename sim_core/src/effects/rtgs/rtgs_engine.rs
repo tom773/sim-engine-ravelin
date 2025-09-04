@@ -15,6 +15,13 @@ pub fn run_rtgs(state: &mut SimState) -> Result<(), EffectError> {
 fn run_pure_rtgs(state: &mut SimState) -> Result<(), EffectError> {
     let current_tick = state.ticknum;
 
+    event!(
+        Level::INFO,
+        tick = current_tick,
+        pending_count = state.financial_system.rtgs.pending.len(),
+        "🏦 Starting RTGS processing"
+    );
+
     loop {
         let mut progressed = false;
 
@@ -25,37 +32,97 @@ fn run_pure_rtgs(state: &mut SimState) -> Result<(), EffectError> {
                 Normal => 1,
                 Low => 2,
             };
-
             priority_order(&a.priority).cmp(&priority_order(&b.priority)).then(a.id.cmp(&b.id))
         });
 
         let mut i = 0;
         while i < state.financial_system.rtgs.pending.len() {
             let pi = state.financial_system.rtgs.pending[i].clone();
+
             if current_tick < pi.earliest_release_tick {
                 i += 1;
                 continue;
             }
-            tracing::event!(
-                Level::INFO, "\n\nPayment {} - {:?}\nFrom {} -> To {} \nAmount: ${}\nToBank: {} | FromBank: {}\n", 
-                &pi.id.to_string()[..4],
-                pi.context.name(),
-                state.get_agent_type_string(&pi.payer).unwrap(),
-                state.get_agent_type_string(&pi.payee).unwrap(),
-                pi.amount,
-                state.get_agent_type_string(&pi.to_bank).unwrap(),
-                state.get_agent_type_string(&pi.from_bank).unwrap()
+
+            let payer_name = state.get_agent_type_string(&pi.payer).unwrap_or_default();
+            let payee_name = state.get_agent_type_string(&pi.payee).unwrap_or_default();
+            let from_bank_name = state.get_agent_type_string(&pi.from_bank).unwrap_or_default();
+            let to_bank_name = state.get_agent_type_string(&pi.to_bank).unwrap_or_default();
+
+            event!(Level::DEBUG,
+                payment_id = %pi.id.to_string()[..8],
+                payer = %payer_name,
+                payee = %payee_name,
+                amount = pi.amount,
+                from_bank = %from_bank_name,
+                to_bank = %to_bank_name,
+                priority = ?pi.priority,
+                context = ?pi.context,
+                "🔍 Processing payment"
             );
-            if can_fund(state, &pi)? || can_use_daylight_credit(state, &pi)? {
+
+            let can_fund_result = can_fund(state, &pi)?;
+            let can_use_credit = can_use_daylight_credit(state, &pi)?;
+
+            // Calculate available funds for logging
+            let available_funds =
+                if let Some((payer_account_id, _)) = state.financial_system.find_agent_liquid_account(&pi.payer) {
+                    state
+                        .financial_system
+                        .balance_sheets
+                        .get(&pi.payer)
+                        .and_then(|bs| bs.assets.get(&payer_account_id))
+                        .map(|p| p.quantity)
+                        .unwrap_or(0.0)
+                } else {
+                    0.0
+                };
+
+            event!(Level::DEBUG,
+                payment_id = %pi.id.to_string()[..8],
+                payer = %payer_name,
+                required = pi.amount,
+                available = available_funds,
+                can_fund = can_fund_result,
+                has_daylight_credit = can_use_credit,
+                "💳 Funding check"
+            );
+
+            if can_fund_result || can_use_credit {
                 apply_cash_movements_immediately(state, &pi)?;
                 maybe_complete_dvp(state, &pi.context)?;
 
                 let settled_payment = state.financial_system.rtgs.pending.remove(i);
+
+                event!(Level::INFO,
+                    payment_id = %settled_payment.id.to_string()[..8],
+                    from = %payer_name,
+                    to = %payee_name,
+                    amount = settled_payment.amount,
+                    context = ?settled_payment.context,
+                    from_bank = %from_bank_name,
+                    to_bank = %to_bank_name,
+                    tick = current_tick,
+                    "✅ Payment settled"
+                );
+
                 state.financial_system.rtgs.settled.push(settled_payment);
                 progressed = true;
             } else {
                 if current_tick >= pi.deadline_tick {
                     let expired_payment = state.financial_system.rtgs.pending.remove(i);
+
+                    event!(Level::WARN,
+                        payment_id = %expired_payment.id.to_string()[..8],
+                        payer = %payer_name,
+                        amount = expired_payment.amount,
+                        available_funds = available_funds,
+                        deadline_tick = expired_payment.deadline_tick,
+                        current_tick = current_tick,
+                        reason = "Deadline exceeded",
+                        "❌ Payment rejected"
+                    );
+
                     state.financial_system.rtgs.rejected.push((expired_payment, "Deadline exceeded".to_string()));
                     progressed = true;
                 } else {
@@ -68,6 +135,14 @@ fn run_pure_rtgs(state: &mut SimState) -> Result<(), EffectError> {
             break;
         }
     }
+
+    event!(
+        Level::INFO,
+        settled_count = state.financial_system.rtgs.settled.len(),
+        pending_count = state.financial_system.rtgs.pending.len(),
+        rejected_count = state.financial_system.rtgs.rejected.len(),
+        "🏦 RTGS processing completed"
+    );
 
     Ok(())
 }
@@ -338,75 +413,112 @@ fn apply_interbank_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Re
 fn apply_tga_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Result<(), EffectError> {
     let cb_id = state.financial_system.central_bank.id;
     let gov_id = state.financial_system.government.id;
-    
-    let (tga_id, _) = state.financial_system
+
+    let (tga_id, _) = state
+        .financial_system
         .find_government_tga_account()
         .ok_or_else(|| EffectError::InvalidState("TGA not found".to_string()))?;
-    
+
     if pi.payer == gov_id {
-        let (payee_account_id, payee_bank) = state.financial_system
+        let (payee_account_id, payee_bank) = state
+            .financial_system
             .find_agent_liquid_account(&pi.payee)
             .ok_or_else(|| EffectError::InvalidState("Payee account not found".to_string()))?;
-        
+
+        StateEffectApplicator::apply_adjust_position(state, gov_id, tga_id, -pi.amount, &PositionSide::Asset, None)?;
+        StateEffectApplicator::apply_adjust_position(state, cb_id, tga_id, -pi.amount, &PositionSide::Liability, None)?;
+
         StateEffectApplicator::apply_adjust_position(
-            state, gov_id, tga_id, -pi.amount, &PositionSide::Asset, None
+            state,
+            pi.payee,
+            payee_account_id,
+            pi.amount,
+            &PositionSide::Asset,
+            None,
         )?;
         StateEffectApplicator::apply_adjust_position(
-            state, cb_id, tga_id, -pi.amount, &PositionSide::Liability, None
+            state,
+            payee_bank,
+            payee_account_id,
+            pi.amount,
+            &PositionSide::Liability,
+            None,
         )?;
-        
-        StateEffectApplicator::apply_adjust_position(
-            state, pi.payee, payee_account_id, pi.amount, &PositionSide::Asset, None
-        )?;
-        StateEffectApplicator::apply_adjust_position(
-            state, payee_bank, payee_account_id, pi.amount, &PositionSide::Liability, None
-        )?;
-        
+
         if payee_bank != cb_id {
-            let bank_reserves = state.financial_system
+            let bank_reserves = state
+                .financial_system
                 .find_bank_reserves_account(&payee_bank)
                 .ok_or_else(|| EffectError::InvalidState("Bank reserves not found".to_string()))?;
-            
+
             StateEffectApplicator::apply_adjust_position(
-                state, payee_bank, bank_reserves, pi.amount, &PositionSide::Asset, None
+                state,
+                payee_bank,
+                bank_reserves,
+                pi.amount,
+                &PositionSide::Asset,
+                None,
             )?;
             StateEffectApplicator::apply_adjust_position(
-                state, cb_id, bank_reserves, pi.amount, &PositionSide::Liability, None
+                state,
+                cb_id,
+                bank_reserves,
+                pi.amount,
+                &PositionSide::Liability,
+                None,
             )?;
         }
     } else if pi.payee == gov_id {
-        let (payer_account_id, payer_bank) = state.financial_system
+        let (payer_account_id, payer_bank) = state
+            .financial_system
             .find_agent_liquid_account(&pi.payer)
             .ok_or_else(|| EffectError::InvalidState("Payer account not found".to_string()))?;
-        
+
         StateEffectApplicator::apply_adjust_position(
-            state, pi.payer, payer_account_id, -pi.amount, &PositionSide::Asset, None
+            state,
+            pi.payer,
+            payer_account_id,
+            -pi.amount,
+            &PositionSide::Asset,
+            None,
         )?;
         StateEffectApplicator::apply_adjust_position(
-            state, payer_bank, payer_account_id, -pi.amount, &PositionSide::Liability, None
+            state,
+            payer_bank,
+            payer_account_id,
+            -pi.amount,
+            &PositionSide::Liability,
+            None,
         )?;
-        
-        StateEffectApplicator::apply_adjust_position(
-            state, gov_id, tga_id, pi.amount, &PositionSide::Asset, None
-        )?;
-        StateEffectApplicator::apply_adjust_position(
-            state, cb_id, tga_id, pi.amount, &PositionSide::Liability, None
-        )?;
-        
+
+        StateEffectApplicator::apply_adjust_position(state, gov_id, tga_id, pi.amount, &PositionSide::Asset, None)?;
+        StateEffectApplicator::apply_adjust_position(state, cb_id, tga_id, pi.amount, &PositionSide::Liability, None)?;
+
         if payer_bank != cb_id {
-            let bank_reserves = state.financial_system
+            let bank_reserves = state
+                .financial_system
                 .find_bank_reserves_account(&payer_bank)
                 .ok_or_else(|| EffectError::InvalidState("Bank reserves not found".to_string()))?;
-            
+
             StateEffectApplicator::apply_adjust_position(
-                state, payer_bank, bank_reserves, -pi.amount, &PositionSide::Asset, None
+                state,
+                payer_bank,
+                bank_reserves,
+                -pi.amount,
+                &PositionSide::Asset,
+                None,
             )?;
             StateEffectApplicator::apply_adjust_position(
-                state, cb_id, bank_reserves, -pi.amount, &PositionSide::Liability, None
+                state,
+                cb_id,
+                bank_reserves,
+                -pi.amount,
+                &PositionSide::Liability,
+                None,
             )?;
         }
     }
-    
+
     Ok(())
 }
 pub fn settle_one_payment(state: &mut SimState, payment_id: PaymentId) -> Result<(), EffectError> {

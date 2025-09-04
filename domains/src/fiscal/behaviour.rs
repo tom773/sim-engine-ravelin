@@ -64,13 +64,21 @@ fn handle_funding(
         let fs = &state.financial_system;
         let current_balance = fs.get_liquid_assets(&government.id);
         
-        let min_balance_threshold = 1_000_000.0;
+        let tga_target = 4_000_000.0;
         
-        if state.current_date.day() != 1 || current_balance > min_balance_threshold {
+        if state.current_date.day() != 1 || current_balance > tga_target {
             return;
         }
 
-        let deficit = (min_balance_threshold - current_balance).max(0.0) + 500_000.0;
+        let deficit = (tga_target - current_balance).max(0.0) + 500_000.0;
+
+        tracing::event!(
+            tracing::Level::INFO,
+            "Government has a deficit of ${}, current balance is ${}. Planning to issue debt.",
+            deficit,
+            current_balance
+        );
+
         let current_date = state.current_date;
 
         let maturity_date = TimePeriod::Years(5).add_to_date(current_date);

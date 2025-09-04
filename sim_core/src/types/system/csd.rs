@@ -3,8 +3,8 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
+use tracing::{Level, event};
 use uuid::Uuid;
-
 pub type TradeId = Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -87,10 +87,23 @@ impl CentralSecuritiesDepository {
             self.custody_accounts.insert(gov_id, CustodyAccount { owner: gov_id, holdings: HashMap::new() });
         }
     }
-    pub fn reserve_securities_for_dvp(&mut self, instruction: SettlementInstruction, fs: &FinancialSystem) -> Result<(), CSDError> {
+    pub fn reserve_securities_for_dvp(
+        &mut self, instruction: SettlementInstruction, fs: &FinancialSystem, state: &SimState,
+    ) -> Result<(), CSDError> {
         let seller_id = instruction.seller;
         let instrument_id = instruction.instrument_id;
         let quantity = instruction.quantity;
+
+        let instrument_name =
+            fs.clone().get_instrument_info(&instrument_id, &state.agents, state.current_date).unwrap().instrument_type;
+
+        event!(Level::DEBUG,
+            trade_id = %instruction.trade_id.to_string()[..8],
+            seller_id = %seller_id,
+            instrument = %instrument_name,
+            quantity = quantity,
+            "📦 Attempting security reservation"
+        );
 
         if seller_id == fs.government.id {
             let gov_account = self
@@ -100,8 +113,22 @@ impl CentralSecuritiesDepository {
 
             let holding = gov_account.holdings.entry(instrument_id).or_insert_with(|| SecurityHolding::default());
 
-            holding.available += quantity;
+            let old_available = holding.available;
+            let old_reserved = holding.reserved;
+
             holding.reserved += quantity;
+
+            event!(Level::INFO,
+                trade_id = %instruction.trade_id.to_string()[..8],
+                seller = "Government",
+                instrument = %instrument_name,
+                quantity,
+                old_available,
+                new_available = holding.available,
+                old_reserved,
+                new_reserved = holding.reserved,
+                "🏛️ Government securities created and reserved"
+            );
 
             self.pending_settlements.insert(instruction.trade_id, instruction);
             return Ok(());
@@ -116,17 +143,51 @@ impl CentralSecuritiesDepository {
             .ok_or_else(|| CSDError::SecurityNotFound(seller_id, instrument_id))?;
 
         if holding.available < quantity {
+            event!(Level::ERROR,
+                trade_id = %instruction.trade_id.to_string()[..8],
+                seller_id = %seller_id,
+                instrument = %instrument_name,
+                available = holding.available,
+                required = quantity,
+                shortfall = quantity - holding.available,
+                "🚨 Insufficient securities for settlement"
+            );
             return Err(CSDError::InsufficientSecurities(instruction.trade_id, holding.available, quantity));
         }
 
+        let old_available = holding.available;
+        let old_reserved = holding.reserved;
+
         holding.available -= quantity;
         holding.reserved += quantity;
+
+        event!(Level::INFO,
+            trade_id = %instruction.trade_id.to_string()[..8],
+            seller_id = %seller_id,
+            instrument = %instrument_name,
+            quantity,
+            old_available,
+            new_available = holding.available,
+            old_reserved,
+            new_reserved = holding.reserved,
+            "🔒 Securities reserved successfully"
+        );
+
         self.pending_settlements.insert(instruction.trade_id, instruction);
         Ok(())
     }
 
     pub fn finalize_book_entry_transfer(&mut self, trade_id: &TradeId) -> Result<(), CSDError> {
         let instruction = self.pending_settlements.remove(trade_id).ok_or(CSDError::InstructionNotFound(*trade_id))?;
+
+        event!(Level::DEBUG,
+            trade_id = %trade_id.to_string()[..8],
+            seller = %instruction.seller,
+            buyer = %instruction.buyer,
+            instrument_id = %instruction.instrument_id,
+            quantity = instruction.quantity,
+            "📝 Starting book entry transfer"
+        );
 
         let seller_account = self
             .custody_accounts
@@ -135,8 +196,15 @@ impl CentralSecuritiesDepository {
         let seller_holding = seller_account.holdings.entry(instruction.instrument_id).or_default();
 
         if seller_holding.reserved < instruction.quantity {
+            event!(Level::ERROR,
+                trade_id = %trade_id.to_string()[..8],
+                reserved = seller_holding.reserved,
+                required = instruction.quantity,
+                "🚨 Instruction mismatch - insufficient reserved securities"
+            );
             return Err(CSDError::InstructionMismatch(*trade_id));
         }
+
         seller_holding.reserved -= instruction.quantity;
 
         let buyer_account = self
@@ -144,11 +212,33 @@ impl CentralSecuritiesDepository {
             .entry(instruction.buyer)
             .or_insert_with(|| CustodyAccount { owner: instruction.buyer, holdings: HashMap::new() });
         let buyer_holding = buyer_account.holdings.entry(instruction.instrument_id).or_default();
+
+        let buyer_old_available = buyer_holding.available;
         buyer_holding.available += instruction.quantity;
+
+        event!(Level::INFO,
+            trade_id = %trade_id.to_string()[..8],
+            seller = %instruction.seller,
+            buyer = %instruction.buyer,
+            instrument_id = %instruction.instrument_id,
+            quantity = instruction.quantity,
+            buyer_old_position = buyer_old_available,
+            buyer_new_position = buyer_holding.available,
+            "✅ Securities transferred"
+        );
+
+        self.settlement_history.push(CompletedSettlement {
+            trade_id: *trade_id,
+            settlement_time: instruction.settlement_date,
+            instrument_id: instruction.instrument_id,
+            quantity: instruction.quantity,
+            seller: instruction.seller,
+            buyer: instruction.buyer,
+            cash_leg_reference: None,
+        });
 
         Ok(())
     }
-
     pub fn cancel_security_reservation(&mut self, trade_id: &TradeId) -> Result<(), CSDError> {
         let instruction = self.pending_settlements.remove(trade_id).ok_or(CSDError::InstructionNotFound(*trade_id))?;
 
