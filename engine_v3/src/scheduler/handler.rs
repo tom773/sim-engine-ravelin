@@ -63,7 +63,6 @@ impl StepHandler for ApplyInstrumentCreationHandler {
         execute_step(|| {
             let all_effects = context.get_all_effects().unwrap_or_default();
             
-            // Filter for CreateInstrument effects only
             let instrument_effects: Vec<StateEffect> = all_effects
                 .into_iter()
                 .filter(|e| matches!(e, 
@@ -83,7 +82,6 @@ impl StepHandler for ApplyInstrumentCreationHandler {
                 count
             );
 
-            // Apply the effects to the state immediately
             engine.state.apply_effects(&instrument_effects)
                 .map_err(|e| e.to_string())?;
             
@@ -192,6 +190,7 @@ impl StepHandler for StartSettlementHandler {
             let mut payment_effects = Vec::new();
             let mut failed_reservations = 0;
             let fs = &engine.state.financial_system.clone();
+            
             for trade in &trades {
                 let instrument_id = match trade.market_id {
                     MarketId::Financial(id) => id,
@@ -239,16 +238,27 @@ impl StepHandler for StartSettlementHandler {
                 }
             }
 
-            let mut all_effects: Vec<StateEffect> = context.get("all_effects").unwrap_or_default();
-            all_effects.extend(payment_effects.clone());
-            context.store("all_effects", &all_effects)?;
+            if !payment_effects.is_empty() {
+                tracing::event!(
+                    tracing::Level::INFO,
+                    "Queueing {} payments in RTGS",
+                    payment_effects.len()
+                );
+                engine.state.apply_effects(&payment_effects)
+                    .map_err(|e| format!("Failed to queue payments: {}", e))?;
+            }
+
 
             Ok(
-                serde_json::json!({ "payments_queued": payment_effects.len(), "failed_reservations": failed_reservations }),
+                serde_json::json!({ 
+                    "payments_queued": payment_effects.len(), 
+                    "failed_reservations": failed_reservations 
+                }),
             )
         })
     }
 }
+
 #[derive(Debug)]
 pub struct RunRTGSHandler;
 
@@ -330,7 +340,6 @@ impl StepHandler for FinalizeSettlementHandler {
         })
     }
 }
-
 #[derive(Debug)]
 pub struct ApplyAllEffectsHandler;
 impl StepHandler for ApplyAllEffectsHandler {
@@ -424,7 +433,6 @@ impl StepHandler for UpdateHistoryHandler {
         })
     }
 }
-
 #[derive(Debug)]
 pub struct DebtAuctionsHandler;
 impl StepHandler for DebtAuctionsHandler {
