@@ -180,7 +180,8 @@ impl QueryService {
                         let calc_yield = |price_opt: Option<Money>| -> Option<Rate> {
                             price_opt.map(|price| {
                                 let ytm_years = years_to_maturity(state.current_date, d.maturity_date);
-                                ytm_approximation(price, d.face_value, d.coupon_rate_bps, ytm_years)
+                                ytm_bond(price, d.face_value, d.coupon_rate_bps, ytm_years, d.frequency as usize)
+
                             })
                         };
 
