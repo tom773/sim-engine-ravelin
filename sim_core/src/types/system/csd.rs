@@ -1,12 +1,11 @@
 use crate::prelude::*;
-use serde::{Serialize, Deserialize};
+use chrono::NaiveDate;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
 use uuid::Uuid;
-use chrono::NaiveDate;
 
 pub type TradeId = Uuid;
-
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ClearingHouse {
@@ -59,7 +58,6 @@ pub struct CompletedSettlement {
     pub cash_leg_reference: Option<PaymentId>,
 }
 
-
 #[derive(Debug, Error)]
 pub enum CSDError {
     #[error("Participant account not found for {0}")]
@@ -83,60 +81,80 @@ pub enum SettlementStatus {
     Cancelled,
 }
 
-
 impl CentralSecuritiesDepository {
-    pub fn reserve_securities_for_dvp(&mut self, instruction: SettlementInstruction) -> Result<(), CSDError> {
-        let trade_id = instruction.trade_id;
+    pub fn initialize_government_account(&mut self, gov_id: AgentId) {
+        if !self.custody_accounts.contains_key(&gov_id) {
+            self.custody_accounts.insert(gov_id, CustodyAccount { owner: gov_id, holdings: HashMap::new() });
+        }
+    }
+    pub fn reserve_securities_for_dvp(&mut self, instruction: SettlementInstruction, fs: &FinancialSystem) -> Result<(), CSDError> {
         let seller_id = instruction.seller;
         let instrument_id = instruction.instrument_id;
         let quantity = instruction.quantity;
 
-        let seller_account = self.custody_accounts.entry(seller_id).or_insert_with(|| CustodyAccount {
-            owner: seller_id,
-            holdings: HashMap::new(),
-        });
-            
-        let holding = seller_account.holdings.entry(instrument_id).or_default();
+        if seller_id == fs.government.id {
+            let gov_account = self
+                .custody_accounts
+                .entry(seller_id)
+                .or_insert_with(|| CustodyAccount { owner: seller_id, holdings: HashMap::new() });
+
+            let holding = gov_account.holdings.entry(instrument_id).or_insert_with(|| SecurityHolding::default());
+
+            holding.available += quantity;
+            holding.reserved += quantity;
+
+            self.pending_settlements.insert(instruction.trade_id, instruction);
+            return Ok(());
+        }
+
+        let seller_account =
+            self.custody_accounts.get_mut(&seller_id).ok_or_else(|| CSDError::ParticipantNotFound(seller_id))?;
+
+        let holding = seller_account
+            .holdings
+            .get_mut(&instrument_id)
+            .ok_or_else(|| CSDError::SecurityNotFound(seller_id, instrument_id))?;
 
         if holding.available < quantity {
-            return Err(CSDError::InsufficientSecurities(trade_id, holding.available, quantity));
+            return Err(CSDError::InsufficientSecurities(instruction.trade_id, holding.available, quantity));
         }
 
         holding.available -= quantity;
         holding.reserved += quantity;
-
-        self.pending_settlements.insert(trade_id, instruction);
+        self.pending_settlements.insert(instruction.trade_id, instruction);
         Ok(())
     }
 
     pub fn finalize_book_entry_transfer(&mut self, trade_id: &TradeId) -> Result<(), CSDError> {
-        let instruction = self.pending_settlements.remove(trade_id)
-            .ok_or(CSDError::InstructionNotFound(*trade_id))?;
-        
-        let seller_account = self.custody_accounts.get_mut(&instruction.seller)
+        let instruction = self.pending_settlements.remove(trade_id).ok_or(CSDError::InstructionNotFound(*trade_id))?;
+
+        let seller_account = self
+            .custody_accounts
+            .get_mut(&instruction.seller)
             .ok_or(CSDError::ParticipantNotFound(instruction.seller))?;
         let seller_holding = seller_account.holdings.entry(instruction.instrument_id).or_default();
-        
+
         if seller_holding.reserved < instruction.quantity {
             return Err(CSDError::InstructionMismatch(*trade_id));
         }
         seller_holding.reserved -= instruction.quantity;
 
-        let buyer_account = self.custody_accounts.entry(instruction.buyer).or_insert_with(|| CustodyAccount {
-            owner: instruction.buyer,
-            holdings: HashMap::new(),
-        });
+        let buyer_account = self
+            .custody_accounts
+            .entry(instruction.buyer)
+            .or_insert_with(|| CustodyAccount { owner: instruction.buyer, holdings: HashMap::new() });
         let buyer_holding = buyer_account.holdings.entry(instruction.instrument_id).or_default();
         buyer_holding.available += instruction.quantity;
-        
+
         Ok(())
     }
 
     pub fn cancel_security_reservation(&mut self, trade_id: &TradeId) -> Result<(), CSDError> {
-        let instruction = self.pending_settlements.remove(trade_id)
-             .ok_or(CSDError::InstructionNotFound(*trade_id))?;
+        let instruction = self.pending_settlements.remove(trade_id).ok_or(CSDError::InstructionNotFound(*trade_id))?;
 
-        let seller_account = self.custody_accounts.get_mut(&instruction.seller)
+        let seller_account = self
+            .custody_accounts
+            .get_mut(&instruction.seller)
             .ok_or(CSDError::ParticipantNotFound(instruction.seller))?;
         let holding = seller_account.holdings.entry(instruction.instrument_id).or_default();
 
@@ -146,7 +164,7 @@ impl CentralSecuritiesDepository {
 
         holding.reserved -= instruction.quantity;
         holding.available += instruction.quantity;
-        
+
         Ok(())
     }
 }

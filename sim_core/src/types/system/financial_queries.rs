@@ -82,13 +82,14 @@ impl FinancialSystem {
     }
 
     pub fn find_agent_liquid_account(&self, agent_id: &AgentId) -> Option<(InstrumentId, AgentId)> {
-        let is_bank_or_gov = self
-            .balance_sheets
-            .get(agent_id)
-            .map_or(false, |bs| bs.agent_id == self.government.id || bs.agent_id == self.central_bank.id)
-            || self.find_bank_reserves_account(agent_id).is_some();
+        if *agent_id == self.government.id {
+            return self.find_government_tga_account();
+        }
 
-        if is_bank_or_gov {
+        let is_bank = self.find_bank_reserves_account(agent_id).is_some();
+        let is_central_bank = *agent_id == self.central_bank.id;
+
+        if is_bank || is_central_bank {
             return self.find_bank_reserves_account(agent_id).map(|reserves_id| (reserves_id, self.central_bank.id));
         }
 
@@ -98,6 +99,19 @@ impl FinancialSystem {
             match &inst.instrument_type {
                 InstrumentType::Cash(details) if details.cash_type == CashType::DemandDeposit => {
                     Some((*id, details.issuer))
+                }
+                _ => None,
+            }
+        })
+    }
+
+    pub fn find_government_tga_account(&self) -> Option<(InstrumentId, AgentId)> {
+        let gov_bs = self.balance_sheets.get(&self.government.id)?;
+        gov_bs.assets.iter().find_map(|(id, _pos)| {
+            let inst = self.instruments.get(id)?;
+            match &inst.instrument_type {
+                InstrumentType::Cash(details) if details.cash_type == CashType::TreasuryGeneralAccount => {
+                    Some((*id, self.central_bank.id))
                 }
                 _ => None,
             }

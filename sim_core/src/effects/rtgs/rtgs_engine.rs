@@ -179,9 +179,17 @@ fn apply_same_bank_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Re
 }
 
 fn apply_interbank_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Result<(), EffectError> {
+    let _cb_id = state.financial_system.central_bank.id;
+    let gov_id = state.financial_system.government.id;
+
+    if pi.payer == gov_id || pi.payee == gov_id {
+        return apply_tga_transfer(state, pi);
+    }
     let cb_id = state.financial_system.central_bank.id;
     if pi.to_bank == cb_id && pi.payee != cb_id {
-        let from_bank_reserves = state.financial_system.find_bank_reserves_account(&pi.from_bank)
+        let from_bank_reserves = state
+            .financial_system
+            .find_bank_reserves_account(&pi.from_bank)
             .ok_or_else(|| EffectError::InvalidState(format!("From bank {} reserves not found", pi.from_bank)))?;
 
         let (payer_account_id, _) = state
@@ -247,10 +255,14 @@ fn apply_interbank_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Re
 
         return Ok(());
     }
-    let from_bank_reserves = state.financial_system.find_bank_reserves_account(&pi.from_bank)
+    let from_bank_reserves = state
+        .financial_system
+        .find_bank_reserves_account(&pi.from_bank)
         .ok_or_else(|| EffectError::InvalidState("From bank reserves not found".to_string()))?;
 
-    let to_bank_reserves = state.financial_system.find_bank_reserves_account(&pi.to_bank)
+    let to_bank_reserves = state
+        .financial_system
+        .find_bank_reserves_account(&pi.to_bank)
         .ok_or_else(|| EffectError::InvalidState("To bank reserves not found".to_string()))?;
 
     let (payer_account_id, _) = state
@@ -314,7 +326,80 @@ fn apply_interbank_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Re
 
     Ok(())
 }
-
+fn apply_tga_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Result<(), EffectError> {
+    let cb_id = state.financial_system.central_bank.id;
+    let gov_id = state.financial_system.government.id;
+    
+    let (tga_id, _) = state.financial_system
+        .find_government_tga_account()
+        .ok_or_else(|| EffectError::InvalidState("TGA not found".to_string()))?;
+    
+    if pi.payer == gov_id {
+        let (payee_account_id, payee_bank) = state.financial_system
+            .find_agent_liquid_account(&pi.payee)
+            .ok_or_else(|| EffectError::InvalidState("Payee account not found".to_string()))?;
+        
+        StateEffectApplicator::apply_adjust_position(
+            state, gov_id, tga_id, -pi.amount, &PositionSide::Asset, None
+        )?;
+        StateEffectApplicator::apply_adjust_position(
+            state, cb_id, tga_id, -pi.amount, &PositionSide::Liability, None
+        )?;
+        
+        StateEffectApplicator::apply_adjust_position(
+            state, pi.payee, payee_account_id, pi.amount, &PositionSide::Asset, None
+        )?;
+        StateEffectApplicator::apply_adjust_position(
+            state, payee_bank, payee_account_id, pi.amount, &PositionSide::Liability, None
+        )?;
+        
+        if payee_bank != cb_id {
+            let bank_reserves = state.financial_system
+                .find_bank_reserves_account(&payee_bank)
+                .ok_or_else(|| EffectError::InvalidState("Bank reserves not found".to_string()))?;
+            
+            StateEffectApplicator::apply_adjust_position(
+                state, payee_bank, bank_reserves, pi.amount, &PositionSide::Asset, None
+            )?;
+            StateEffectApplicator::apply_adjust_position(
+                state, cb_id, bank_reserves, pi.amount, &PositionSide::Liability, None
+            )?;
+        }
+    } else if pi.payee == gov_id {
+        let (payer_account_id, payer_bank) = state.financial_system
+            .find_agent_liquid_account(&pi.payer)
+            .ok_or_else(|| EffectError::InvalidState("Payer account not found".to_string()))?;
+        
+        StateEffectApplicator::apply_adjust_position(
+            state, pi.payer, payer_account_id, -pi.amount, &PositionSide::Asset, None
+        )?;
+        StateEffectApplicator::apply_adjust_position(
+            state, payer_bank, payer_account_id, -pi.amount, &PositionSide::Liability, None
+        )?;
+        
+        StateEffectApplicator::apply_adjust_position(
+            state, gov_id, tga_id, pi.amount, &PositionSide::Asset, None
+        )?;
+        StateEffectApplicator::apply_adjust_position(
+            state, cb_id, tga_id, pi.amount, &PositionSide::Liability, None
+        )?;
+        
+        if payer_bank != cb_id {
+            let bank_reserves = state.financial_system
+                .find_bank_reserves_account(&payer_bank)
+                .ok_or_else(|| EffectError::InvalidState("Bank reserves not found".to_string()))?;
+            
+            StateEffectApplicator::apply_adjust_position(
+                state, payer_bank, bank_reserves, -pi.amount, &PositionSide::Asset, None
+            )?;
+            StateEffectApplicator::apply_adjust_position(
+                state, cb_id, bank_reserves, -pi.amount, &PositionSide::Liability, None
+            )?;
+        }
+    }
+    
+    Ok(())
+}
 pub fn settle_one_payment(state: &mut SimState, payment_id: PaymentId) -> Result<(), EffectError> {
     let payment_idx = state
         .financial_system
@@ -343,7 +428,6 @@ fn maybe_complete_dvp(state: &mut SimState, context: &TransactionContext) -> Res
     }
 }
 
-
 pub fn complete_dvp_asset_leg(state: &mut SimState, trade_id: Uuid) -> Result<(), EffectError> {
     let settlement_instruction = state
         .financial_system
@@ -351,7 +435,9 @@ pub fn complete_dvp_asset_leg(state: &mut SimState, trade_id: Uuid) -> Result<()
         .csd
         .pending_settlements
         .iter()
-        .find(|si| si.1.trade_id == trade_id).unwrap().1
+        .find(|si| si.1.trade_id == trade_id)
+        .unwrap()
+        .1
         .clone();
 
     let instrument_id = settlement_instruction.instrument_id;
@@ -360,21 +446,20 @@ pub fn complete_dvp_asset_leg(state: &mut SimState, trade_id: Uuid) -> Result<()
     let seller = settlement_instruction.seller;
     let price = Money::from_f64(settlement_instruction.cash_amount / quantity).unwrap();
 
-    
     StateEffectApplicator::apply_adjust_position(
         state,
         seller,
         instrument_id,
-        -quantity,  // Decrease seller's asset position
+        -quantity, // Decrease seller's asset position
         &PositionSide::Asset,
         Some(price),
     )?;
-    
+
     StateEffectApplicator::apply_adjust_position(
         state,
         buyer,
         instrument_id,
-        quantity,  // Increase buyer's asset position
+        quantity, // Increase buyer's asset position
         &PositionSide::Asset,
         Some(price),
     )?;

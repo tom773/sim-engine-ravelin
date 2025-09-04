@@ -37,6 +37,7 @@ impl Instrument {
                 CashType::Currency | CashType::VaultCash => Listability::Unlisted,
                 CashType::CentralBankReserves => Listability::Listed(VenueType::PostedRates),
                 CashType::TimeDeposit => Listability::Listed(VenueType::PostedRates),
+                CashType::TreasuryGeneralAccount => Listability::Unlisted,
             },
             InstrumentType::Bond(_) => Listability::Listed(VenueType::CentralLimitOrderBook),
             InstrumentType::Equity(_) => Listability::Listed(VenueType::CentralLimitOrderBook),
@@ -78,6 +79,7 @@ impl Instrument {
                 CashType::Currency => "Physical Currency",
                 CashType::CentralBankReserves => "Central Bank Reserves",
                 CashType::VaultCash => "Vault Cash",
+                CashType::TreasuryGeneralAccount => "Treasury General Account",
             },
             InstrumentType::Bond(details) => match details.bond_type {
                 BondType::Corporate => "Corporate Bond",
@@ -124,6 +126,7 @@ pub enum CashType {
     Currency,
     CentralBankReserves,
     VaultCash,
+    TreasuryGeneralAccount,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

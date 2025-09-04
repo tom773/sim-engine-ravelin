@@ -95,7 +95,6 @@ impl Scenario {
             });
             state.financial_system.exchange.register_goods_market(good_id);
         }
-
         for recipe_conf in &self.recipes {
             let recipe_id = RecipeId(Uuid::new_v4());
             let inputs = recipe_conf.inputs.iter().map(|io| RecipeIO { good_id: *good_ids.get(&io.good_id).unwrap(), quantity: io.quantity, }).collect();
@@ -106,7 +105,7 @@ impl Scenario {
         let mut factory = AgentFactory::new(&mut state, &mut rng);
         let mut decision_models_map: HashMap<AgentId, Box<dyn DecisionModel>> = HashMap::new();
         let mut agent_ids: HashMap<String, AgentId> = HashMap::new();
-
+        let _ = factory.initialize_treasury_general_account();
         for bank_conf in &self.banks {
             let bank = factory.create_bank(bank_conf, cb_id);
             agent_ids.insert(bank_conf.id.clone(), bank.id);

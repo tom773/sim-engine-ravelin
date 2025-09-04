@@ -191,7 +191,7 @@ impl StepHandler for StartSettlementHandler {
             let trades: Vec<Trade> = context.get("trades").unwrap_or_default();
             let mut payment_effects = Vec::new();
             let mut failed_reservations = 0;
-
+            let fs = &engine.state.financial_system.clone();
             for trade in &trades {
                 let instrument_id = match trade.market_id {
                     MarketId::Financial(id) => id,
@@ -210,7 +210,7 @@ impl StepHandler for StartSettlementHandler {
                     status: SettlementStatus::Pending,
                 };
 
-                match engine.state.financial_system.clearing_house.csd.reserve_securities_for_dvp(instruction.clone()) {
+                match engine.state.financial_system.clearing_house.csd.reserve_securities_for_dvp(instruction.clone(), fs) {
                     Ok(_) => {
                         let (_, buyer_settlement_agent) =
                             engine.state.financial_system.find_agent_liquid_account(&trade.buyer).unwrap();
