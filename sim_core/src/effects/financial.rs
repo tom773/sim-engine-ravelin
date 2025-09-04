@@ -34,19 +34,10 @@ pub enum FinancialEffect {
         quantity: u32,
         price: Money,
     },
-    DvP {
-        trade: Trade,
-    },
     QueuePayment(PaymentInstruction),
     SettlePayment(PaymentId),
-    CompleteDvP {
-        trade_id: Uuid,
-    },
-    ReserveSecurityForDvP {
-        trade_id: Uuid,
-        instrument_id: InstrumentId,
-        quantity: f64,
-    },
+    DvPFinalize { trade_id: Uuid },
+    DvPCancel { trade_id: Uuid },
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum PositionSide {
@@ -64,11 +55,10 @@ impl FinancialEffect {
             FinancialEffect::RecordTransaction(_) => "RecordTransaction",
             FinancialEffect::AdjustPosition { .. } => "AdjustPosition",
             FinancialEffect::IssueAndOfferDebt { .. } => "IssueAndOfferDebt",
-            FinancialEffect::DvP { .. } => "DvP",
+            FinancialEffect::DvPFinalize { .. } => "DvPFinalize",
+            FinancialEffect::DvPCancel { .. } => "DvPCancel",
             FinancialEffect::QueuePayment(_) => "QueuePayment",
             FinancialEffect::SettlePayment(_) => "SettlePayment",
-            FinancialEffect::CompleteDvP { .. } => "CompleteDvP",
-            FinancialEffect::ReserveSecurityForDvP { .. } => "ReserveSecurityForDvP",
         }
     }
 }
@@ -156,18 +146,24 @@ impl StateEffectApplicator {
 
                 Self::apply_market_effect(state, &market_effect)
             }
-            FinancialEffect::DvP { trade } => Self::apply_dvp(state, trade),
+            FinancialEffect::DvPCancel { trade_id } => {
+                match state.financial_system.clearing_house.csd.cancel_security_reservation(trade_id){
+                    Ok(_) => Ok(()),
+                    Err(e) => {
+                        tracing::error!("CSD cancel_security_reservation error: {:?}", e);
+                        return Err(EffectError::FinancialSystemError(e.to_string()));
+                    }
+                }
+            }
+            FinancialEffect::DvPFinalize { trade_id } => {
+                tracing::info!("Finalizing DvP for trade_id: {}", trade_id);
+                Ok(())
+            }
             FinancialEffect::QueuePayment(pi) => {
                 state.financial_system.rtgs.pending.push(pi.clone());
                 Ok(())
             }
             FinancialEffect::SettlePayment(pid) => settle_one_payment(state, *pid),
-            FinancialEffect::CompleteDvP { trade_id } => complete_dvp_asset_leg(state, *trade_id),
-            FinancialEffect::ReserveSecurityForDvP { .. } => {
-                // Store trade reservation for later completion
-                // This could be implemented as a new field in FinancialSystem
-                Ok(())
-            }
         }
     }
 

@@ -86,7 +86,6 @@ impl StepHandler for PhaseResolutionHandler {
             mapping.extend(action_to_effect_indices);
             context.store("action_to_effect_indices", &mapping)?;
 
-
             Ok(serde_json::json!({"actions": action_records.len(), "effects": effects.len()}))
         })
     }
@@ -146,91 +145,101 @@ impl StepHandler for ClearMarketsHandler {
 }
 
 #[derive(Debug)]
-pub struct BuildSettlementObligationsHandler;
+pub struct StartSettlementHandler;
 
-impl StepHandler for BuildSettlementObligationsHandler {
-    #[instrument(skip(self, engine, context, _rng))]
+impl StepHandler for StartSettlementHandler {
     fn execute(&self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
         execute_step(|| {
-            let trades = context.get_trades().unwrap_or_default();
-            let mut settlement_effects = Vec::new();
+            let trades: Vec<Trade> = context.get("trades").unwrap_or_default();
+            let mut payment_effects = Vec::new();
+            let mut failed_reservations = 0;
 
-            for trade in trades {
-                let total_payment = (trade.price * trade.quantity).to_f64();
+            for trade in &trades {
+                let instrument_id = match trade.market_id {
+                    MarketId::Financial(id) => id,
+                    _ => continue,
+                };
 
-                if total_payment > 1e-9 {
-                    let buyer_settlement_agent = engine
-                        .state
-                        .financial_system
-                        .find_agent_liquid_account(&trade.buyer)
-                        .map(|(_, agent)| agent)
-                        .ok_or_else(|| format!("Could not find settlement agent for buyer {}", trade.buyer))?;
+                let instruction = SettlementInstruction {
+                    instruction_id: Uuid::new_v4(),
+                    trade_id: trade.trade_id,
+                    seller: trade.seller,
+                    buyer: trade.buyer,
+                    instrument_id,
+                    quantity: trade.quantity,
+                    cash_amount: (trade.price * trade.quantity).to_f64(),
+                    settlement_date: engine.state.current_date,
+                    status: SettlementStatus::Pending,
+                };
 
-                    let seller_settlement_agent = engine
-                        .state
-                        .financial_system
-                        .find_agent_liquid_account(&trade.seller)
-                        .map(|(_, agent)| agent)
-                        .ok_or_else(|| format!("Could not find settlement agent for seller {}", trade.seller))?;
+                match engine.state.financial_system.clearing_house.csd.reserve_securities_for_dvp(instruction.clone()) {
+                    Ok(_) => {
+                        let (_, buyer_settlement_agent) =
+                            engine.state.financial_system.find_agent_liquid_account(&trade.buyer).unwrap();
+                        let (_, seller_settlement_agent) =
+                            engine.state.financial_system.find_agent_liquid_account(&trade.seller).unwrap();
 
-                    let payment_instruction = PaymentInstruction {
-                        id: Uuid::new_v4(),
-                        from_bank: buyer_settlement_agent,
-                        to_bank: seller_settlement_agent,
-                        payer: trade.buyer,
-                        payee: trade.seller,
-                        amount: total_payment,
-                        context: TransactionContext::TradeSettlement { trade_id: trade.trade_id },
-                        priority: PaymentPriority::Normal,
-                        earliest_release_tick: engine.state.ticknum,
-                        deadline_tick: engine.state.ticknum + 10,
-                    };
-
-                    settlement_effects.push(StateEffect::Financial(FinancialEffect::QueuePayment(payment_instruction)));
-                }
-
-                if let MarketId::Financial(instrument_id) = &trade.market_id {
-                    settlement_effects.push(StateEffect::Financial(FinancialEffect::ReserveSecurityForDvP {
-                        trade_id: trade.trade_id,
-                        instrument_id: *instrument_id,
-                        quantity: trade.quantity,
-                    }));
+                        let payment_instruction = PaymentInstruction {
+                            id: Uuid::new_v4(),
+                            from_bank: buyer_settlement_agent,
+                            to_bank: seller_settlement_agent,
+                            payer: trade.buyer,
+                            payee: trade.seller,
+                            amount: instruction.cash_amount,
+                            context: TransactionContext::TradeSettlement { trade_id: trade.trade_id },
+                            priority: PaymentPriority::Normal,
+                            earliest_release_tick: engine.state.ticknum,
+                            deadline_tick: engine.state.ticknum + 10,
+                        };
+                        payment_effects
+                            .push(StateEffect::Financial(FinancialEffect::QueuePayment(payment_instruction)));
+                    }
+                    Err(e) => {
+                        println!("CSD reservation failed for trade {}: {:?}", trade.trade_id, e);
+                        failed_reservations += 1;
+                    }
                 }
             }
 
-            /*let effects_str = settlement_effects.iter().map(|e| e.name()).collect::<Vec<_>>().join(", ");
-            tracing::event!(
-                tracing::Level::INFO,
-                "Created {} settlement obligations: [{}]",
-                settlement_effects.len(),
-                effects_str
-            );*/
-
-            let mut all_effects = context.get_all_effects().unwrap_or_default();
-            all_effects.extend(settlement_effects.clone());
+            let mut all_effects: Vec<StateEffect> = context.get("all_effects").unwrap_or_default();
+            all_effects.extend(payment_effects.clone());
             context.store("all_effects", &all_effects)?;
 
-            Ok(serde_json::json!({
-                "settlement_obligations_created": settlement_effects.len()
-            }))
+            Ok(
+                serde_json::json!({ "payments_queued": payment_effects.len(), "failed_reservations": failed_reservations }),
+            )
         })
     }
 }
-
 #[derive(Debug)]
 pub struct RunRTGSHandler;
 
 impl StepHandler for RunRTGSHandler {
-    #[instrument(skip(self, engine, _context, _rng))]
-    fn execute(&self, engine: &mut SimulationEngine, _context: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
+    #[instrument(skip(self, engine, context, _rng))]
+    fn execute(&self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
         execute_step(|| {
             let initial_pending = engine.state.financial_system.rtgs.pending.len();
 
             run_rtgs(&mut engine.state).map_err(|e| format!("RTGS execution failed: {:?}", e))?;
 
+            let mut finalization_effects = Vec::new();
+
+            for p in &engine.state.financial_system.rtgs.settled {
+                if let TransactionContext::TradeSettlement { trade_id } = p.context {
+                    finalization_effects.push(StateEffect::Financial(FinancialEffect::DvPFinalize { trade_id }));
+                }
+            }
+            for (p, _reason) in &engine.state.financial_system.rtgs.rejected {
+                if let TransactionContext::TradeSettlement { trade_id } = p.context {
+                    finalization_effects.push(StateEffect::Financial(FinancialEffect::DvPCancel { trade_id }));
+                }
+            }
+            let mut all_effects: Vec<StateEffect> = context.get("all_effects").unwrap_or_default();
+            all_effects.extend(finalization_effects);
+
+            context.store("all_effects", &all_effects)?;
             let final_pending = engine.state.financial_system.rtgs.pending.len();
             let settled_count = initial_pending - final_pending;
-
             tracing::event!(
                 tracing::Level::INFO,
                 "RTGS run complete. Settled: {}, Remaining: {}.",
@@ -242,6 +251,44 @@ impl StepHandler for RunRTGSHandler {
                 "payments_settled": settled_count,
                 "payments_remaining": final_pending
             }))
+        })
+    }
+}
+#[derive(Debug)]
+pub struct FinalizeSettlementHandler;
+
+impl StepHandler for FinalizeSettlementHandler {
+    fn execute(&self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
+        execute_step(|| {
+            let all_effects: Vec<StateEffect> = context.get("all_effects").unwrap_or_default();
+            let mut success_count = 0;
+            let mut fail_count = 0;
+
+            for effect in all_effects.iter() {
+                match effect {
+                    StateEffect::Financial(FinancialEffect::DvPFinalize { trade_id }) => {
+                        if let Err(e) =
+                            engine.state.financial_system.clearing_house.csd.finalize_book_entry_transfer(trade_id)
+                        {
+                            eprintln!("CRITICAL: Failed to finalize asset leg for trade {}: {:?}", trade_id, e);
+                        } else {
+                            success_count += 1;
+                        }
+                    }
+                    StateEffect::Financial(FinancialEffect::DvPCancel { trade_id }) => {
+                        if let Err(e) =
+                            engine.state.financial_system.clearing_house.csd.cancel_security_reservation(trade_id)
+                        {
+                            eprintln!("CRITICAL: Failed to cancel reservation for trade {}: {:?}", trade_id, e);
+                        } else {
+                            fail_count += 1;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            Ok(serde_json::json!({ "settlements_finalized": success_count, "settlements_cancelled": fail_count }))
         })
     }
 }
@@ -295,9 +342,6 @@ impl StepHandler for ApplyAllEffectsHandler {
             }
 
             engine.event_log = new_events;
-
-            //let effects_str = all_effects.iter().map(|e| e.name()).collect::<Vec<_>>().join(", ");
-            //tracing::event!(tracing::Level::INFO, "Applying {} total effects: [{}]", all_effects.len(), effects_str);
 
             engine.state.apply_effects(&all_effects).map_err(|e| e.to_string())?;
 

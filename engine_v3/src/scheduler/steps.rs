@@ -11,8 +11,9 @@ pub enum TickStep {
     ResolveDependentPhase,
     Auction,
     ClearMarkets,
-    BuildSettlementObligations,
+    StartSettlement,
     RunRTGS,
+    FinalizeSettlement,
     ApplyAllEffects,
     UpdateHistory,
 }
@@ -29,31 +30,32 @@ impl TickStep {
             ResolveDependentPhase,
             Auction,
             ClearMarkets,
-            BuildSettlementObligations,
+            StartSettlement,
             RunRTGS,
+            FinalizeSettlement,
             ApplyAllEffects,
             UpdateHistory,
         ]
     }
 
-pub fn dependencies(&self) -> Vec<Self> {
-    use TickStep::*;
-    match self {
-        Upkeep => vec![],
-        GatherIntentions => vec![Upkeep],
-        ResolveIndependentPhase => vec![GatherIntentions],
-        ResolveMarketPhase => vec![ResolveIndependentPhase],
-        ApplyMarketEffectsForPriceDiscovery => vec![ResolveMarketPhase],
-        ResolveDependentPhase => vec![ApplyMarketEffectsForPriceDiscovery],
-        Auction => vec![ResolveDependentPhase],
-        ClearMarkets => vec![Auction],
-        BuildSettlementObligations => vec![ClearMarkets],
-        
-        ApplyAllEffects => vec![BuildSettlementObligations],
-        RunRTGS => vec![ApplyAllEffects],
-        UpdateHistory => vec![RunRTGS],
+    pub fn dependencies(&self) -> Vec<Self> {
+        use TickStep::*;
+        match self {
+            Upkeep => vec![],
+            GatherIntentions => vec![Upkeep],
+            ResolveIndependentPhase => vec![GatherIntentions],
+            ResolveMarketPhase => vec![ResolveIndependentPhase],
+            ApplyMarketEffectsForPriceDiscovery => vec![ResolveMarketPhase],
+            ResolveDependentPhase => vec![ApplyMarketEffectsForPriceDiscovery],
+            Auction => vec![ResolveDependentPhase],
+            ClearMarkets => vec![Auction],
+            StartSettlement => vec![ClearMarkets],
+            RunRTGS => vec![StartSettlement],
+            FinalizeSettlement => vec![RunRTGS],
+            ApplyAllEffects => vec![FinalizeSettlement],
+            UpdateHistory => vec![RunRTGS],
+        }
     }
-}
 
     pub fn should_abort_on_failure(&self) -> bool {
         true

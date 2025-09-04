@@ -52,8 +52,9 @@ impl SimulationEngine {
         );
         scheduler.register_handler(TickStep::Auction, DebtAuctionsHandler);
         scheduler.register_handler(TickStep::ClearMarkets, ClearMarketsHandler);
-        scheduler.register_handler(TickStep::BuildSettlementObligations, BuildSettlementObligationsHandler);
+        scheduler.register_handler(TickStep::StartSettlement, StartSettlementHandler);
         scheduler.register_handler(TickStep::RunRTGS, RunRTGSHandler);
+        scheduler.register_handler(TickStep::FinalizeSettlement, FinalizeSettlementHandler); 
         scheduler.register_handler(TickStep::ApplyAllEffects, ApplyAllEffectsHandler);
         scheduler.register_handler(TickStep::UpdateHistory, UpdateHistoryHandler);
         scheduler.print_execution_plan();

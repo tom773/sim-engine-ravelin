@@ -18,6 +18,7 @@ pub struct FinancialSystem {
     pub central_bank: CentralBank,
     pub government: Government,
     pub exchange: Exchange,
+    pub clearing_house: ClearingHouse,
     pub yield_curve: YieldCurve,
     pub goods: GoodsRegistry,
     pub rtgs: RtgsQueue,
@@ -54,6 +55,7 @@ impl Default for FinancialSystem {
             central_bank,
             government,
             exchange: Exchange::default(),
+            clearing_house: ClearingHouse::default(),
             yield_curve: YieldCurve {
                 date: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
                 yields: HashMap::new(),
