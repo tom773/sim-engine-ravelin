@@ -111,48 +111,6 @@ impl BalanceSheet {
         &self.assets
     }
 
-    pub fn total_assets(&self, system: &FinancialSystem) -> f64 {
-        let cash_and_real: f64 = self.assets
-            .iter()
-            .filter_map(|(id, pos)| {
-                let inst = system.instruments.get(id)?;
-                match &inst.instrument_type {
-                    InstrumentType::Cash(_) | InstrumentType::RealAsset(_) => {
-                        let price = get_market_price(inst, &system.exchange)
-                            .unwrap_or(pos.book_value_per_unit);
-                        Some(price.to_f64() * pos.quantity)
-                    }
-                    _ => None, // Securities are tracked in CSD
-                }
-            })
-            .sum();
-
-        let securities: f64 = system.clearing_house.csd
-            .get_all_positions(&self.agent_id)
-            .iter()
-            .filter_map(|(id, qty)| {
-                let inst = system.instruments.get(id)?;
-                let price = get_market_price(inst, &system.exchange)
-                    .unwrap_or_else(|| inst.face_value().unwrap_or(Money::from(1000)));
-                Some(price.to_f64() * qty)
-            })
-            .sum();
-
-        cash_and_real + securities
-    }
-
-    pub fn total_liabilities(&self, system: &FinancialSystem) -> f64 {
-        self.liabilities
-            .iter()
-            .map(|(id, pos)| {
-                let inst = system.instruments.get(id).unwrap();
-                let price = get_market_price(inst, &system.exchange)
-                    .unwrap_or(pos.book_value_per_unit);
-                price.to_f64() * pos.quantity
-            })
-            .sum()
-    }
-
     pub fn calculate_rwa(&self, system: &FinancialSystem) -> f64 {
         let mut rwa = 0.0;
 
@@ -211,15 +169,5 @@ impl BalanceSheet {
         }
 
         rwa
-    }
-
-    pub fn net_worth(&self, system: &FinancialSystem) -> f64 {
-        self.total_assets(system) - self.total_liabilities(system)
-    }
-
-    pub fn leverage_ratio(&self, system: &FinancialSystem) -> f64 {
-        let total_assets = self.total_assets(system);
-        let net_worth = self.net_worth(system);
-        if net_worth <= 0.0 { f64::INFINITY } else { total_assets / net_worth }
     }
 }

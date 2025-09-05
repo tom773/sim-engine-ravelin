@@ -19,16 +19,11 @@ impl Domain for BankingDomain {
 
     fn resolve_intention(&self, intention: &SimIntention, context: &ResolutionContext) -> Option<ResolutionResult> {
         let actions = match intention {
-            // Only handle bank-specific intentions
             SimIntention::LendExcessReserves { agent_id, amount, target_rate_bps } => {
                 self.resolve_reserve_lending(*agent_id, *amount, *target_rate_bps, context.state)
             }
             SimIntention::BorrowReserves { agent_id, amount, target_rate_bps } => {
                 self.resolve_reserve_borrowing(*agent_id, *amount, *target_rate_bps, context.state)
-            }
-            SimIntention::MarketMakeTreasuries { .. } => {
-                // This should be handled by the transactions domain
-                return None;
             }
             _ => return None,
         };

@@ -1,6 +1,6 @@
-use std::collections::HashMap;
-use sim_core::*;
 use domains::*;
+use sim_core::*;
+use std::collections::HashMap;
 extern crate inventory;
 
 pub struct DomainRegistry {
@@ -9,33 +9,27 @@ pub struct DomainRegistry {
 
 impl DomainRegistry {
     pub fn new() -> Self {
-        let mut registry = Self {
-            domains: HashMap::new(),
-        };
-        
+        let mut registry = Self { domains: HashMap::new() };
+
         for registration in inventory::iter::<DomainRegistration> {
             let domain = (registration.constructor)();
             registry.domains.insert(registration.name.to_string(), domain);
         }
-        
+
         registry
     }
-    
+
     pub fn execute_action(&self, action: &SimAction, state: &SimState) -> Result<Vec<StateEffect>, String> {
         let domain_name = self.get_domain_name_for_action(action);
-        
-        let domain = self.domains.get(&domain_name)
-            .ok_or_else(|| format!("No domain found for action: {}", domain_name))?;
-        
+
+        let domain =
+            self.domains.get(&domain_name).ok_or_else(|| format!("No domain found for action: {}", domain_name))?;
+
         let result = domain.execute(action, state);
-        
-        if result.success {
-            Ok(result.effects)
-        } else {
-            Err(result.errors.join("; "))
-        }
+
+        if result.success { Ok(result.effects) } else { Err(result.errors.join("; ")) }
     }
-    
+
     pub fn settle_trade(&self, trade: &Trade, state: &SimState) -> Result<Vec<StateEffect>, String> {
         if let Some(trading_domain) = self.domains.get("Trading") {
             let result = trading_domain.settle_trade(trade, state);
@@ -43,7 +37,7 @@ impl DomainRegistry {
                 return Ok(result.effects);
             }
         }
-        
+
         for (domain_name, domain) in &self.domains {
             let result = domain.settle_trade(trade, state);
             if result.success {
@@ -51,13 +45,12 @@ impl DomainRegistry {
                 return Ok(result.effects);
             }
         }
-        
+
         Err(format!("No domain could settle trade for market: {:?}", trade.market_id))
     }
 
     pub fn categorize_intentions_by_phase(
-        &self,
-        intentions: Vec<SimIntention>,
+        &self, intentions: Vec<SimIntention>,
     ) -> HashMap<ResolutionPhase, Vec<SimIntention>> {
         let mut categorized: HashMap<ResolutionPhase, Vec<SimIntention>> = HashMap::new();
         for intention in intentions {
@@ -66,7 +59,7 @@ impl DomainRegistry {
                 if let Some(phase) = domain.resolution_phase(&intention) {
                     categorized.entry(phase).or_default().push(intention.clone());
                     handled = true;
-                    break; 
+                    break;
                 }
             }
             if !handled {
@@ -75,29 +68,24 @@ impl DomainRegistry {
         }
         categorized
     }
-    
-    pub fn resolve_intention(
-        &self,
-        intention: &SimIntention,
-        context: &ResolutionContext,
-    ) -> ResolutionResult {
+
+    pub fn resolve_intention(&self, intention: &SimIntention, context: &ResolutionContext) -> ResolutionResult {
         for domain in self.domains.values() {
             if let Some(result) = domain.resolve_intention(intention, context) {
-                return result; 
+                return result;
             }
         }
         ResolutionResult::not_handled()
     }
-    
+
     fn get_domain_name_for_action(&self, action: &SimAction) -> String {
         match action {
             SimAction::Banking(_) => "Banking".to_string(),
             SimAction::Consumption(_) => "Consumption".to_string(),
             SimAction::Fiscal(_) => "Fiscal".to_string(),
-            SimAction::Labour(_) => "Labour".to_string(),
             SimAction::Production(_) => "Production".to_string(),
-            SimAction::Settlement(_) => "Settlement".to_string(),
-            SimAction::Trading(_) => "Trading".to_string(),
+            SimAction::Transaction(_) => "Transactions".to_string(),
+            SimAction::Monetary(_) => "Monetary".to_string(),
         }
     }
 }

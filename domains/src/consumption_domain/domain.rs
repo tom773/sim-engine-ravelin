@@ -1,6 +1,6 @@
+use crate::{Any, Domain, DomainResult, ResolutionContext, ResolutionPhase, ResolutionResult, inventory};
 use serde::{Deserialize, Serialize};
 use sim_core::*;
-use crate::{Any, inventory, Domain, DomainResult, ResolutionContext, ResolutionResult, ResolutionPhase};
 use std::collections::HashMap;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -26,38 +26,42 @@ impl ConsumptionDomain {
 }
 
 impl Domain for ConsumptionDomain {
-    fn name(&self) -> &'static str { 
-        "Consumption" 
+    fn name(&self) -> &'static str {
+        "Consumption"
     }
 
     fn resolve_intention(&self, intention: &SimIntention, _context: &ResolutionContext) -> Option<ResolutionResult> {
         let actions = match intention {
             SimIntention::ApplyForJob { agent_id: _, market_id, application } => {
-                vec![SimAction::Transaction(TransactionAction::PostJobApplication { 
-                    market_id: *market_id, 
-                    application: application.clone() 
-                })]
-            },
-            
-            SimIntention::ConsumeGood { agent_id, good_id, quantity } => {
-                vec![SimAction::Consumption(ConsumptionAction::Consume { 
-                    agent_id: *agent_id, 
-                    good_id: *good_id, 
-                    amount: *quantity 
-                })]
-            },
-
-            SimIntention::SpendOnGood { agent_id, good_id, max_notional } => {
-                 vec![SimAction::Consumption(ConsumptionAction::PurchaseAtBest {
-                    agent_id: *agent_id,
-                    good_id: *good_id,
-                    max_notional: *max_notional,
+                vec![SimAction::Transaction(TransactionAction::PostJobApplication {
+                    market_id: *market_id,
+                    application: application.clone(),
                 })]
             }
-            
+
+            SimIntention::ConsumeGood { agent_id, good_id, quantity } => {
+                vec![SimAction::Consumption(ConsumptionAction::Consume {
+                    agent_id: *agent_id,
+                    good_id: *good_id,
+                    amount: *quantity,
+                })]
+            }
+
+            SimIntention::SpendOnGood { agent_id, good_id, max_notional } => {
+                // TODO Resolve this to use the basket of goods in the future
+                vec![SimAction::Transaction(TransactionAction::PostMarketOrder {
+                    agent_id: *agent_id,
+                    market_id: MarketId::Goods(*good_id),
+                    side: Side::Bid,
+                    quantity: max_notional / 10.0,
+                    price: None,
+                    order_type: OrderType::Market,
+                })]
+            }
+
             _ => return None,
         };
-        
+
         Some(ResolutionResult::success(actions))
     }
 
@@ -81,18 +85,10 @@ impl Domain for ConsumptionDomain {
         }
 
         match consumption_action {
-            ConsumptionAction::Purchase { agent_id, seller, good_id, amount } => {
-                self.execute_purchase(*agent_id, *seller, *good_id, *amount, state)
-            },
-            ConsumptionAction::PurchaseAtBest { agent_id, good_id, max_notional } => {
-                self.execute_purchase_at_best(*agent_id, *good_id, *max_notional, state)
-            },
             ConsumptionAction::Consume { agent_id, good_id, amount } => {
                 self.execute_consume(*agent_id, *good_id, *amount)
-            },
-            ConsumptionAction::NoAction { .. } => {
-                DomainResult::empty()
             }
+            ConsumptionAction::NoAction { .. } => DomainResult::empty(),
         }
     }
 
@@ -102,109 +98,37 @@ impl Domain for ConsumptionDomain {
 }
 
 impl ConsumptionDomain {
-
     fn validate(&self, action: &ConsumptionAction, state: &SimState) -> Result<(), String> {
         match action {
-            ConsumptionAction::Purchase { .. } => {
-                Err("Direct Purchase action (ConsumptionAction::Purchase) is not fully supported. Use PurchaseAtBest.".to_string())
-            },
-            
-            ConsumptionAction::PurchaseAtBest { agent_id, good_id: _, max_notional } => {
-                Validator::non_negative_amount(*max_notional)?;
-                Validator::agent_exists(*agent_id, state)?;
-                
-                Ok(())
-            },
-            
+
             ConsumptionAction::Consume { agent_id, good_id, amount } => {
                 Validator::positive_amount(*amount)?;
                 Validator::agent_exists(*agent_id, state)?;
 
                 let fs = &state.financial_system;
                 let inventory = Self::get_agent_inventory(fs, agent_id);
-                
+
                 let available = inventory.get(good_id).map_or(0.0, |item| item.quantity);
 
                 if available < *amount {
                     return Err(format!(
-                        "Agent has insufficient goods to consume: needs {:.2}, has {:.2}", 
+                        "Agent has insufficient goods to consume: needs {:.2}, has {:.2}",
                         amount, available
                     ));
                 }
                 Ok(())
-            },
-            
+            }
+
             ConsumptionAction::NoAction { .. } => Ok(()),
         }
     }
 
-    fn execute_purchase(&self, _buyer: AgentId, _seller: AgentId, _good_id: GoodId, _amount: f64, _state: &SimState) -> DomainResult {
-        DomainResult::failure(vec!["Direct Purchase execution not implemented.".to_string()])
-    }
-
-    fn execute_purchase_at_best(&self, buyer: AgentId, good_id: GoodId, max_notional: f64, state: &SimState) -> DomainResult {
-        
-        if max_notional <= 1e-9 {
-            return DomainResult::empty();
-        }
-
-        let market = match state.financial_system.exchange.goods_market(&good_id) {
-            Some(m) => m,
-            None => return DomainResult::failure(vec![format!("Goods market for {:?} not found.", good_id)]),
-        };
-
-        
-
-        let mut remaining_notional = max_notional;
-        let mut total_quantity_to_buy = 0.0;
-
-        for (price_nn, orders) in &market.book.asks {
-            let price = price_nn.into_inner();
-            if remaining_notional < 1e-9 { break; }
-
-            let quantity_at_level = orders.iter().map(|o| o.quantity).sum::<f64>();
-            let cost_at_level = quantity_at_level * price;
-
-            if cost_at_level <= remaining_notional {
-                total_quantity_to_buy += quantity_at_level;
-                remaining_notional -= cost_at_level;
-            } else {
-                let affordable_qty = remaining_notional / price;
-                total_quantity_to_buy += affordable_qty;
-                let _remaining_notional = 0.0;
-                break;
-            }
-        }
-
-        if total_quantity_to_buy > 1e-6 {
-            let order = Order {
-                id: uuid::Uuid::new_v4(),
-                agent_id: buyer,
-                side: Side::Bid,
-                quantity: total_quantity_to_buy,
-                price: None,
-                order_type: OrderType::Market,
-            };
-
-            let effect = StateEffect::Market(MarketEffect::PlaceOrderInBook {
-                market_id: MarketId::Goods(good_id),
-                order,
-            });
-
-            DomainResult::success(vec![effect])
-        } else {
-            DomainResult::empty()
-        }
-    }
-
     fn execute_consume(&self, agent_id: AgentId, good_id: GoodId, amount: f64) -> DomainResult {
-        let effects = vec![
-            StateEffect::Inventory(InventoryEffect::RemoveInventory { 
-                owner: agent_id, 
-                good_id, 
-                quantity: amount 
-            })
-        ];
+        let effects = vec![StateEffect::Inventory(InventoryEffect::RemoveInventory {
+            owner: agent_id,
+            good_id,
+            quantity: amount,
+        })];
 
         DomainResult::success(effects)
     }

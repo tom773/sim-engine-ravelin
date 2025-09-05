@@ -12,9 +12,8 @@ pub enum TickStep {
     ResolveDependentPhase,
     Auction,
     ClearMarkets,
-    StartSettlement,
+    SettleTrades,
     RunRTGS,
-    FinalizeSettlement,
     ApplyAllEffects,
     UpdateHistory,
 }
@@ -32,9 +31,8 @@ impl TickStep {
             ResolveDependentPhase,
             Auction,
             ClearMarkets,
-            StartSettlement,
+            SettleTrades,
             RunRTGS,
-            FinalizeSettlement,
             ApplyAllEffects,
             UpdateHistory,
         ]
@@ -52,10 +50,9 @@ impl TickStep {
             ResolveDependentPhase => vec![ApplyMarketEffectsForPriceDiscovery],
             Auction => vec![ResolveDependentPhase],
             ClearMarkets => vec![Auction],
-            StartSettlement => vec![ClearMarkets],
-            RunRTGS => vec![StartSettlement],
-            FinalizeSettlement => vec![RunRTGS],
-            ApplyAllEffects => vec![FinalizeSettlement],
+            SettleTrades => vec![ClearMarkets],
+            RunRTGS => vec![SettleTrades],
+            ApplyAllEffects => vec![RunRTGS],
             UpdateHistory => vec![RunRTGS],
         }
     }

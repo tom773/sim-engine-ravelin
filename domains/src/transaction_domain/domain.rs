@@ -125,7 +125,8 @@ impl Domain for TransactionsDomain {
     fn settle_trade(&self, trade: &Trade, state: &SimState) -> DomainResult {
         match &trade.market_id {
             MarketId::Financial(inst_id) => {
-                let _instruction = SettlementInstruction {
+                let mut effects = Vec::new();
+                let instruction = SettlementInstruction {
                     instruction_id: Uuid::new_v4(),
                     trade_id: trade.trade_id,
                     seller: trade.seller,
@@ -137,7 +138,22 @@ impl Domain for TransactionsDomain {
                     status: SettlementStatus::Pending,
                 };
 
-                DomainResult::success(vec![])
+                effects.push(StateEffect::Financial(FinancialEffect::RecordSettlementInstruction(instruction)));
+                effects.push(
+                    StateEffect::Financial(FinancialEffect::QueuePayment(PaymentInstruction {
+                        id: Uuid::new_v4(),
+                        from_bank: state.agents.get_bank_for_agent(&trade.buyer).unwrap().id,
+                        to_bank: state.agents.get_bank_for_agent(&trade.seller).unwrap().id,
+                        payer: trade.buyer,
+                        payee: trade.seller,
+                        amount: (trade.price * trade.quantity).to_f64(),
+                        context: TransactionContext::TradeSettlement { trade_id: trade.trade_id },
+                        priority: PaymentPriority::Normal,
+                        earliest_release_tick: state.ticknum,
+                        deadline_tick: state.ticknum + 10,
+                    })
+                ));
+                DomainResult::success(effects)
             }
             MarketId::Goods(good_id) => {
                 let mut effects = vec![];
@@ -223,13 +239,11 @@ impl TransactionsDomain {
 
         let (_, to_bank) = match state.financial_system.find_agent_liquid_account(&to) {
             Some(acc) => acc,
-            None => {
-                state
-                    .financial_system
-                    .find_any_bank_account()
-                    .ok_or_else(|| "No banks available for account creation".to_string())
-                    .unwrap()
-            }
+            None => state
+                .financial_system
+                .find_any_bank_account()
+                .ok_or_else(|| "No banks available for account creation".to_string())
+                .unwrap(),
         };
 
         let (from_account_id, _) = state.financial_system.find_agent_liquid_account(&from).unwrap();

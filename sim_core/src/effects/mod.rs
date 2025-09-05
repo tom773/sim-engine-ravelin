@@ -11,8 +11,8 @@ pub use application::*;
 pub use financial::*;
 pub use inventory::*;
 pub use market_effects::*;
-
-use serde::{Deserialize, Serialize};
+pub mod monetary_effects;
+pub use monetary_effects::*;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum StateEffect {
@@ -20,6 +20,7 @@ pub enum StateEffect {
     Inventory(InventoryEffect),
     Market(MarketEffect),
     Agent(AgentEffect),
+    Monetary(MonetaryEffect)
 }
 
 impl StateEffect {
@@ -29,6 +30,7 @@ impl StateEffect {
             StateEffect::Inventory(effect) => format!("Inventory::{}", effect.name()),
             StateEffect::Market(effect) => format!("Market::{}", effect.name()),
             StateEffect::Agent(effect) => format!("Agent::{}", effect.name()),
+            StateEffect::Monetary(effect) => format!("CentralBank::{}", effect.name()),
         }
     }
 }

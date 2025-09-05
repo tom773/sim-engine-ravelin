@@ -8,24 +8,12 @@ use uuid::Uuid;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 
 pub enum FinancialEffect {
-    // Create an Instrument 
-    CreateInstrument {
-        instrument: Instrument,
-        creditor: AgentId,
-        debtor: AgentId,
-        quantity: f64,
-    },
-    // For Auditing
+    CreateInstrument { instrument: Instrument, creditor: AgentId, debtor: AgentId, quantity: f64 },
     RecordTransaction(Transaction),
-    // Queue a payment in RTGS for settlement
+    RecordSettlementInstruction(SettlementInstruction),
     QueuePayment(PaymentInstruction),
-    // CDS Settlement
-    DvPFinalize {
-        trade_id: Uuid,
-    },
-    DvPCancel {
-        trade_id: Uuid,
-    },
+    DvPFinalize { trade_id: Uuid },
+    DvPCancel { trade_id: Uuid },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -39,6 +27,7 @@ impl FinancialEffect {
         match self {
             FinancialEffect::CreateInstrument { .. } => "CreateInstrument",
             FinancialEffect::RecordTransaction(_) => "RecordTransaction",
+            FinancialEffect::RecordSettlementInstruction(_) => "RecordSettlementInstruction",
             FinancialEffect::DvPFinalize { .. } => "DvPFinalize",
             FinancialEffect::DvPCancel { .. } => "DvPCancel",
             FinancialEffect::QueuePayment(_) => "QueuePayment",
@@ -123,6 +112,26 @@ impl StateEffectApplicator {
             }
             FinancialEffect::RecordTransaction(tx) => {
                 state.history.transactions.push(tx.clone());
+                Ok(())
+            }
+            FinancialEffect::RecordSettlementInstruction(instruction) => {
+                // Extract needed data before mutable borrow
+                let government_id = state.financial_system.government.id;
+                let instrument_name = state
+                    .financial_system
+                    .instruments
+                    .get(&instruction.instrument_id)
+                    .map(|inst| inst.type_as_string())
+                    .unwrap_or("Unknown");
+                let current_date = state.current_date;
+
+                // Now safe to mutably borrow
+                state
+                    .financial_system
+                    .clearing_house
+                    .csd
+                    .reserve_securities_for_dvp(instruction.clone(), government_id, instrument_name, current_date)
+                    .map_err(|e| EffectError::FinancialSystemError(e.to_string()))?;
                 Ok(())
             }
             FinancialEffect::QueuePayment(pi) => {

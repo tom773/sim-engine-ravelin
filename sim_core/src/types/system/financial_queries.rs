@@ -132,6 +132,20 @@ impl FinancialSystem {
         &mut self, creditor_id: &AgentId, debtor_id: &AgentId, instrument_id: &InstrumentId, quantity_change: f64,
         book_value_per_unit: f64,
     ) -> Result<(), String> {
+        if let Some(inst) = self.instruments.get(instrument_id) {
+            match inst.instrument_type {
+                InstrumentType::Bond(_)
+                | InstrumentType::Equity(_)
+                | InstrumentType::StructuredTranche(_)
+                | InstrumentType::Derivative(_) => {
+                    return Err(format!(
+                        "Security {} must use CSD, not balance sheets. Use CreateInstrument effect.",
+                        instrument_id
+                    ));
+                }
+                _ => {}
+            }
+        }
         let book_value_money = Money::from_f64(book_value_per_unit).unwrap_or(Money::ZERO);
 
         let creditor_bs = self.balance_sheets.get_mut(creditor_id).ok_or("Creditor not found")?;
@@ -263,7 +277,7 @@ impl FinancialSystem {
         &self, agent_id: &AgentId, instrument_id: &InstrumentId, required_quantity: f64,
     ) -> Result<(), String> {
         if !self.clearing_house.csd.is_security(instrument_id) {
-            return Ok(()); // Not a security, no CSD validation needed
+            return Ok(());
         }
 
         let available = self
@@ -283,5 +297,75 @@ impl FinancialSystem {
         }
 
         Ok(())
+    }
+    pub fn get_total_assets(&self, agent_id: &AgentId) -> f64 {
+        let bs_assets_value = self
+            .balance_sheets
+            .get(agent_id)
+            .map(|bs| {
+                bs.assets
+                    .iter()
+                    .map(|(id, pos)| {
+                        let price = self.get_market_price(id).unwrap_or(pos.book_value_per_unit);
+                        price.to_f64() * pos.quantity
+                    })
+                    .sum::<f64>()
+            })
+            .unwrap_or(0.0);
+
+        let csd_securities_value = self
+            .clearing_house
+            .csd
+            .get_all_positions(agent_id)
+            .iter()
+            .map(|(id, qty)| {
+                let price = self
+                    .get_market_price(id)
+                    .or_else(|| self.instruments.get(id).and_then(|i| i.face_value()))
+                    .unwrap_or(Money::ZERO);
+                price.to_f64() * qty
+            })
+            .sum::<f64>();
+
+        bs_assets_value + csd_securities_value
+    }
+
+    pub fn get_total_liabilities(&self, agent_id: &AgentId) -> f64 {
+        self.balance_sheets
+            .get(agent_id)
+            .map(|bs| {
+                bs.liabilities
+                    .iter()
+                    .map(|(id, pos)| {
+                        let price = self.get_market_price(id).unwrap_or(pos.book_value_per_unit);
+                        price.to_f64() * pos.quantity
+                    })
+                    .sum()
+            })
+            .unwrap_or(0.0)
+    }
+
+    pub fn get_liquid_assets(&self, agent_id: &AgentId) -> f64 {
+        self.balance_sheets
+            .get(agent_id)
+            .map(|bs| {
+                bs.assets
+                    .iter()
+                    .filter_map(|(id, pos)| {
+                        self.instruments.get(id).and_then(|inst| {
+                            if let InstrumentType::Cash(_) = &inst.instrument_type {
+                                Some(pos.quantity) // Cash has a price of 1.0
+                            } else {
+                                None
+                            }
+                        })
+                    })
+                    .sum()
+            })
+            .unwrap_or(0.0)
+    }
+
+    pub fn get_market_price(&self, instrument_id: &InstrumentId) -> Option<Money> {
+        self.exchange.financial_market(instrument_id).and_then(|market| market.representative_price())
     }
 }

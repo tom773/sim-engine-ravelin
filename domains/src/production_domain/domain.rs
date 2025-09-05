@@ -1,7 +1,4 @@
-use crate::{
-    inventory, Any, Domain, DomainResult, ResolutionContext, ResolutionPhase,
-    ResolutionResult,
-};
+use crate::{Any, Domain, DomainResult, ResolutionContext, ResolutionPhase, ResolutionResult, inventory};
 use serde::{Deserialize, Serialize};
 use sim_core::*;
 use std::collections::HashMap;
@@ -25,17 +22,9 @@ impl Domain for ProductionDomain {
         "Production"
     }
 
-    fn resolve_intention(
-        &self,
-        intention: &SimIntention,
-        context: &ResolutionContext,
-    ) -> Option<ResolutionResult> {
+    fn resolve_intention(&self, intention: &SimIntention, context: &ResolutionContext) -> Option<ResolutionResult> {
         let actions = match intention {
-            SimIntention::Produce {
-                agent_id,
-                recipe_id,
-                batches,
-            } => {
+            SimIntention::Produce { agent_id, recipe_id, batches } => {
                 vec![SimAction::Production(ProductionAction::Produce {
                     agent_id: *agent_id,
                     recipe_id: *recipe_id,
@@ -43,17 +32,11 @@ impl Domain for ProductionDomain {
                 })]
             }
 
-            SimIntention::HireWorkers {
-                agent_id,
-                count,
-                wage_rate,
-            } => {
+            SimIntention::HireWorkers { agent_id, count, wage_rate } => {
                 let market_id = match context.state.financial_system.find_general_labour_market() {
                     Some(id) => id,
                     None => {
-                        return Some(ResolutionResult::failure(vec![
-                            "No labour market found for hiring.".to_string(),
-                        ]))
+                        return Some(ResolutionResult::failure(vec!["No labour market found for hiring.".to_string()]));
                     }
                 };
 
@@ -69,26 +52,18 @@ impl Domain for ProductionDomain {
                 })]
             }
 
-            SimIntention::PurchaseInputs {
-                agent_id,
-                good_id,
-                quantity,
-                max_price,
-            } => {
-                let max_notional = quantity * max_price;
-                vec![SimAction::Consumption(ConsumptionAction::PurchaseAtBest {
+            SimIntention::PurchaseInputs { agent_id, good_id, quantity, max_price } => {
+                vec![SimAction::Transaction(TransactionAction::PostMarketOrder {
                     agent_id: *agent_id,
-                    good_id: *good_id,
-                    max_notional,
+                    market_id: MarketId::Goods(*good_id),
+                    side: Side::Bid,
+                    quantity: *quantity,
+                    price: Some(Money::from_f64(*max_price).unwrap_or_default()),
+                    order_type: OrderType::Limit,
                 })]
             }
 
-            SimIntention::PostGoodToMarket {
-                agent_id,
-                good_id,
-                quantity,
-                ask_price,
-            } => {
+            SimIntention::PostGoodToMarket { agent_id, good_id, quantity, ask_price } => {
                 vec![SimAction::Transaction(TransactionAction::PostMarketOrder {
                     agent_id: *agent_id,
                     market_id: MarketId::Goods(*good_id),
@@ -127,15 +102,10 @@ impl Domain for ProductionDomain {
 
         match production_action {
             ProductionAction::Hire { agent_id, count } => self.execute_hire(*agent_id, *count, state),
-            ProductionAction::Produce {
-                agent_id,
-                recipe_id,
-                batches,
-            } => self.execute_produce(*agent_id, *recipe_id, *batches, state),
-            ProductionAction::Fire {
-                agent_id,
-                employee_id,
-            } => self.execute_fire(*agent_id, *employee_id),
+            ProductionAction::Produce { agent_id, recipe_id, batches } => {
+                self.execute_produce(*agent_id, *recipe_id, *batches, state)
+            }
+            ProductionAction::Fire { agent_id, employee_id } => self.execute_fire(*agent_id, *employee_id),
         }
     }
 
@@ -155,11 +125,7 @@ impl ProductionDomain {
                     Validator::firm_exists(*agent_id, state)
                 }
             }
-            ProductionAction::Produce {
-                agent_id,
-                recipe_id,
-                batches,
-            } => {
+            ProductionAction::Produce { agent_id, recipe_id, batches } => {
                 if *batches == 0 {
                     return Err("Cannot produce zero batches".to_string());
                 }
@@ -174,8 +140,7 @@ impl ProductionDomain {
                 let inventory = fs.get_agent_inventory(agent_id);
 
                 for input in &recipe.inputs {
-                    let available =
-                        inventory.get(&input.good_id).map_or(0.0, |item| item.quantity);
+                    let available = inventory.get(&input.good_id).map_or(0.0, |item| item.quantity);
                     let required = input.quantity * (*batches as f64);
 
                     if available < required {
@@ -188,10 +153,7 @@ impl ProductionDomain {
 
                 Ok(())
             }
-            ProductionAction::Fire {
-                agent_id,
-                employee_id,
-            } => {
+            ProductionAction::Fire { agent_id, employee_id } => {
                 if let Some(firm) = state.agents.firms.get(agent_id) {
                     if firm.employees.contains_key(employee_id) {
                         Ok(())
@@ -228,13 +190,7 @@ impl ProductionDomain {
         DomainResult::success(effects)
     }
 
-    fn execute_produce(
-        &self,
-        agent_id: AgentId,
-        recipe_id: RecipeId,
-        batches: u32,
-        state: &SimState,
-    ) -> DomainResult {
+    fn execute_produce(&self, agent_id: AgentId, recipe_id: RecipeId, batches: u32, state: &SimState) -> DomainResult {
         let fs = &state.financial_system;
         if let Some(recipe) = fs.goods.recipes.get(&recipe_id) {
             let mut effects = Vec::new();
@@ -245,12 +201,10 @@ impl ProductionDomain {
 
             let firm = state.agents.firms.get(&agent_id).unwrap(); // Safe due to validation
             let avg_wage_rate = firm.wage_rate;
-            let labor_cost =
-                Money::from_f64(recipe.labour_hours * avg_wage_rate).unwrap_or_default();
+            let labor_cost = Money::from_f64(recipe.labour_hours * avg_wage_rate).unwrap_or_default();
 
             let total_cost_per_batch = input_cost + labor_cost;
-            let total_output_quantity_per_batch: f64 =
-                recipe.outputs.iter().map(|o| o.quantity).sum();
+            let total_output_quantity_per_batch: f64 = recipe.outputs.iter().map(|o| o.quantity).sum();
 
             let unit_cost = if total_output_quantity_per_batch > 0.0 {
                 total_cost_per_batch / total_output_quantity_per_batch
@@ -282,10 +236,7 @@ impl ProductionDomain {
     }
 
     fn execute_fire(&self, firm_id: AgentId, employee_id: AgentId) -> DomainResult {
-        let effect = StateEffect::Agent(AgentEffect::TerminateEmployment {
-            firm_id,
-            consumer_id: employee_id,
-        });
+        let effect = StateEffect::Agent(AgentEffect::TerminateEmployment { firm_id, consumer_id: employee_id });
 
         DomainResult::success(vec![effect])
     }
