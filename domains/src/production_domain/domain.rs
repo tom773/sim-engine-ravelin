@@ -57,7 +57,7 @@ impl Domain for ProductionDomain {
                     }
                 };
 
-                vec![SimAction::Labour(LabourAction::PostJobOffer {
+                vec![SimAction::Transaction(TransactionAction::PostJobOffer {
                     market_id,
                     offer: JobOffer {
                         offer_id: Uuid::new_v4(),
@@ -89,11 +89,13 @@ impl Domain for ProductionDomain {
                 quantity,
                 ask_price,
             } => {
-                vec![SimAction::Trading(TradingAction::PostAsk {
+                vec![SimAction::Transaction(TransactionAction::PostMarketOrder {
                     agent_id: *agent_id,
                     market_id: MarketId::Goods(*good_id),
                     quantity: *quantity,
-                    price: Money::from_f64(*ask_price).unwrap_or_default(),
+                    price: Some(Money::from_f64(*ask_price).unwrap_or_default()),
+                    order_type: OrderType::Limit,
+                    side: Side::Ask,
                 })]
             }
 

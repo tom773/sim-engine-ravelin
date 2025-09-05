@@ -82,13 +82,12 @@ pub struct DomainRegistration {
 
 inventory::collect!(DomainRegistration);
 
-pub mod banking;
-pub mod consumption;
-pub mod fiscal;
-pub mod labour;
-pub mod production;
-pub mod settlement;
-pub mod trading;
+pub mod banking_domain;
+pub mod consumption_domain;
+pub mod fiscal_domain;
+pub mod production_domain;
+pub mod monetary_domain;
+pub mod transaction_domain;
 
 pub mod prelude {
     pub use crate::{
@@ -96,14 +95,13 @@ pub mod prelude {
         ResolutionContext, ResolutionResult, ResolutionPhase,
     };
     
-    pub use crate::banking::{BankingDomain, BasicBankDecisionModel};
-    pub use crate::consumption::{ConsumptionDomain, SimpleConsumerDecisionModel, CESConsumerDecisionModel};
-    pub use crate::fiscal::{FiscalDomain, BasicGovernmentDecisionModel};
-    pub use crate::labour::LabourDomain;
-    pub use crate::production::{ProductionDomain, ProductionFirmDecisionModel, InvestmentFirmDecisionModel};
-    pub use crate::settlement::SettlementDomain;
-    pub use crate::trading::TradingDomain;
-    
+    pub use crate::banking_domain::{behaviour::*, domain::*};
+    pub use crate::consumption_domain::{behaviour::*, domain::*};
+    pub use crate::fiscal_domain::{behaviour::*, domain::*};
+    pub use crate::monetary_domain::{behaviour::*, domain::*};
+    pub use crate::production_domain::{behaviour::*, domain::*};
+    pub use crate::transaction_domain::{domain::*};
+
     pub use sim_core::*;
     pub use std::any::Any;
 }

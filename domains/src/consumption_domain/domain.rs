@@ -33,7 +33,7 @@ impl Domain for ConsumptionDomain {
     fn resolve_intention(&self, intention: &SimIntention, _context: &ResolutionContext) -> Option<ResolutionResult> {
         let actions = match intention {
             SimIntention::ApplyForJob { agent_id: _, market_id, application } => {
-                vec![SimAction::Labour(LabourAction::ApplyForJob { 
+                vec![SimAction::Transaction(TransactionAction::PostJobApplication { 
                     market_id: *market_id, 
                     application: application.clone() 
                 })]
