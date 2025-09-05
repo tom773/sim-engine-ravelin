@@ -3,6 +3,7 @@ use crate::*;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use tracing::{event, Level};
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum FinancialEffect {
     CreateInstrument {
@@ -43,6 +44,7 @@ pub enum FinancialEffect {
         trade_id: Uuid,
     },
 }
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum PositionSide {
     Asset,
@@ -67,6 +69,16 @@ impl FinancialEffect {
     }
 }
 
+fn is_security(inst: &Instrument) -> bool {
+    matches!(
+        inst.instrument_type,
+        InstrumentType::Bond(_) | 
+        InstrumentType::Equity(_) | 
+        InstrumentType::StructuredTranche(_) |
+        InstrumentType::Derivative(_)
+    )
+}
+
 impl StateEffectApplicator {
     pub fn apply_financial_effect(state: &mut SimState, effect: &FinancialEffect) -> Result<(), EffectError> {
         match effect {
@@ -85,6 +97,27 @@ impl StateEffectApplicator {
                     .create_or_consolidate_instrument(*creditor, *debtor, inst.clone(), *quantity, book_value)
                     .map_err(EffectError::FinancialSystemError)?;
 
+                if is_security(inst) {
+                    state.financial_system.clearing_house.csd.register_security(
+                        new_inst_id,
+                        inst,
+                        state.current_date
+                    ).map_err(|e| EffectError::FinancialSystemError(e.to_string()))?;
+
+                    state.financial_system.clearing_house.csd.credit_securities(
+                        *creditor,
+                        new_inst_id,
+                        *quantity
+                    ).map_err(|e| EffectError::FinancialSystemError(e.to_string()))?;
+
+                    event!(Level::INFO,
+                        instrument_id = %new_inst_id,
+                        creditor = %creditor,
+                        quantity = *quantity,
+                        "📈 Security created and credited in CSD"
+                    );
+                }
+
                 let final_inst = state.financial_system.instruments.get(&new_inst_id).unwrap();
                 if final_inst.should_create_order_book() {
                     state.financial_system.exchange.ensure_listed(new_inst_id, final_inst);
@@ -94,15 +127,65 @@ impl StateEffectApplicator {
             FinancialEffect::UpdateInstrument { id, quantity_change } => {
                 let (creditor_id, debtor_id) =
                     state.financial_system.get_parties(id).ok_or(EffectError::InstrumentNotFound { id: *id })?;
-                state
-                    .financial_system
-                    .create_or_consolidate_position(&creditor_id, &debtor_id, id, *quantity_change, 0.0)
-                    .map_err(EffectError::FinancialSystemError)
+                
+                if let Some(inst) = state.financial_system.instruments.get(id) {
+                    if is_security(inst) {
+                        if *quantity_change > 0.0 {
+                            state.financial_system.clearing_house.csd.credit_securities(
+                                creditor_id,
+                                *id,
+                                *quantity_change
+                            ).map_err(|e| EffectError::FinancialSystemError(e.to_string()))?;
+                        } else if *quantity_change < 0.0 {
+                            state.financial_system.clearing_house.csd.debit_securities(
+                                creditor_id,
+                                *id,
+                                -*quantity_change
+                            ).map_err(|e| EffectError::FinancialSystemError(e.to_string()))?;
+                        }
+                        Ok(())
+                    } else {
+                        state
+                            .financial_system
+                            .create_or_consolidate_position(&creditor_id, &debtor_id, id, *quantity_change, 0.0)
+                            .map_err(EffectError::FinancialSystemError)
+                    }
+                } else {
+                    Err(EffectError::InstrumentNotFound { id: *id })
+                }
             }
-            FinancialEffect::TransferInstrument { id, old_creditor, new_creditor } => state
-                .financial_system
-                .transfer_instrument(id, *old_creditor, *new_creditor)
-                .map_err(EffectError::FinancialSystemError),
+            FinancialEffect::TransferInstrument { id, old_creditor, new_creditor } => {
+                if let Some(inst) = state.financial_system.instruments.get(id) {
+                    if is_security(inst) {
+                        let quantity = state.financial_system.clearing_house.csd
+                            .get_position(old_creditor, id)
+                            .ok_or_else(|| EffectError::FinancialSystemError(
+                                format!("Security position not found for {} in {}", id, old_creditor)
+                            ))?;
+
+                        state.financial_system.clearing_house.csd.debit_securities(
+                            *old_creditor,
+                            *id,
+                            quantity
+                        ).map_err(|e| EffectError::FinancialSystemError(e.to_string()))?;
+
+                        state.financial_system.clearing_house.csd.credit_securities(
+                            *new_creditor,
+                            *id,
+                            quantity
+                        ).map_err(|e| EffectError::FinancialSystemError(e.to_string()))?;
+                        
+                        Ok(())
+                    } else {
+                        state
+                            .financial_system
+                            .transfer_instrument(id, *old_creditor, *new_creditor)
+                            .map_err(EffectError::FinancialSystemError)
+                    }
+                } else {
+                    Err(EffectError::InstrumentNotFound { id: *id })
+                }
+            }
             FinancialEffect::RemoveInstrument(id) => {
                 state.financial_system.remove_instrument(id).map_err(EffectError::FinancialSystemError)
             }
@@ -124,6 +207,20 @@ impl StateEffectApplicator {
                         face_value,
                     )
                     .map_err(EffectError::FinancialSystemError)?;
+
+                if is_security(instrument) {
+                    state.financial_system.clearing_house.csd.register_security(
+                        final_instrument_id,
+                        instrument,
+                        state.current_date
+                    ).map_err(|e| EffectError::FinancialSystemError(e.to_string()))?;
+
+                    state.financial_system.clearing_house.csd.credit_securities(
+                        government_id,
+                        final_instrument_id,
+                        *quantity as f64
+                    ).map_err(|e| EffectError::FinancialSystemError(e.to_string()))?;
+                }
 
                 let final_inst = state
                     .financial_system
@@ -160,8 +257,19 @@ impl StateEffectApplicator {
                 }
             }
             FinancialEffect::DvPFinalize { trade_id } => {
-                tracing::info!("Finalizing DvP for trade_id: {}", trade_id);
-                Ok(())
+                match state.financial_system.clearing_house.csd.finalize_book_entry_transfer(trade_id) {
+                    Ok(_) => {
+                        event!(Level::INFO,
+                            trade_id = %trade_id.to_string()[..8],
+                            "✅ DvP fully settled - securities transferred in CSD"
+                        );
+                        Ok(())
+                    }
+                    Err(e) => {
+                        tracing::error!("CSD finalize_book_entry_transfer error: {:?}", e);
+                        Err(EffectError::FinancialSystemError(e.to_string()))
+                    }
+                }
             }
             FinancialEffect::QueuePayment(pi) => {
                 state.financial_system.rtgs.pending.push(pi.clone());
@@ -175,6 +283,17 @@ impl StateEffectApplicator {
         state: &mut SimState, owner: AgentId, instrument_id: InstrumentId, delta_quantity: f64, side: &PositionSide,
         cost_per_unit: Option<Money>,
     ) -> Result<(), EffectError> {
+        if let Some(inst) = state.financial_system.instruments.get(&instrument_id) {
+            if is_security(inst) {
+                event!(Level::WARN,
+                    owner = %owner,
+                    instrument_id = %instrument_id,
+                    delta = delta_quantity,
+                    "⚠️ Attempted to adjust security position directly - should use CSD"
+                );
+            }
+        }
+
         let owner_type = state.get_agent_type_string(&owner).unwrap();
         let owner_name = format!("{} ({})", owner_type, owner.0.to_string()[..4].to_string());
         let instrument_name = state.financial_system.clone().get_instrument_info(&instrument_id, &state.agents, state.current_date).unwrap().instrument_type;
@@ -381,22 +500,26 @@ impl StateEffectApplicator {
                 )?;
             }
             MarketId::Financial(instrument_id) => {
-                Self::apply_adjust_position(
-                    state,
-                    trade.seller,
-                    *instrument_id,
-                    -trade.quantity,
-                    &PositionSide::Asset,
-                    None,
-                )?;
-                Self::apply_adjust_position(
-                    state,
-                    trade.buyer,
-                    *instrument_id,
-                    trade.quantity,
-                    &PositionSide::Asset,
-                    Some(trade.price),
-                )?;
+                if let Some(inst) = state.financial_system.instruments.get(instrument_id) {
+                    if !is_security(inst) {
+                        Self::apply_adjust_position(
+                            state,
+                            trade.seller,
+                            *instrument_id,
+                            -trade.quantity,
+                            &PositionSide::Asset,
+                            None,
+                        )?;
+                        Self::apply_adjust_position(
+                            state,
+                            trade.buyer,
+                            *instrument_id,
+                            trade.quantity,
+                            &PositionSide::Asset,
+                            Some(trade.price),
+                        )?;
+                    }
+                }
             }
             MarketId::Labour(_) => { /* No asset leg for labour trades */ }
         }

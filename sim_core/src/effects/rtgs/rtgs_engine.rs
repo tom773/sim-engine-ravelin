@@ -1,6 +1,7 @@
 use crate::*;
 use tracing::{Level, event};
 use uuid::Uuid;
+
 pub fn run_rtgs(state: &mut SimState) -> Result<(), EffectError> {
     if !state.financial_system.rtgs_policy.enabled {
         return Ok(());
@@ -89,8 +90,16 @@ fn run_pure_rtgs(state: &mut SimState) -> Result<(), EffectError> {
             );
 
             if can_fund_result || can_use_credit {
+                // Process the cash leg ONLY - no securities movement here!
                 apply_cash_movements_immediately(state, &pi)?;
-                maybe_complete_dvp(state, &pi.context)?;
+                
+                // Mark DvP as ready for securities finalization, but don't move securities yet
+                if let TransactionContext::TradeSettlement { .. } = pi.context {
+                    event!(Level::INFO,
+                        payment_id = %pi.id.to_string()[..8],
+                        "💰 Cash leg settled - securities pending CSD finalization"
+                    );
+                }
 
                 let settled_payment = state.financial_system.rtgs.pending.remove(i);
 
@@ -149,7 +158,6 @@ fn run_pure_rtgs(state: &mut SimState) -> Result<(), EffectError> {
 
 fn run_lsm_rtgs(state: &mut SimState) -> Result<(), EffectError> {
     bilateral_netting(state)?;
-
     run_pure_rtgs(state)
 }
 
@@ -213,7 +221,11 @@ fn bilateral_netting(state: &mut SimState) -> Result<(), EffectError> {
 }
 
 fn apply_cash_movements_immediately(state: &mut SimState, pi: &PaymentInstruction) -> Result<(), EffectError> {
-    if pi.from_bank == pi.to_bank { apply_same_bank_transfer(state, pi) } else { apply_interbank_transfer(state, pi) }
+    if pi.from_bank == pi.to_bank { 
+        apply_same_bank_transfer(state, pi) 
+    } else { 
+        apply_interbank_transfer(state, pi) 
+    }
 }
 
 fn apply_same_bank_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Result<(), EffectError> {
@@ -269,6 +281,7 @@ fn apply_interbank_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Re
     if pi.payer == gov_id || pi.payee == gov_id {
         return apply_tga_transfer(state, pi);
     }
+    
     let cb_id = state.financial_system.central_bank.id;
     if pi.to_bank == cb_id && pi.payee != cb_id {
         let from_bank_reserves = state
@@ -339,6 +352,7 @@ fn apply_interbank_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Re
 
         return Ok(());
     }
+    
     let from_bank_reserves = state
         .financial_system
         .find_bank_reserves_account(&pi.from_bank)
@@ -410,6 +424,7 @@ fn apply_interbank_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Re
 
     Ok(())
 }
+
 fn apply_tga_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Result<(), EffectError> {
     let cb_id = state.financial_system.central_bank.id;
     let gov_id = state.financial_system.government.id;
@@ -521,6 +536,7 @@ fn apply_tga_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Result<(
 
     Ok(())
 }
+
 pub fn settle_one_payment(state: &mut SimState, payment_id: PaymentId) -> Result<(), EffectError> {
     let payment_idx = state
         .financial_system
@@ -532,58 +548,10 @@ pub fn settle_one_payment(state: &mut SimState, payment_id: PaymentId) -> Result
 
     let payment = state.financial_system.rtgs.pending[payment_idx].clone();
     apply_cash_movements_immediately(state, &payment)?;
-    maybe_complete_dvp(state, &payment.context)?;
 
     let settled_payment = state.financial_system.rtgs.pending.remove(payment_idx);
     event!(Level::INFO, "Settled payment: {:?}", settled_payment.clone().id);
     state.financial_system.rtgs.settled.push(settled_payment);
-
-    Ok(())
-}
-
-fn maybe_complete_dvp(state: &mut SimState, context: &TransactionContext) -> Result<(), EffectError> {
-    if let TransactionContext::TradeSettlement { trade_id } = context {
-        complete_dvp_asset_leg(state, *trade_id)
-    } else {
-        Ok(())
-    }
-}
-
-pub fn complete_dvp_asset_leg(state: &mut SimState, trade_id: Uuid) -> Result<(), EffectError> {
-    let settlement_instruction = state
-        .financial_system
-        .clearing_house
-        .csd
-        .pending_settlements
-        .iter()
-        .find(|si| si.1.trade_id == trade_id)
-        .unwrap()
-        .1
-        .clone();
-
-    let instrument_id = settlement_instruction.instrument_id;
-    let quantity = settlement_instruction.quantity;
-    let buyer = settlement_instruction.buyer;
-    let seller = settlement_instruction.seller;
-    let price = Money::from_f64(settlement_instruction.cash_amount / quantity).unwrap();
-
-    StateEffectApplicator::apply_adjust_position(
-        state,
-        seller,
-        instrument_id,
-        -quantity, // Decrease seller's asset position
-        &PositionSide::Asset,
-        Some(price),
-    )?;
-
-    StateEffectApplicator::apply_adjust_position(
-        state,
-        buyer,
-        instrument_id,
-        quantity, // Increase buyer's asset position
-        &PositionSide::Asset,
-        Some(price),
-    )?;
 
     Ok(())
 }

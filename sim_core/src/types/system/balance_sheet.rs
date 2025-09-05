@@ -16,6 +16,7 @@ pub struct Position {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct BalanceSheet {
     pub agent_id: AgentId,
+    // For cash instruments and real assets (not securities)
     #[serde_as(as = "HashMap<DisplayFromStr, _>")]
     pub assets: HashMap<InstrumentId, Position>,
     #[serde_as(as = "HashMap<DisplayFromStr, _>")]
@@ -66,6 +67,31 @@ impl BalanceSheet {
         }
     }
 
+    /// Get the full asset position including securities from CSD
+    pub fn get_all_asset_positions(&self, system: &FinancialSystem) -> HashMap<InstrumentId, Position> {
+        let mut all_positions = self.assets.clone();
+        
+        // Add securities positions from CSD
+        if let Some(csd_positions) = system.clearing_house.csd.custody_accounts.get(&self.agent_id) {
+            for (inst_id, holding) in &csd_positions.holdings {
+                let quantity = holding.total_position();
+                if quantity > 1e-9 {
+                    // Get the instrument to determine book value
+                    if let Some(inst) = system.instruments.get(inst_id) {
+                        let book_value = inst.face_value().unwrap_or(Money::from(1000 as i64));
+                        all_positions.entry(*inst_id).or_insert(Position {
+                            quantity,
+                            book_value_per_unit: book_value,
+                            cost_basis_per_unit: book_value,
+                        });
+                    }
+                }
+            }
+        }
+        
+        all_positions
+    }
+
     pub fn liquid_assets(&self, system: &FinancialSystem) -> Money {
         self.assets
             .iter()
@@ -85,13 +111,9 @@ impl BalanceSheet {
             .iter()
             .filter_map(|(id, pos)| {
                 let inst = system.instruments.get(id)?;
-                if let InstrumentType::Bond(b) = &inst.instrument_type {
-                    if &b.issuer == bank_id {
+                if let InstrumentType::Cash(c) = &inst.instrument_type {
+                    if &c.issuer == bank_id && matches!(c.cash_type, CashType::DemandDeposit | CashType::SavingsDeposit) {
                         return Some(pos.quantity);
-                    }
-                } else if let InstrumentType::Cash(c) = &inst.instrument_type {
-                    if matches!(c.cash_type, CashType::DemandDeposit | CashType::SavingsDeposit) {
-                        return None;
                     }
                 }
                 None
@@ -115,7 +137,9 @@ impl BalanceSheet {
     }
 
     pub fn total_assets(&self, system: &FinancialSystem) -> f64 {
-        self.assets
+        let all_positions = self.get_all_asset_positions(system);
+        
+        all_positions
             .iter()
             .map(|(id, pos)| {
                 let inst = system.instruments.get(id).unwrap();
@@ -161,7 +185,9 @@ impl BalanceSheet {
     }
 
     fn calculate_rwa(&self, system: &FinancialSystem) -> f64 {
-        self.assets.iter().map(|(id, pos)| {
+        let all_positions = self.get_all_asset_positions(system);
+        
+        all_positions.iter().map(|(id, pos)| {
             let inst = system.instruments.get(id).expect("Instrument must exist if on BS");
             let risk_weight = self.get_risk_weight(inst, system);
             
