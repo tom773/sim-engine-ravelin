@@ -26,30 +26,22 @@ impl std::str::FromStr for MarketId {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if let Some(rest) = s.strip_prefix("Financial:") {
-            return rest
-                .parse::<InstrumentId>()
-                .map(MarketId::Financial)
-                .map_err(|e| e.to_string());
+            return rest.parse::<InstrumentId>().map(MarketId::Financial).map_err(|e| e.to_string());
         }
         if let Some(rest) = s.strip_prefix("Goods:") {
             return rest.parse::<GoodId>().map(MarketId::Goods).map_err(|e| e.to_string());
         }
         if let Some(rest) = s.strip_prefix("Labour:") {
-            return rest
-                .parse::<LabourMarketId>()
-                .map(MarketId::Labour)
-                .map_err(|e| e.to_string());
+            return rest.parse::<LabourMarketId>().map(MarketId::Labour).map_err(|e| e.to_string());
         }
         Err(format!("Unrecognized MarketId format: {}", s))
     }
 }
 
-
 #[inline]
 fn money_to_key(money: Money) -> NotNan<f64> {
     NotNan::new(money.to_f64()).expect("Money value was NaN")
 }
-
 
 #[inline]
 fn key_to_money(key: NotNan<f64>) -> Money {
@@ -186,12 +178,7 @@ impl OrderBook {
         trades
     }
 
-    fn match_order(
-        &mut self,
-        mut incoming_order: Order,
-        trades: &mut Vec<Trade>,
-        market_id: &MarketId,
-    ) {
+    fn match_order(&mut self, mut incoming_order: Order, trades: &mut Vec<Trade>, market_id: &MarketId) {
         match incoming_order.side {
             Side::Bid => self.match_bid(&mut incoming_order, trades, market_id),
             Side::Ask => self.match_ask(&mut incoming_order, trades, market_id),
@@ -205,12 +192,7 @@ impl OrderBook {
         }
     }
 
-    fn match_bid(
-        &mut self,
-        incoming_bid: &mut Order,
-        trades: &mut Vec<Trade>,
-        market_id: &MarketId,
-    ) {
+    fn match_bid(&mut self, incoming_bid: &mut Order, trades: &mut Vec<Trade>, market_id: &MarketId) {
         let mut asks_to_remove = Vec::new();
         for (ask_price_nn, ask_queue) in self.asks.iter_mut() {
             let ask_price = key_to_money(*ask_price_nn);
@@ -260,12 +242,7 @@ impl OrderBook {
         }
     }
 
-    fn match_ask(
-        &mut self,
-        incoming_ask: &mut Order,
-        trades: &mut Vec<Trade>,
-        market_id: &MarketId,
-    ) {
+    fn match_ask(&mut self, incoming_ask: &mut Order, trades: &mut Vec<Trade>, market_id: &MarketId) {
         let mut bids_to_remove = Vec::new();
         for (bid_price_nn, bid_queue) in self.bids.iter_mut().rev() {
             let bid_price = key_to_money(*bid_price_nn);
@@ -343,21 +320,10 @@ impl OrderBook {
         let best_bid = self.best_bid();
         let best_ask = self.best_ask();
 
-        let bid_size_at_best = best_bid
-            .and_then(|price| bid_levels.get(&money_to_key(price)).copied())
-            .unwrap_or(0.0);
-        let ask_size_at_best = best_ask
-            .and_then(|price| ask_levels.get(&money_to_key(price)).copied())
-            .unwrap_or(0.0);
+        let bid_size_at_best = best_bid.and_then(|price| bid_levels.get(&money_to_key(price)).copied()).unwrap_or(0.0);
+        let ask_size_at_best = best_ask.and_then(|price| ask_levels.get(&money_to_key(price)).copied()).unwrap_or(0.0);
 
-        MarketDepthSummary {
-            best_bid,
-            best_ask,
-            bid_size_at_best,
-            ask_size_at_best,
-            bid_levels,
-            ask_levels,
-        }
+        MarketDepthSummary { best_bid, best_ask, bid_size_at_best, ask_size_at_best, bid_levels, ask_levels }
     }
 
     pub fn clear_and_match(&mut self, market_id: &MarketId) -> Vec<Trade> {
@@ -391,6 +357,36 @@ impl OrderBook {
         }
         trades
     }
+    pub fn validate_sell_order(
+        &self, order: &Order, csd: &CentralSecuritiesDepository, instrument_id: &InstrumentId,
+    ) -> Result<(), String> {
+        if order.side == Side::Ask && csd.is_security(instrument_id) {
+            let available = csd
+                .custody_accounts
+                .get(&order.agent_id)
+                .and_then(|account| account.holdings.get(instrument_id))
+                .map(|holding| holding.available)
+                .unwrap_or(0.0);
+
+            if available < order.quantity {
+                return Err(format!(
+                    "Insufficient securities in CSD: agent {} has {} available, order requires {}",
+                    order.agent_id, available, order.quantity
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn submit_order_with_validation(
+        &mut self, order: Order, market_id: &MarketId, csd: &CentralSecuritiesDepository, instrument_id: &InstrumentId,
+    ) -> Result<Vec<Trade>, String> {
+        self.validate_sell_order(&order, csd, instrument_id)?;
+
+        let mut trades = Vec::new();
+        self.match_order(order, &mut trades, market_id);
+        Ok(trades)
+    }
 }
 
 mod order_book_side_serde {
@@ -398,31 +394,23 @@ mod order_book_side_serde {
     use serde::{de::Deserializer, ser::Serializer};
     use std::collections::BTreeMap;
 
-    pub fn serialize<S>(
-        map: &BTreeMap<NotNan<f64>, Vec<Order>>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error>
+    pub fn serialize<S>(map: &BTreeMap<NotNan<f64>, Vec<Order>>, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let transformed_map: BTreeMap<String, &Vec<Order>> = map
-            .iter()
-            .map(|(k, v)| (key_to_money(*k).to_string(), v))
-            .collect();
+        let transformed_map: BTreeMap<String, &Vec<Order>> =
+            map.iter().map(|(k, v)| (key_to_money(*k).to_string(), v)).collect();
         transformed_map.serialize(serializer)
     }
 
-    pub fn deserialize<'de, D>(
-        deserializer: D,
-    ) -> Result<BTreeMap<NotNan<f64>, Vec<Order>>, D::Error>
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<BTreeMap<NotNan<f64>, Vec<Order>>, D::Error>
     where
         D: Deserializer<'de>,
     {
         let map = BTreeMap::<String, Vec<Order>>::deserialize(deserializer)?;
         map.into_iter()
             .map(|(k, v)| {
-                let money = Money::from_str(&k)
-                    .ok_or_else(|| serde::de::Error::custom("Invalid Money format"))?;
+                let money = Money::from_str(&k).ok_or_else(|| serde::de::Error::custom("Invalid Money format"))?;
                 Ok((money_to_key(money), v))
             })
             .collect()

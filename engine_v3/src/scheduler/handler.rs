@@ -5,8 +5,8 @@ use rand::prelude::*;
 use sim_core::*;
 use std::time::Instant;
 use tracing::instrument;
+use tracing::{Level, event};
 use uuid::Uuid;
-use tracing::{event, Level};
 
 fn execute_step<F>(step_fn: F) -> StepResult
 where
@@ -63,12 +63,10 @@ impl StepHandler for ApplyInstrumentCreationHandler {
     fn execute(&self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
         execute_step(|| {
             let all_effects = context.get_all_effects().unwrap_or_default();
-            
+
             let instrument_effects: Vec<StateEffect> = all_effects
                 .into_iter()
-                .filter(|e| matches!(e, 
-                    StateEffect::Financial(FinancialEffect::CreateInstrument { .. })
-                ))
+                .filter(|e| matches!(e, StateEffect::Financial(FinancialEffect::CreateInstrument { .. })))
                 .collect();
 
             if instrument_effects.is_empty() {
@@ -76,10 +74,9 @@ impl StepHandler for ApplyInstrumentCreationHandler {
             }
 
             let count = instrument_effects.len();
-            
-            engine.state.apply_effects(&instrument_effects)
-                .map_err(|e| e.to_string())?;
-            
+
+            engine.state.apply_effects(&instrument_effects).map_err(|e| e.to_string())?;
+
             Ok(serde_json::json!({ "instruments_created": count }))
         })
     }
@@ -131,7 +128,6 @@ impl StepHandler for ApplyMarketEffectsHandler {
             let market_effects: Vec<StateEffect> =
                 all_effects.into_iter().filter(|e| matches!(e, StateEffect::Market(_))).collect();
 
-
             engine.state.apply_effects(&market_effects).map_err(|e| e.to_string())?;
             Ok(serde_json::json!({ "market_effects_applied": market_effects.len() }))
         })
@@ -172,19 +168,22 @@ impl StepHandler for StartSettlementHandler {
             let mut successful_reservations = 0;
             let total_settlement_value = 0.0_f64;
             let fs = &engine.state.financial_system.clone();
-            
-            event!(Level::INFO,
-                trade_count = trades.len(),
-                "📋 Starting settlement process"
-            );
-            
+
+            event!(Level::INFO, trade_count = trades.len(), "📋 Starting settlement process");
+
             for trade in &trades {
                 let instrument_id = match trade.market_id {
                     MarketId::Financial(id) => id,
                     _ => continue,
                 };
-                
-                let instrument_name = engine.state.financial_system.clone().get_instrument_info(&instrument_id, &engine.state.agents, engine.state.current_date).unwrap().instrument_type;
+
+                let instrument_name = engine
+                    .state
+                    .financial_system
+                    .clone()
+                    .get_instrument_info(&instrument_id, &engine.state.agents, engine.state.current_date)
+                    .unwrap()
+                    .instrument_type;
                 let seller_name = engine.state.get_agent_type_string(&trade.seller).unwrap_or_default();
                 let buyer_name = engine.state.get_agent_type_string(&trade.buyer).unwrap_or_default();
                 let trade_value = (trade.price * trade.quantity).to_f64();
@@ -212,10 +211,14 @@ impl StepHandler for StartSettlementHandler {
                     "🔄 Attempting security reservation"
                 );
                 let ecl = engine.state.clone();
-                match engine.state.financial_system.clearing_house.csd.reserve_securities_for_dvp(instruction.clone(), fs, &ecl) {
+                match engine.state.financial_system.clearing_house.csd.reserve_securities_for_dvp(
+                    instruction.clone(),
+                    fs,
+                    &ecl,
+                ) {
                     Ok(_) => {
                         successful_reservations += 1;
-                        
+
                         event!(Level::INFO,
                             trade_id = %trade.trade_id.to_string()[..8],
                             instrument = %instrument_name,
@@ -226,11 +229,11 @@ impl StepHandler for StartSettlementHandler {
                             value = trade_value,
                             "🔒 Securities reserved for DvP"
                         );
-                        
-                        let (_, buyer_settlement_agent) = engine.state.financial_system
-                            .find_agent_liquid_account(&trade.buyer).unwrap();
-                        let (_, seller_settlement_agent) = engine.state.financial_system
-                            .find_agent_liquid_account(&trade.seller).unwrap();
+
+                        let (_, buyer_settlement_agent) =
+                            engine.state.financial_system.find_agent_liquid_account(&trade.buyer).unwrap();
+                        let (_, seller_settlement_agent) =
+                            engine.state.financial_system.find_agent_liquid_account(&trade.seller).unwrap();
 
                         let payment_instruction = PaymentInstruction {
                             id: Uuid::new_v4(),
@@ -244,12 +247,13 @@ impl StepHandler for StartSettlementHandler {
                             earliest_release_tick: engine.state.ticknum,
                             deadline_tick: engine.state.ticknum + 10,
                         };
-                        
-                        payment_effects.push(StateEffect::Financial(FinancialEffect::QueuePayment(payment_instruction)));
+
+                        payment_effects
+                            .push(StateEffect::Financial(FinancialEffect::QueuePayment(payment_instruction)));
                     }
                     Err(e) => {
                         failed_reservations += 1;
-                        
+
                         event!(Level::ERROR,
                             trade_id = %trade.trade_id.to_string()[..8],
                             seller = %seller_name,
@@ -263,11 +267,11 @@ impl StepHandler for StartSettlementHandler {
             }
 
             if !payment_effects.is_empty() {
-                engine.state.apply_effects(&payment_effects)
-                    .map_err(|e| format!("Failed to queue payments: {}", e))?;
+                engine.state.apply_effects(&payment_effects).map_err(|e| format!("Failed to queue payments: {}", e))?;
             }
 
-            event!(Level::INFO,
+            event!(
+                Level::INFO,
                 successful_reservations,
                 failed_reservations,
                 payments_queued = payment_effects.len(),
@@ -275,9 +279,9 @@ impl StepHandler for StartSettlementHandler {
                 "📊 Settlement initiation complete"
             );
 
-            Ok(serde_json::json!({ 
-                "payments_queued": payment_effects.len(), 
-                "failed_reservations": failed_reservations 
+            Ok(serde_json::json!({
+                "payments_queued": payment_effects.len(),
+                "failed_reservations": failed_reservations
             }))
         })
     }
@@ -293,9 +297,16 @@ impl StepHandler for FinalizeSettlementHandler {
             let mut success_count = 0;
             let mut fail_count = 0;
 
-            event!(Level::INFO,
-                dvp_finalize_count = all_effects.iter().filter(|e| matches!(e, StateEffect::Financial(FinancialEffect::DvPFinalize{..}))).count(),
-                dvp_cancel_count = all_effects.iter().filter(|e| matches!(e, StateEffect::Financial(FinancialEffect::DvPCancel{..}))).count(),
+            event!(
+                Level::INFO,
+                dvp_finalize_count = all_effects
+                    .iter()
+                    .filter(|e| matches!(e, StateEffect::Financial(FinancialEffect::DvPFinalize { .. })))
+                    .count(),
+                dvp_cancel_count = all_effects
+                    .iter()
+                    .filter(|e| matches!(e, StateEffect::Financial(FinancialEffect::DvPCancel { .. })))
+                    .count(),
                 "🔧 Starting settlement finalization"
             );
 
@@ -303,9 +314,10 @@ impl StepHandler for FinalizeSettlementHandler {
                 match effect {
                     StateEffect::Financial(FinancialEffect::DvPFinalize { trade_id }) => {
                         let trade_id_str = trade_id.to_string()[..8].to_string();
-                        
-                        if let Err(e) = engine.state.financial_system.clearing_house.csd
-                            .finalize_book_entry_transfer(trade_id) {
+
+                        if let Err(e) =
+                            engine.state.financial_system.clearing_house.csd.finalize_book_entry_transfer(trade_id)
+                        {
                             event!(Level::ERROR,
                                 trade_id = %trade_id_str,
                                 error = %e,
@@ -321,9 +333,10 @@ impl StepHandler for FinalizeSettlementHandler {
                     }
                     StateEffect::Financial(FinancialEffect::DvPCancel { trade_id }) => {
                         let trade_id_str = trade_id.to_string()[..8].to_string();
-                        
-                        if let Err(e) = engine.state.financial_system.clearing_house.csd
-                            .cancel_security_reservation(trade_id) {
+
+                        if let Err(e) =
+                            engine.state.financial_system.clearing_house.csd.cancel_security_reservation(trade_id)
+                        {
                             event!(Level::ERROR,
                                 trade_id = %trade_id_str,
                                 error = %e,
@@ -341,18 +354,21 @@ impl StepHandler for FinalizeSettlementHandler {
                 }
             }
 
-            event!(Level::INFO,
+            event!(
+                Level::INFO,
                 settlements_finalized = success_count,
                 settlements_cancelled = fail_count,
-                success_rate = if (success_count + fail_count) > 0 { 
-                    (success_count as f64 / (success_count + fail_count) as f64) * 100.0 
-                } else { 0.0 },
+                success_rate = if (success_count + fail_count) > 0 {
+                    (success_count as f64 / (success_count + fail_count) as f64) * 100.0
+                } else {
+                    0.0
+                },
                 "📋 Settlement batch completed"
             );
 
-            Ok(serde_json::json!({ 
-                "settlements_finalized": success_count, 
-                "settlements_cancelled": fail_count 
+            Ok(serde_json::json!({
+                "settlements_finalized": success_count,
+                "settlements_cancelled": fail_count
             }))
         })
     }
@@ -410,7 +426,7 @@ impl StepHandler for ApplyAllEffectsHandler {
             let mapping = context.get_action_to_effect_indices().unwrap_or_default();
 
             let mut new_events: Vec<SimEvent> = Vec::new();
-            
+
             new_events.extend(all_intentions.into_iter().map(SimEvent::Intention));
             new_events.extend(all_actions.clone().into_iter().map(SimEvent::Action));
             new_events.extend(all_effects.clone().into_iter().map(SimEvent::Effect));
@@ -441,7 +457,7 @@ impl StepHandler for ApplyAllEffectsHandler {
                     }
                 }
             }
-            
+
             engine.event_log = new_events;
 
             engine.state.apply_effects(&all_effects).map_err(|e| e.to_string())?;
@@ -472,6 +488,11 @@ impl StepHandler for UpdateHistoryHandler {
                 events: engine.event_log.clone(),
             };
 
+            tracing::event!(
+                Level::INFO,
+                "\n\n===Custody Accounts: === {:#?}",
+                engine.state.financial_system.clearing_house.csd.custody_accounts
+            );
             engine.state.history.add_tick_record(tick_record);
             Ok(serde_json::Value::Null)
         })
@@ -503,7 +524,6 @@ impl StepHandler for DebtAuctionsHandler {
                     .conduct_dutch_auction(auction_id, &engine.state.financial_system.instruments);
                 auction_trades.extend(trades);
             }
-
 
             if !auction_trades.is_empty() {
                 let mut all_trades = context.get_trades().unwrap_or_default();

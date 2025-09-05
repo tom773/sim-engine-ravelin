@@ -228,4 +228,60 @@ impl FinancialSystem {
     pub fn find_general_labour_market(&self) -> Option<LabourMarketId> {
         self.exchange.labour_markets.keys().next().cloned()
     }
+    pub fn get_agent_total_positions(&self, agent_id: &AgentId) -> HashMap<InstrumentId, Position> {
+        let mut positions = HashMap::new();
+
+        if let Some(bs) = self.balance_sheets.get(agent_id) {
+            for (inst_id, pos) in &bs.assets {
+                if let Some(_inst) = self.instruments.get(inst_id) {
+                    if !self.clearing_house.csd.is_security(inst_id) {
+                        positions.insert(*inst_id, pos.clone());
+                    }
+                }
+            }
+        }
+
+        if let Some(csd_account) = self.clearing_house.csd.custody_accounts.get(agent_id) {
+            for (inst_id, holding) in &csd_account.holdings {
+                let quantity = holding.total_position();
+                if quantity > 1e-9 {
+                    if let Some(inst) = self.instruments.get(inst_id) {
+                        let book_value = inst.face_value().unwrap_or(Money::from(1000 as i64));
+                        positions.insert(
+                            *inst_id,
+                            Position { quantity, book_value_per_unit: book_value, cost_basis_per_unit: book_value },
+                        );
+                    }
+                }
+            }
+        }
+
+        positions
+    }
+
+    pub fn validate_security_availability(
+        &self, agent_id: &AgentId, instrument_id: &InstrumentId, required_quantity: f64,
+    ) -> Result<(), String> {
+        if !self.clearing_house.csd.is_security(instrument_id) {
+            return Ok(()); // Not a security, no CSD validation needed
+        }
+
+        let available = self
+            .clearing_house
+            .csd
+            .custody_accounts
+            .get(agent_id)
+            .and_then(|account| account.holdings.get(instrument_id))
+            .map(|holding| holding.available)
+            .unwrap_or(0.0);
+
+        if available < required_quantity {
+            return Err(format!(
+                "Insufficient securities: {} available, {} required for agent {}",
+                available, required_quantity, agent_id
+            ));
+        }
+
+        Ok(())
+    }
 }

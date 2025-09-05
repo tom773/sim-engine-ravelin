@@ -1,6 +1,4 @@
-use crate::{
-    Any, Domain, DomainResult, ResolutionContext, ResolutionPhase, ResolutionResult, inventory,
-};
+use crate::{Any, Domain, DomainResult, ResolutionContext, ResolutionPhase, ResolutionResult, inventory};
 use serde::{Deserialize, Serialize};
 use sim_core::*;
 use uuid::Uuid;
@@ -19,18 +17,9 @@ impl Domain for FiscalDomain {
         "Fiscal"
     }
 
-    fn resolve_intention(
-        &self,
-        intention: &SimIntention,
-        context: &ResolutionContext,
-    ) -> Option<ResolutionResult> {
+    fn resolve_intention(&self, intention: &SimIntention, context: &ResolutionContext) -> Option<ResolutionResult> {
         let actions = match intention {
-            SimIntention::AnnounceDebtAuction {
-                government_id,
-                maturity_date,
-                coupon_rate,
-                quantity_to_issue,
-            } => {
+            SimIntention::AnnounceDebtAuction { government_id, maturity_date, coupon_rate, quantity_to_issue } => {
                 const FACE_VALUE: f64 = 1000.0;
                 let issue_date = context.state.current_date;
 
@@ -59,12 +48,7 @@ impl Domain for FiscalDomain {
                     coupon_rate: *coupon_rate,
                 })]
             }
-            SimIntention::BidInDebtAuction {
-                agent_id,
-                auction_id,
-                quantity,
-                bid_price,
-            } => {
+            SimIntention::BidInDebtAuction { agent_id, auction_id, quantity, bid_price } => {
                 vec![SimAction::Fiscal(FiscalAction::BidInDebtAuction {
                     agent_id: *agent_id,
                     auction_id: *auction_id,
@@ -96,13 +80,7 @@ impl Domain for FiscalDomain {
         }
 
         match fiscal_action {
-            FiscalAction::AnnounceDebtAuction {
-                government_id,
-                quantity,
-                maturity,
-                coupon_rate,
-                ..
-            } => {
+            FiscalAction::AnnounceDebtAuction { government_id, quantity, maturity, coupon_rate, .. } => {
                 let issue_date = state.current_date;
                 let new_instrument = match Instrument::bond(
                     InstrumentId(Uuid::new_v4()),
@@ -116,9 +94,10 @@ impl Domain for FiscalDomain {
                 .frequency(2)
                 .rating(CreditRating::AAA)
                 .auto_market()
-                .build() {
+                .build()
+                {
                     Ok(bond) => bond,
-                    Err(e) => return DomainResult::failure(vec![e.to_string()])
+                    Err(e) => return DomainResult::failure(vec![e.to_string()]),
                 };
 
                 let auction = DebtAuction {
@@ -141,15 +120,8 @@ impl Domain for FiscalDomain {
                 DomainResult::success(effects)
             }
             FiscalAction::BidInDebtAuction { agent_id, auction_id, quantity, bid_price } => {
-                let bid = AuctionBid {
-                    agent_id: *agent_id,
-                    quantity: *quantity,
-                    price: *bid_price,
-                };
-                let effect = StateEffect::Market(MarketEffect::SubmitAuctionBid {
-                    auction_id: *auction_id,
-                    bid,
-                });
+                let bid = AuctionBid { agent_id: *agent_id, quantity: *quantity, price: *bid_price };
+                let effect = StateEffect::Market(MarketEffect::SubmitAuctionBid { auction_id: *auction_id, bid });
                 DomainResult::success(vec![effect])
             }
             _ => DomainResult::empty(),
@@ -165,9 +137,15 @@ impl FiscalDomain {
     fn validate(&self, action: &FiscalAction, state: &SimState) -> Result<(), String> {
         match action {
             FiscalAction::AnnounceDebtAuction { government_id, quantity, maturity, .. } => {
-                if *quantity == 0 { return Err("Cannot auction zero bonds".to_string()); }
-                if *maturity <= state.current_date { return Err("Maturity date must be in the future.".to_string()); }
-                if *government_id != state.financial_system.government.id { return Err("Invalid government ID for debt auction.".to_string()); }
+                if *quantity == 0 {
+                    return Err("Cannot auction zero bonds".to_string());
+                }
+                if *maturity <= state.current_date {
+                    return Err("Maturity date must be in the future.".to_string());
+                }
+                if *government_id != state.financial_system.government.id {
+                    return Err("Invalid government ID for debt auction.".to_string());
+                }
                 Ok(())
             }
             FiscalAction::BidInDebtAuction { agent_id, auction_id, .. } => {

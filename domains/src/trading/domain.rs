@@ -83,7 +83,7 @@ impl Domain for TradingDomain {
                 market_id,
                 quantity,
                 price,
-            } => self.execute_post_ask(*agent_id, market_id.clone(), *quantity, *price),
+            } => self.execute_post_ask(*agent_id, market_id.clone(), *quantity, *price, state),
         }
     }
 
@@ -233,13 +233,29 @@ impl TradingDomain {
         DomainResult::success(vec![effect])
     }
 
-    fn execute_post_ask(
-        &self,
-        agent_id: AgentId,
-        market_id: MarketId,
-        quantity: f64,
-        price: Money,
-    ) -> DomainResult {
+    fn validate_market_making_position(&self, agent_id: AgentId, instrument_id: InstrumentId, quantity: f64, state: &SimState) -> Result<(), String> {
+        if state.financial_system.clearing_house.csd.is_security(&instrument_id) {
+            let available = state.financial_system.clearing_house.csd
+                .get_position(&agent_id, &instrument_id)
+                .unwrap_or(0.0);
+            
+            if available < quantity {
+                return Err(format!(
+                    "Insufficient securities for market making: {} available, {} required",
+                    available, quantity
+                ));
+            }
+        }
+        Ok(())
+    }
+    
+    fn execute_post_ask(&self, agent_id: AgentId, market_id: MarketId, quantity: f64, price: Money, state: &SimState) -> DomainResult {
+        if let MarketId::Financial(inst_id) = &market_id {
+            if let Err(e) = self.validate_market_making_position(agent_id, *inst_id, quantity, state) {
+                return DomainResult::failure(vec![e]);
+            }
+        }
+        
         let order = Order {
             id: uuid::Uuid::new_v4(),
             agent_id,
@@ -250,7 +266,6 @@ impl TradingDomain {
         };
 
         let effect = StateEffect::Market(MarketEffect::PlaceOrderInBook { market_id, order });
-
         DomainResult::success(vec![effect])
     }
 }
