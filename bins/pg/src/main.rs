@@ -15,8 +15,18 @@ fn main() {
     let before_state = state.clone();
 
     let consumer_ids: Vec<AgentId> = state.agents.consumers.keys().cloned().collect();
+    let bank_ids: Vec<AgentId> = state.agents.banks.keys().cloned().collect();
     let consumer_1_id = consumer_ids[0];
     let consumer_2_id = consumer_ids[1];
+    let bank_id = bank_ids[0];
+    let bank_2_id = bank_ids[1];
+
+    let csd = &mut state.financial_system.clearing_house.csd;
+    csd.open_custody_account(consumer_1_id, CustodyAccountType::Client, state.current_date);
+    csd.open_custody_account(consumer_2_id, CustodyAccountType::Client, state.current_date);
+    csd.open_custody_account(bank_id, CustodyAccountType::Client, state.current_date);
+    csd.open_custody_account(bank_2_id, CustodyAccountType::Client, state.current_date);
+    println!("{:#?}", state.financial_system.clearing_house.csd.custody_accounts);
 
     test_transfer(&mut state, consumer_1_id, consumer_2_id, 750.0);
 

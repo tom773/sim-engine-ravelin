@@ -63,39 +63,6 @@ impl BalanceSheet {
             income_statement: IncomeStatement::default(),
         }
     }
-    pub fn get_non_security_positions(&self, system: &FinancialSystem) -> HashMap<InstrumentId, Position> {
-        self.assets
-            .iter()
-            .filter(|(id, _)| !system.clearing_house.csd.is_security(id))
-            .map(|(id, pos)| (*id, pos.clone()))
-            .collect()
-    }
-
-    pub fn is_position_security(&self, inst_id: &InstrumentId, system: &FinancialSystem) -> bool {
-        system.clearing_house.csd.is_security(inst_id)
-    }
-    pub fn get_all_asset_positions(&self, system: &FinancialSystem) -> HashMap<InstrumentId, Position> {
-        let mut all_positions = self.assets.clone();
-
-        if let Some(csd_positions) = system.clearing_house.csd.custody_accounts.get(&self.agent_id) {
-            for (inst_id, holding) in &csd_positions.holdings {
-                let quantity = holding.total_position();
-                if quantity > 1e-9 {
-                    if let Some(inst) = system.instruments.get(inst_id) {
-                        let book_value = inst.face_value().unwrap_or(Money::from(1000 as i64));
-                        all_positions.entry(*inst_id).or_insert(Position {
-                            quantity,
-                            book_value_per_unit: book_value,
-                            cost_basis_per_unit: book_value,
-                        });
-                    }
-                }
-            }
-        }
-
-        all_positions
-    }
-
     pub fn liquid_assets(&self, system: &FinancialSystem) -> Money {
         self.assets
             .iter()
@@ -140,18 +107,38 @@ impl BalanceSheet {
             })
             .sum()
     }
+    pub fn get_cash_and_real_positions(&self) -> &HashMap<InstrumentId, Position> {
+        &self.assets
+    }
 
     pub fn total_assets(&self, system: &FinancialSystem) -> f64 {
-        let all_positions = self.get_all_asset_positions(system);
-
-        all_positions
+        let cash_and_real: f64 = self.assets
             .iter()
-            .map(|(id, pos)| {
-                let inst = system.instruments.get(id).unwrap();
-                let price = get_market_price(inst, &system.exchange).unwrap_or(pos.book_value_per_unit);
-                price.to_f64() * pos.quantity
+            .filter_map(|(id, pos)| {
+                let inst = system.instruments.get(id)?;
+                match &inst.instrument_type {
+                    InstrumentType::Cash(_) | InstrumentType::RealAsset(_) => {
+                        let price = get_market_price(inst, &system.exchange)
+                            .unwrap_or(pos.book_value_per_unit);
+                        Some(price.to_f64() * pos.quantity)
+                    }
+                    _ => None, // Securities are tracked in CSD
+                }
             })
-            .sum()
+            .sum();
+
+        let securities: f64 = system.clearing_house.csd
+            .get_all_positions(&self.agent_id)
+            .iter()
+            .filter_map(|(id, qty)| {
+                let inst = system.instruments.get(id)?;
+                let price = get_market_price(inst, &system.exchange)
+                    .unwrap_or_else(|| inst.face_value().unwrap_or(Money::from(1000)));
+                Some(price.to_f64() * qty)
+            })
+            .sum();
+
+        cash_and_real + securities
     }
 
     pub fn total_liabilities(&self, system: &FinancialSystem) -> f64 {
@@ -159,10 +146,71 @@ impl BalanceSheet {
             .iter()
             .map(|(id, pos)| {
                 let inst = system.instruments.get(id).unwrap();
-                let price = get_market_price(inst, &system.exchange).unwrap_or(pos.book_value_per_unit);
+                let price = get_market_price(inst, &system.exchange)
+                    .unwrap_or(pos.book_value_per_unit);
                 price.to_f64() * pos.quantity
             })
             .sum()
+    }
+
+    pub fn calculate_rwa(&self, system: &FinancialSystem) -> f64 {
+        let mut rwa = 0.0;
+
+        for (id, pos) in &self.assets {
+            if let Some(inst) = system.instruments.get(id) {
+                let risk_weight = match &inst.instrument_type {
+                    InstrumentType::Cash(c) => match c.cash_type {
+                        CashType::CentralBankReserves => 0.0,
+                        CashType::TreasuryGeneralAccount => 0.0,
+                        _ => 0.2, // Regular deposits have some risk
+                    },
+                    InstrumentType::RealAsset(_) => 1.0, // Full risk weight
+                    _ => continue, // Securities handled below
+                };
+                
+                let market_value = get_market_price(inst, &system.exchange)
+                    .unwrap_or(pos.book_value_per_unit)
+                    .to_f64() * pos.quantity;
+                rwa += market_value * risk_weight;
+            }
+        }
+
+        let positions = system.clearing_house.csd.get_all_positions(&self.agent_id);
+        for (id, qty) in positions {
+            if let Some(inst) = system.instruments.get(&id) {
+                let risk_weight = match &inst.instrument_type {
+                    InstrumentType::Bond(b) => match b.bond_type {
+                        BondType::Government => 0.0,
+                        BondType::Corporate => {
+                            match b.rating {
+                                CreditRating::AAA | CreditRating::AA => 0.2,
+                                CreditRating::A => 0.5,
+                                CreditRating::BBB => 1.0,
+                                _ => 1.5,
+                            }
+                        },
+                        BondType::InterbankLoan => 0.2,
+                    },
+                    InstrumentType::Equity(_) => 1.0,
+                    InstrumentType::StructuredTranche(t) => {
+                        match t.rating {
+                            CreditRating::AAA => 0.2,
+                            CreditRating::AA => 0.5,
+                            CreditRating::A => 1.0,
+                            _ => 2.0,
+                        }
+                    },
+                    _ => 1.0,
+                };
+
+                let market_value = get_market_price(inst, &system.exchange)
+                    .unwrap_or_else(|| inst.face_value().unwrap_or(Money::from(1000)))
+                    .to_f64() * qty;
+                rwa += market_value * risk_weight;
+            }
+        }
+
+        rwa
     }
 
     pub fn net_worth(&self, system: &FinancialSystem) -> f64 {
@@ -173,71 +221,5 @@ impl BalanceSheet {
         let total_assets = self.total_assets(system);
         let net_worth = self.net_worth(system);
         if net_worth <= 0.0 { f64::INFINITY } else { total_assets / net_worth }
-    }
-
-    pub fn capital_adequacy_ratio(&self, system: &FinancialSystem) -> f64 {
-        let net_worth = self.net_worth(system);
-        let risk_weighted_assets = self.calculate_rwa(system);
-        if risk_weighted_assets <= 1e-6 { 1.0 } else { net_worth / risk_weighted_assets }
-    }
-
-    fn calculate_rwa(&self, system: &FinancialSystem) -> f64 {
-        let all_positions = self.get_all_asset_positions(system);
-
-        all_positions
-            .iter()
-            .map(|(id, pos)| {
-                let inst = system.instruments.get(id).expect("Instrument must exist if on BS");
-                let risk_weight = self.get_risk_weight(inst, system);
-
-                let price = get_market_price(inst, &system.exchange).unwrap_or(pos.book_value_per_unit);
-                let exposure = price.to_f64() * pos.quantity;
-                exposure * risk_weight
-            })
-            .sum()
-    }
-
-    fn get_risk_weight(&self, inst: &Instrument, system: &FinancialSystem) -> f64 {
-        match &inst.instrument_type {
-            InstrumentType::Cash(c) => {
-                if c.issuer == system.central_bank.id {
-                    0.0
-                } else {
-                    0.2
-                }
-            }
-            InstrumentType::Bond(b) => match b.bond_type {
-                BondType::Government => 0.0,
-                BondType::InterbankLoan => 0.2,
-                BondType::Corporate => match b.rating {
-                    CreditRating::AAA | CreditRating::AA => 0.2,
-                    CreditRating::A => 0.5,
-                    CreditRating::BBB => 1.0,
-                    _ => 1.5,
-                },
-            },
-            InstrumentType::Equity(_) => 1.0,
-            InstrumentType::RealAsset(_) => 1.0,
-            InstrumentType::Derivative(_) => 1.0,
-            InstrumentType::StructuredTranche(st) => match st.rating {
-                CreditRating::AAA => 0.2,
-                CreditRating::AA => 0.5,
-                CreditRating::A => 0.8,
-                _ => 1.5,
-            },
-            InstrumentType::Repo(r) => {
-                if self.agent_id == r.lender {
-                    let collateral = system.instruments.get(&r.collateral_id);
-                    if let Some(InstrumentType::Bond(b)) = collateral.map(|i| &i.instrument_type) {
-                        if b.bond_type == BondType::Government {
-                            return 0.0;
-                        }
-                    }
-                    0.2
-                } else {
-                    0.0
-                }
-            }
-        }
     }
 }

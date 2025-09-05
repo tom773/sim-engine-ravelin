@@ -65,7 +65,6 @@ fn run_pure_rtgs(state: &mut SimState) -> Result<(), EffectError> {
             let can_fund_result = can_fund(state, &pi)?;
             let can_use_credit = can_use_daylight_credit(state, &pi)?;
 
-            // Calculate available funds for logging
             let available_funds =
                 if let Some((payer_account_id, _)) = state.financial_system.find_agent_liquid_account(&pi.payer) {
                     state
@@ -90,10 +89,8 @@ fn run_pure_rtgs(state: &mut SimState) -> Result<(), EffectError> {
             );
 
             if can_fund_result || can_use_credit {
-                // Process the cash leg ONLY - no securities movement here!
                 apply_cash_movements_immediately(state, &pi)?;
                 
-                // Mark DvP as ready for securities finalization, but don't move securities yet
                 if let TransactionContext::TradeSettlement { .. } = pi.context {
                     event!(Level::INFO,
                         payment_id = %pi.id.to_string()[..8],
@@ -239,7 +236,7 @@ fn apply_same_bank_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Re
         .find_agent_liquid_account(&pi.payee)
         .ok_or_else(|| EffectError::InvalidState("Payee account not found".to_string()))?;
 
-    StateEffectApplicator::apply_adjust_position(
+    StateEffectApplicator::apply_cash_position_adjustment(
         state,
         pi.payer,
         payer_account_id,
@@ -247,7 +244,8 @@ fn apply_same_bank_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Re
         &PositionSide::Asset,
         None,
     )?;
-    StateEffectApplicator::apply_adjust_position(
+    
+    StateEffectApplicator::apply_cash_position_adjustment(
         state,
         pi.payee,
         payee_account_id,
@@ -255,7 +253,8 @@ fn apply_same_bank_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Re
         &PositionSide::Asset,
         None,
     )?;
-    StateEffectApplicator::apply_adjust_position(
+    
+    StateEffectApplicator::apply_cash_position_adjustment(
         state,
         pi.from_bank,
         payer_account_id,
@@ -263,7 +262,8 @@ fn apply_same_bank_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Re
         &PositionSide::Liability,
         None,
     )?;
-    StateEffectApplicator::apply_adjust_position(
+    
+    StateEffectApplicator::apply_cash_position_adjustment(
         state,
         pi.to_bank,
         payee_account_id,
@@ -271,18 +271,18 @@ fn apply_same_bank_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Re
         &PositionSide::Liability,
         None,
     )?;
+    
     Ok(())
 }
 
 fn apply_interbank_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Result<(), EffectError> {
-    let _cb_id = state.financial_system.central_bank.id;
+    let cb_id = state.financial_system.central_bank.id;
     let gov_id = state.financial_system.government.id;
 
     if pi.payer == gov_id || pi.payee == gov_id {
         return apply_tga_transfer(state, pi);
     }
     
-    let cb_id = state.financial_system.central_bank.id;
     if pi.to_bank == cb_id && pi.payee != cb_id {
         let from_bank_reserves = state
             .financial_system
@@ -299,7 +299,7 @@ fn apply_interbank_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Re
             .find_agent_liquid_account(&pi.payee)
             .ok_or_else(|| EffectError::InvalidState(format!("Payee {} account not found", &pi.payee)))?;
 
-        StateEffectApplicator::apply_adjust_position(
+        StateEffectApplicator::apply_cash_position_adjustment(
             state,
             pi.payer,
             payer_account_id,
@@ -307,7 +307,8 @@ fn apply_interbank_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Re
             &PositionSide::Asset,
             None,
         )?;
-        StateEffectApplicator::apply_adjust_position(
+        
+        StateEffectApplicator::apply_cash_position_adjustment(
             state,
             pi.from_bank,
             payer_account_id,
@@ -316,7 +317,7 @@ fn apply_interbank_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Re
             None,
         )?;
 
-        StateEffectApplicator::apply_adjust_position(
+        StateEffectApplicator::apply_cash_position_adjustment(
             state,
             pi.from_bank,
             from_bank_reserves,
@@ -324,7 +325,8 @@ fn apply_interbank_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Re
             &PositionSide::Asset,
             None,
         )?;
-        StateEffectApplicator::apply_adjust_position(
+        
+        StateEffectApplicator::apply_cash_position_adjustment(
             state,
             cb_id,
             from_bank_reserves,
@@ -333,7 +335,7 @@ fn apply_interbank_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Re
             None,
         )?;
 
-        StateEffectApplicator::apply_adjust_position(
+        StateEffectApplicator::apply_cash_position_adjustment(
             state,
             pi.payee,
             payee_account_id,
@@ -341,7 +343,8 @@ fn apply_interbank_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Re
             &PositionSide::Asset,
             None,
         )?;
-        StateEffectApplicator::apply_adjust_position(
+        
+        StateEffectApplicator::apply_cash_position_adjustment(
             state,
             cb_id,
             payee_account_id,
@@ -373,7 +376,7 @@ fn apply_interbank_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Re
         .find_agent_liquid_account(&pi.payee)
         .ok_or_else(|| EffectError::InvalidState("Payee account not found".to_string()))?;
 
-    StateEffectApplicator::apply_adjust_position(
+    StateEffectApplicator::apply_cash_position_adjustment(
         state,
         pi.payer,
         payer_account_id,
@@ -381,7 +384,8 @@ fn apply_interbank_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Re
         &PositionSide::Asset,
         None,
     )?;
-    StateEffectApplicator::apply_adjust_position(
+    
+    StateEffectApplicator::apply_cash_position_adjustment(
         state,
         pi.from_bank,
         from_bank_reserves,
@@ -389,7 +393,8 @@ fn apply_interbank_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Re
         &PositionSide::Asset,
         None,
     )?;
-    StateEffectApplicator::apply_adjust_position(
+    
+    StateEffectApplicator::apply_cash_position_adjustment(
         state,
         pi.to_bank,
         to_bank_reserves,
@@ -397,7 +402,8 @@ fn apply_interbank_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Re
         &PositionSide::Asset,
         None,
     )?;
-    StateEffectApplicator::apply_adjust_position(
+    
+    StateEffectApplicator::apply_cash_position_adjustment(
         state,
         pi.payee,
         payee_account_id,
@@ -405,7 +411,8 @@ fn apply_interbank_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Re
         &PositionSide::Asset,
         None,
     )?;
-    StateEffectApplicator::apply_adjust_position(
+    
+    StateEffectApplicator::apply_cash_position_adjustment(
         state,
         pi.from_bank,
         payer_account_id,
@@ -413,7 +420,8 @@ fn apply_interbank_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Re
         &PositionSide::Liability,
         None,
     )?;
-    StateEffectApplicator::apply_adjust_position(
+    
+    StateEffectApplicator::apply_cash_position_adjustment(
         state,
         pi.to_bank,
         payee_account_id,
@@ -440,10 +448,25 @@ fn apply_tga_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Result<(
             .find_agent_liquid_account(&pi.payee)
             .ok_or_else(|| EffectError::InvalidState("Payee account not found".to_string()))?;
 
-        StateEffectApplicator::apply_adjust_position(state, gov_id, tga_id, -pi.amount, &PositionSide::Asset, None)?;
-        StateEffectApplicator::apply_adjust_position(state, cb_id, tga_id, -pi.amount, &PositionSide::Liability, None)?;
+        StateEffectApplicator::apply_cash_position_adjustment(
+            state, 
+            gov_id, 
+            tga_id, 
+            -pi.amount, 
+            &PositionSide::Asset, 
+            None
+        )?;
+        
+        StateEffectApplicator::apply_cash_position_adjustment(
+            state, 
+            cb_id, 
+            tga_id, 
+            -pi.amount, 
+            &PositionSide::Liability, 
+            None
+        )?;
 
-        StateEffectApplicator::apply_adjust_position(
+        StateEffectApplicator::apply_cash_position_adjustment(
             state,
             pi.payee,
             payee_account_id,
@@ -451,7 +474,8 @@ fn apply_tga_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Result<(
             &PositionSide::Asset,
             None,
         )?;
-        StateEffectApplicator::apply_adjust_position(
+        
+        StateEffectApplicator::apply_cash_position_adjustment(
             state,
             payee_bank,
             payee_account_id,
@@ -466,7 +490,7 @@ fn apply_tga_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Result<(
                 .find_bank_reserves_account(&payee_bank)
                 .ok_or_else(|| EffectError::InvalidState("Bank reserves not found".to_string()))?;
 
-            StateEffectApplicator::apply_adjust_position(
+            StateEffectApplicator::apply_cash_position_adjustment(
                 state,
                 payee_bank,
                 bank_reserves,
@@ -474,7 +498,8 @@ fn apply_tga_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Result<(
                 &PositionSide::Asset,
                 None,
             )?;
-            StateEffectApplicator::apply_adjust_position(
+            
+            StateEffectApplicator::apply_cash_position_adjustment(
                 state,
                 cb_id,
                 bank_reserves,
@@ -489,7 +514,7 @@ fn apply_tga_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Result<(
             .find_agent_liquid_account(&pi.payer)
             .ok_or_else(|| EffectError::InvalidState("Payer account not found".to_string()))?;
 
-        StateEffectApplicator::apply_adjust_position(
+        StateEffectApplicator::apply_cash_position_adjustment(
             state,
             pi.payer,
             payer_account_id,
@@ -497,7 +522,8 @@ fn apply_tga_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Result<(
             &PositionSide::Asset,
             None,
         )?;
-        StateEffectApplicator::apply_adjust_position(
+        
+        StateEffectApplicator::apply_cash_position_adjustment(
             state,
             payer_bank,
             payer_account_id,
@@ -506,8 +532,23 @@ fn apply_tga_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Result<(
             None,
         )?;
 
-        StateEffectApplicator::apply_adjust_position(state, gov_id, tga_id, pi.amount, &PositionSide::Asset, None)?;
-        StateEffectApplicator::apply_adjust_position(state, cb_id, tga_id, pi.amount, &PositionSide::Liability, None)?;
+        StateEffectApplicator::apply_cash_position_adjustment(
+            state, 
+            gov_id, 
+            tga_id, 
+            pi.amount, 
+            &PositionSide::Asset, 
+            None
+        )?;
+        
+        StateEffectApplicator::apply_cash_position_adjustment(
+            state, 
+            cb_id, 
+            tga_id, 
+            pi.amount, 
+            &PositionSide::Liability, 
+            None
+        )?;
 
         if payer_bank != cb_id {
             let bank_reserves = state
@@ -515,7 +556,7 @@ fn apply_tga_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Result<(
                 .find_bank_reserves_account(&payer_bank)
                 .ok_or_else(|| EffectError::InvalidState("Bank reserves not found".to_string()))?;
 
-            StateEffectApplicator::apply_adjust_position(
+            StateEffectApplicator::apply_cash_position_adjustment(
                 state,
                 payer_bank,
                 bank_reserves,
@@ -523,7 +564,8 @@ fn apply_tga_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Result<(
                 &PositionSide::Asset,
                 None,
             )?;
-            StateEffectApplicator::apply_adjust_position(
+            
+            StateEffectApplicator::apply_cash_position_adjustment(
                 state,
                 cb_id,
                 bank_reserves,

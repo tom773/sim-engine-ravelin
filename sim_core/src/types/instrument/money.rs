@@ -10,7 +10,7 @@ pub struct Money(pub Decimal);
 
 impl Money {
     pub const ZERO: Money = Money(Decimal::ZERO);
-
+    pub const ONE: Money = Money(Decimal::ONE);
     pub fn from_f64(val: f64) -> Option<Self> {
         Decimal::from_f64(val).map(Money)
     }
