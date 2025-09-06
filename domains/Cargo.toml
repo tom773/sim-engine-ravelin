@@ -17,3 +17,4 @@ uuid = { workspace = true }
 inventory = "0.3.20"
 rust_decimal = { workspace = true }
 rust_decimal_macros = { workspace = true }
+tracing = "0.1.41"

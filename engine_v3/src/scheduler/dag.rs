@@ -94,7 +94,6 @@ impl TickScheduler {
                     let step_start = Instant::now();
                     let result = handler.execute(engine, &mut context, rng);
                     let _duration = step_start.elapsed();
-
                     context.step_data.insert(step, result.clone());
 
                     if !result.success {

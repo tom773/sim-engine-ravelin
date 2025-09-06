@@ -72,7 +72,14 @@ impl AgentRegistry {
             || self.consumers.contains_key(id)
             || self.firms.contains_key(id)
     }
-
+    pub fn get_bank_for_agent(&self, agent_id: &AgentId) -> Option<&Bank> {
+        if let Some(consumer) = self.consumers.get(agent_id) {
+            return self.banks.get(&consumer.bank_id);
+        } else if let Some(firm) = self.firms.get(agent_id) {
+            return self.banks.get(&firm.bank_id);
+        }
+        None
+    }
     pub fn get_agent_as_any(&self, id: &AgentId) -> Option<&dyn std::any::Any> {
         if let Some(bank) = self.banks.get(id) {
             Some(bank)

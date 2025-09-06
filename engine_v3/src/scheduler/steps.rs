@@ -1,4 +1,4 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -12,6 +12,8 @@ pub enum TickStep {
     Auction,
     ClearMarkets,
     SettleTrades,
+    ApplyPaymentQueuing,
+    RunRTGS,
     ApplyAllEffects,
     UpdateHistory,
 }
@@ -20,9 +22,19 @@ impl TickStep {
     pub fn all() -> Vec<Self> {
         use TickStep::*;
         vec![
-            Upkeep, GatherIntentions, ResolveIndependentPhase, ResolveMarketPhase,
-            ApplyMarketEffectsForPriceDiscovery, ResolveDependentPhase, Auction, ClearMarkets,
-            SettleTrades, ApplyAllEffects, UpdateHistory,
+            Upkeep,
+            GatherIntentions,
+            ResolveIndependentPhase,
+            ResolveMarketPhase,
+            ApplyMarketEffectsForPriceDiscovery,
+            ResolveDependentPhase,
+            Auction,
+            ClearMarkets,
+            SettleTrades,
+            ApplyPaymentQueuing,
+            RunRTGS,
+            ApplyAllEffects,
+            UpdateHistory,
         ]
     }
 
@@ -38,8 +50,10 @@ impl TickStep {
             Auction => vec![ResolveDependentPhase],
             ClearMarkets => vec![Auction],
             SettleTrades => vec![ClearMarkets],
-            ApplyAllEffects => vec![SettleTrades],
-            UpdateHistory => vec![ApplyAllEffects],
+            ApplyPaymentQueuing => vec![SettleTrades],
+            RunRTGS => vec![SettleTrades],
+            ApplyAllEffects => vec![RunRTGS],
+            UpdateHistory => vec![RunRTGS],
         }
     }
 
@@ -47,7 +61,6 @@ impl TickStep {
         true
     }
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StepResult {
     pub success: bool,
@@ -65,11 +78,9 @@ impl StepResult {
     }
 }
 
-pub trait StepHandler: Send + Sync + Debug{
+pub trait StepHandler: Send + Sync + Debug {
     fn execute(
-        &self,
-        engine: &mut crate::executor::SimulationEngine,
-        context: &mut super::StepContext,
+        &self, engine: &mut crate::executor::SimulationEngine, context: &mut super::StepContext,
         rng: &mut dyn rand::RngCore,
     ) -> StepResult;
 }

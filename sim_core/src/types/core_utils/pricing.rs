@@ -72,22 +72,6 @@ pub fn ytm_bond(price: Money, face_value: Money, coupon_rate: Rate, years_to_mat
     Decimal::from_f64(ytm_guess).unwrap_or_default()
 }
 
-pub fn ytm_approximation(price: Money, face_value: Money, coupon_rate: Rate, years_to_maturity: f64) -> Rate {
-    if years_to_maturity <= 0.0 {
-        return Rate::ZERO;
-    }
-    
-    let annual_coupon = face_value * coupon_rate;
-    let numerator = annual_coupon + (face_value - price) / years_to_maturity;
-    let denominator = (face_value + price) / 2.0;
-    
-    if denominator == Money::ZERO {
-        return Rate::ZERO;
-    }
-    
-    numerator / denominator // Money / Money returns a Rate (Decimal)
-}
-
 pub fn bond_price(face_value: Money, coupon_rate: Rate, ytm: Rate, years_to_maturity: f64, frequency: usize) -> Money {
     if years_to_maturity <= 0.0 || frequency == 0 {
         return face_value;

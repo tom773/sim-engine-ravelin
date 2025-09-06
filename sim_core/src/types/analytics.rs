@@ -39,9 +39,8 @@ impl EconomicAnalytics for SimState {
             }
 
             let latest = ticks.back().unwrap();
-            let (volume, turnover) = ticks.iter().fold((0.0, 0.0), |(vol, turn), tick| {
-                (vol + tick.volume, turn + tick.turnover)
-            });
+            let (volume, turnover) =
+                ticks.iter().fold((0.0, 0.0), |(vol, turn), tick| (vol + tick.volume, turn + tick.turnover));
 
             let calculate_ma = |n: usize| -> Option<f64> {
                 let relevant_ticks: Vec<_> = ticks.iter().rev().take(n).filter_map(|t| t.close).collect();
@@ -53,30 +52,33 @@ impl EconomicAnalytics for SimState {
             };
 
             let calculate_vwap = |n: usize| -> Option<f64> {
-                let (total_turnover, total_volume) = ticks.iter().rev().take(n).fold((0.0, 0.0), |(turn, vol), tick| {
-                    (turn + tick.turnover, vol + tick.volume)
-                });
-                if total_volume > 1e-6 {
-                    Some(total_turnover / total_volume)
-                } else {
-                    None
-                }
+                let (total_turnover, total_volume) = ticks
+                    .iter()
+                    .rev()
+                    .take(n)
+                    .fold((0.0, 0.0), |(turn, vol), tick| (turn + tick.turnover, vol + tick.volume));
+                if total_volume > 1e-6 { Some(total_turnover / total_volume) } else { None }
             };
 
             let calculate_vol = |n: usize| -> Option<f64> {
                 let prices: Vec<f64> = ticks.iter().rev().take(n + 1).filter_map(|t| t.close).collect();
-                if prices.len() < 2 { return None; }
+                if prices.len() < 2 {
+                    return None;
+                }
 
-                let returns: Vec<f64> = prices.windows(2).filter_map(|w| {
-                    if w[1] > 1e-9 { Some((w[0] / w[1]).ln()) } else { None }
-                }).collect();
+                let returns: Vec<f64> = prices
+                    .windows(2)
+                    .filter_map(|w| if w[1] > 1e-9 { Some((w[0] / w[1]).ln()) } else { None })
+                    .collect();
 
-                if returns.is_empty() { return None; }
+                if returns.is_empty() {
+                    return None;
+                }
 
                 let mean_return = returns.iter().sum::<f64>() / returns.len() as f64;
                 let divisor = if returns.len() > 1 { (returns.len() - 1) as f64 } else { 1.0 };
                 let variance = returns.iter().map(|r| (r - mean_return).powi(2)).sum::<f64>() / divisor;
-                
+
                 Some(variance.sqrt() * (365.0_f64).sqrt())
             };
 
@@ -95,12 +97,11 @@ impl EconomicAnalytics for SimState {
 
     fn cpi_view(&self) -> InflationView {
         let total_weight = 0.0;
-        
-        
+
         let mut current_cpi = 100.0;
 
         if total_weight > 0.0 && (total_weight < 0.99 || total_weight > 1.01) {
-             current_cpi /= total_weight;
+            current_cpi /= total_weight;
         }
 
         let inflation_rate = 0.02; // Placeholder
@@ -121,7 +122,7 @@ impl EconomicAnalytics for SimState {
     fn macro_stats(&self) -> MacroStats {
         let core_stats = self.calculate_core_stats();
         let banks_map = HashSet::from_iter(self.agents.banks.keys().cloned());
-        
+
         let m0 = self.financial_system.m0();
         let m1 = self.financial_system.m1(&banks_map);
         let m2 = self.financial_system.m2(&banks_map);
@@ -131,10 +132,10 @@ impl EconomicAnalytics for SimState {
         } else {
             (0.0, "proxy: velocity undefined with zero M1; returning 0.0")
         };
-        
+
         let labour_force = self.agents.consumers.len();
         let employment = self.agents.firms.values().map(|f| f.employees.len()).sum();
-
+        let bank_credit = self.agents.banks.keys().map(|id| self.financial_system.get_total_liabilities(id)).sum();
         MacroStats {
             as_of: self.current_date,
             nominal_gdp_proxy: core_stats.gdp,
@@ -154,7 +155,7 @@ impl EconomicAnalytics for SimState {
             corporate_debt: core_stats.corporate_debt,
             government_debt: core_stats.government_debt,
             overnight_rates: Default::default(),
-            bank_credit: self.financial_system.all_bank_assets(&banks_map),
+            bank_credit,
             bank_liabilities: self.financial_system.all_bank_deposits(&banks_map),
             bank_reserves: self.financial_system.all_bank_reserves(&banks_map),
             m0,
@@ -162,8 +163,8 @@ impl EconomicAnalytics for SimState {
             m2,
             velocity,
             velocity_note,
-            avg_wage_rate: 0.0, // Placeholder
-            payroll_proxy: 0.0, // Placeholder
+            avg_wage_rate: 0.0,       // Placeholder
+            payroll_proxy: 0.0,       // Placeholder
             business_investment: 0.0, // Placeholder
             business_investment_note: "dummy: capital formation flows not implemented yet",
             government_spending: self.financial_system.government.spending_targets.purchases,
@@ -175,7 +176,9 @@ impl EconomicAnalytics for SimState {
         let fs = &self.financial_system;
         let _last_tick = self.history.tick_records.back();
 
-        let consumer_spending_daily: f64 = self.history.market_ticks
+        let consumer_spending_daily: f64 = self
+            .history
+            .market_ticks
             .iter()
             .filter(|(market_id, _)| matches!(market_id, MarketId::Goods(_)))
             .flat_map(|(_, ticks)| ticks.iter())
@@ -191,18 +194,19 @@ impl EconomicAnalytics for SimState {
         let ppi = 100.0; // Placeholder until goods catalog confirmed
 
         let employed_count: usize = self.agents.firms.values().map(|f| f.employees.len()).sum();
-        
+
         let seeking_work_count: usize = 0;
-            
+
         let labor_force = (employed_count + seeking_work_count) as f64;
         let total_population = self.agents.consumers.len() as f64;
         let labor_force_participation = if total_population > 0.0 { labor_force / total_population } else { 0.0 };
-        let unemployment_rate = if labor_force > 0.0 { (labor_force - employed_count as f64) / labor_force } else { 0.0 };
+        let unemployment_rate =
+            if labor_force > 0.0 { (labor_force - employed_count as f64) / labor_force } else { 0.0 };
 
-        let job_openings: u32 = 0; 
+        let job_openings: u32 = 0;
 
-        let household_debt: f64 = self.agents.consumers.values().map(|c| fs.get_total_liabilities(&c.id)).sum();
-        let corporate_debt: f64 = self.agents.firms.values().map(|f| fs.get_total_liabilities(&f.id)).sum();
+        let household_debt: f64 = self.agents.consumers.keys().map(|id| fs.get_total_liabilities(id)).sum();
+        let corporate_debt: f64 = self.agents.firms.keys().map(|id| fs.get_total_liabilities(id)).sum();
         let government_debt = fs.get_total_liabilities(&fs.government.id);
 
         CoreEconomicStats {
@@ -213,13 +217,118 @@ impl EconomicAnalytics for SimState {
             unemployment_rate: unemployment_rate * 100.0,
             labor_force_participation: labor_force_participation * 100.0,
             job_openings: job_openings as f64,
-            capacity_utilization: 0.0, // Placeholder
+            capacity_utilization: 0.0,  // Placeholder
             industrial_production: 0.0, // Placeholder
-            credit_growth: 0.0, // Placeholder
+            credit_growth: 0.0,         // Placeholder
             household_debt,
             corporate_debt,
             government_debt,
             bank_liabilities: 0.0, // Placeholder
         }
+    }
+}
+
+impl FinancialSystem {
+    pub fn m0(&self) -> f64 {
+        self.balance_sheets
+            .values()
+            .flat_map(|bs| bs.assets.iter())
+            .filter_map(|(id, pos)| {
+                self.instruments.get(id).and_then(|inst| {
+                    if let InstrumentType::Cash(d) = &inst.instrument_type {
+                        if matches!(d.cash_type, CashType::CentralBankReserves | CashType::Currency) {
+                            return Some(pos.quantity);
+                        }
+                    }
+                    None
+                })
+            })
+            .sum()
+    }
+
+    pub fn m1(&self, bank_ids: &std::collections::HashSet<AgentId>) -> f64 {
+        self.balance_sheets
+            .iter()
+            .filter(|(id, _)| !bank_ids.contains(id) && **id != self.central_bank.id)
+            .flat_map(|(_, bs)| bs.assets.iter())
+            .filter_map(|(id, pos)| {
+                self.instruments.get(id).and_then(|inst| {
+                    if let InstrumentType::Cash(d) = &inst.instrument_type {
+                        if matches!(d.cash_type, CashType::Currency | CashType::DemandDeposit) {
+                            return Some(pos.quantity);
+                        }
+                    }
+                    None
+                })
+            })
+            .sum()
+    }
+
+    pub fn m2(&self, bank_ids: &std::collections::HashSet<AgentId>) -> f64 {
+        self.balance_sheets
+            .iter()
+            .filter(|(id, _)| !bank_ids.contains(id) && **id != self.central_bank.id)
+            .flat_map(|(_, bs)| bs.assets.iter())
+            .filter_map(|(id, pos)| {
+                self.instruments.get(id).and_then(|inst| {
+                    if let InstrumentType::Cash(d) = &inst.instrument_type {
+                        if matches!(
+                            d.cash_type,
+                            CashType::Currency
+                                | CashType::DemandDeposit
+                                | CashType::SavingsDeposit
+                                | CashType::TimeDeposit
+                        ) {
+                            return Some(pos.quantity);
+                        }
+                    }
+                    None
+                })
+            })
+            .sum()
+    }
+    pub fn all_bank_reserves(&self, bank_ids: &std::collections::HashSet<AgentId>) -> f64 {
+        bank_ids.iter().map(|id| self.get_bank_reserves(id).unwrap_or(0.0)).sum()
+    }
+
+    pub fn get_bank_reserves(&self, bank_id: &AgentId) -> Option<f64> {
+        let bs = self.balance_sheets.get(bank_id)?;
+        bs.assets.iter().find_map(|(id, pos)| {
+            self.instruments.get(id).and_then(|inst| {
+                if let InstrumentType::Cash(d) = &inst.instrument_type {
+                    if d.cash_type == CashType::CentralBankReserves {
+                        return Some(pos.quantity);
+                    }
+                }
+                None
+            })
+        })
+    }
+
+    pub fn all_bank_deposits(&self, bank_ids: &std::collections::HashSet<AgentId>) -> f64 {
+        bank_ids.iter().map(|id| self.get_bank_deposits(id)).sum()
+    }
+
+    pub fn get_bank_deposits(&self, bank_id: &AgentId) -> f64 {
+        let bs = match self.balance_sheets.get(bank_id) {
+            Some(b) => b,
+            None => return 0.0,
+        };
+        bs.liabilities
+            .iter()
+            .filter_map(|(id, pos)| {
+                self.instruments.get(id).and_then(|inst| {
+                    if let InstrumentType::Cash(d) = &inst.instrument_type {
+                        if matches!(
+                            d.cash_type,
+                            CashType::DemandDeposit | CashType::SavingsDeposit | CashType::TimeDeposit
+                        ) {
+                            return Some(pos.quantity);
+                        }
+                    }
+                    None
+                })
+            })
+            .sum()
     }
 }

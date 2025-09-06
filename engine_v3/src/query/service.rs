@@ -20,8 +20,10 @@ impl QueryService {
         self.engine.lock().map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
     }
 
-    fn populate_balance_sheet(&self, bs: &BalanceSheet, state: &SimState) -> PopulatedBalanceSheetDto {
-        let assets = bs.assets.iter().filter_map(|(id, pos)| {
+    fn populate_balance_sheet(&self, agent_id: &AgentId, state: &SimState) -> PopulatedBalanceSheetDto {
+        let all_assets_map = state.financial_system.get_agent_total_positions(agent_id);
+
+        let assets = all_assets_map.iter().filter_map(|(id, pos)| {
             state.financial_system.instruments.get(id).map(|inst| {
                 let market_price = state.financial_system.exchange
                     .financial_market(id)
@@ -35,6 +37,7 @@ impl QueryService {
             })
         }).collect();
 
+        let bs = state.financial_system.balance_sheets.get(agent_id).unwrap();
         let liabilities = bs.liabilities.iter().filter_map(|(id, pos)| {
             state.financial_system.instruments.get(id).map(|inst| {
                  let market_price = state.financial_system.exchange
@@ -99,15 +102,14 @@ impl QueryService {
     pub fn get_agents_summary(&self, agent_type_filter: Option<String>) -> QueryResult<Vec<AgentSummaryDto>> {
         let engine = self.get_engine_lock()?;
         let state = &engine.state;
-        let fs = &state.financial_system;
+        let _fs = &state.financial_system;
         
         let mut summaries = Vec::new();
         let filter_lower = agent_type_filter.as_deref().map(str::to_lowercase);
 
         let mut add_summary_for_agent = |id: &AgentId| {
             let (agent_type_str, name_opt) = engine.get_agent_info(id);
-            let bs = fs.balance_sheets.get(id).unwrap();
-            let populated_bs = self.populate_balance_sheet(bs, state);
+            let populated_bs = self.populate_balance_sheet(id, state);
             summaries.push(AgentSummaryDto {
                 id: id.0,
                 agent_type: agent_type_str,
@@ -132,6 +134,13 @@ impl QueryService {
             }
         }
         
+        if filter_lower.as_deref() == Some("government") || filter_lower.is_none() {
+            add_summary_for_agent(&state.financial_system.government.id);
+        }
+        if filter_lower.as_deref() == Some("centralbank") || filter_lower.is_none() {
+            add_summary_for_agent(&state.financial_system.central_bank.id);
+        }
+        
         Ok(summaries)
     }
 
@@ -145,10 +154,7 @@ impl QueryService {
             return Err((axum::http::StatusCode::NOT_FOUND, format!("Agent with ID {} not found", agent_id)));
         }
         
-        let raw_balance_sheet = state.financial_system.balance_sheets.get(&agent_id)
-            .ok_or((axum::http::StatusCode::NOT_FOUND, format!("Balance sheet for agent {} not found", agent_id)))?;
-
-        let populated_bs = self.populate_balance_sheet(raw_balance_sheet, state);
+        let populated_bs = self.populate_balance_sheet(&agent_id, state);
 
         Ok(AgentDetailDto {
             id: agent_id.0,
@@ -180,7 +186,8 @@ impl QueryService {
                         let calc_yield = |price_opt: Option<Money>| -> Option<Rate> {
                             price_opt.map(|price| {
                                 let ytm_years = years_to_maturity(state.current_date, d.maturity_date);
-                                ytm_approximation(price, d.face_value, d.coupon_rate_bps, ytm_years)
+                                ytm_bond(price, d.face_value, d.coupon_rate_bps, ytm_years, d.frequency as usize)
+
                             })
                         };
 

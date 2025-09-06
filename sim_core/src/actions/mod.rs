@@ -1,23 +1,23 @@
 pub mod banking;
 pub mod consumption;
 pub mod fiscal;
-pub mod labour_action;
 pub mod production;
-pub mod settlement;
-pub mod trading;
 pub mod validation;
+pub mod transaction;
+pub mod monetary;
 
-use crate::*;
-pub use banking::*;
-use chrono::NaiveDate;
+
 pub use consumption::*;
 pub use fiscal::*;
-pub use labour_action::*;
 pub use production::*;
-use serde::{Deserialize, Serialize};
-pub use settlement::*;
-pub use trading::*;
+pub use banking::*;
 pub use validation::*;
+pub use transaction::*;
+pub use monetary::*;
+
+use crate::*;
+use chrono::NaiveDate;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SimAction {
@@ -25,9 +25,8 @@ pub enum SimAction {
     Consumption(ConsumptionAction),
     Fiscal(FiscalAction),
     Production(ProductionAction),
-    Settlement(SettlementAction),
-    Trading(TradingAction),
-    Labour(LabourAction),
+    Transaction(TransactionAction),
+    Monetary(MonetaryAction),
 }
 
 impl SimAction {
@@ -37,9 +36,8 @@ impl SimAction {
             SimAction::Consumption(action) => format!("Consumption::{}", action.name()),
             SimAction::Fiscal(action) => format!("Fiscal::{}", action.name()),
             SimAction::Production(action) => format!("Production::{}", action.name()),
-            SimAction::Settlement(action) => format!("Settlement::{}", action.name()),
-            SimAction::Trading(action) => format!("Trading::{}", action.name()),
-            SimAction::Labour(action) => format!("Labour::{}", action.name()),
+            SimAction::Transaction(action) => format!("Transaction::{}", action.name()),
+            SimAction::Monetary(action) => format!("Monetary::{}", action.name()),
         }
     }
 
@@ -49,9 +47,8 @@ impl SimAction {
             SimAction::Consumption(action) => action.agent_id(),
             SimAction::Fiscal(action) => action.agent_id(),
             SimAction::Production(action) => action.agent_id(),
-            SimAction::Settlement(action) => action.agent_id(),
-            SimAction::Trading(action) => action.agent_id(),
-            SimAction::Labour(action) => action.agent_id(),
+            SimAction::Transaction(action) => action.agent_id(),
+            SimAction::Monetary(action) => action.agent_id(),
         }
     }
 }
@@ -156,9 +153,54 @@ pub enum SimIntention {
         quantity: u32,
         bid_price: Money,
     },
+        ConductOMO {
+        cb_id: AgentId,
+        operation_type: OMOType,
+        amount: f64,
+    },
+    SetPolicyRate {
+        cb_id: AgentId,
+        new_rate_bps: BasisPoints,
+    },
+    AdjustReserveRequirement {
+        cb_id: AgentId,
+        new_ratio: f64,
+    },
+    ProvideLiquidityFacility {
+        cb_id: AgentId,
+        bank_id: AgentId,
+        amount: f64,
+        collateral: Option<Vec<InstrumentId>>,
+    },
 }
 
 impl SimIntention {
+    pub fn name(&self) -> String {
+        match self {
+            SimIntention::SpendOnGood { .. } => "SpendOnGood".to_string(),
+            SimIntention::PurchaseInputs { .. } => "PurchaseInputs".to_string(),
+            SimIntention::ConsumeGood { .. } => "ConsumeGood".to_string(),
+            SimIntention::PostGoodToMarket { .. } => "PostGoodToMarket".to_string(),
+            SimIntention::Produce { .. } => "Produce".to_string(),
+            SimIntention::ApplyForJob { .. } => "ApplyForJob".to_string(),
+            SimIntention::HireWorkers { .. } => "HireWorkers".to_string(),
+            SimIntention::IssueDebtToRaise { .. } => "IssueDebtToRaise".to_string(),
+            SimIntention::CollectTaxes { .. } => "CollectTaxes".to_string(),
+            SimIntention::LendExcessReserves { .. } => "LendExcessReserves".to_string(),
+            SimIntention::BorrowReserves { .. } => "BorrowReserves".to_string(),
+            SimIntention::MarketMakeTreasuries { .. } => "MarketMakeTreasuries".to_string(),
+            SimIntention::DepositFunds { .. } => "DepositFunds".to_string(),
+            SimIntention::WithdrawFunds { .. } => "WithdrawFunds".to_string(),
+            SimIntention::PayWages { .. } => "PayWages".to_string(),
+            SimIntention::InjectLiquidity => "InjectLiquidity".to_string(),
+            SimIntention::AnnounceDebtAuction { .. } => "AnnounceDebtAuction".to_string(),
+            SimIntention::BidInDebtAuction { .. } => "BidInDebtAuction".to_string(),
+            SimIntention::ConductOMO { .. } => "ConductOMO".to_string(),
+            SimIntention::SetPolicyRate { .. } => "SetPolicyRate".to_string(),
+            SimIntention::AdjustReserveRequirement { .. } => "AdjustReserveRequirement".to_string(),
+            SimIntention::ProvideLiquidityFacility { .. } => "ProvideLiquidityFacility".to_string()
+        }
+    }
     pub fn agent_id(&self) -> AgentId {
         match self {
             SimIntention::SpendOnGood { agent_id, .. } => *agent_id,
@@ -178,7 +220,11 @@ impl SimIntention {
             SimIntention::PayWages { employer, .. } => *employer,
             SimIntention::InjectLiquidity => AgentId::default(),
             SimIntention::AnnounceDebtAuction { government_id, .. } => *government_id,
-            SimIntention::BidInDebtAuction { agent_id, .. } => *agent_id
+            SimIntention::BidInDebtAuction { agent_id, .. } => *agent_id,
+            SimIntention::ConductOMO { cb_id, .. } => *cb_id,
+            SimIntention::SetPolicyRate { cb_id, .. } => *cb_id,
+            SimIntention::AdjustReserveRequirement { cb_id, .. } => *cb_id,
+            SimIntention::ProvideLiquidityFacility { cb_id, .. } => *cb_id,
         }
     }
 }

@@ -1,16 +1,3 @@
-//! # Simulation Domains Crate
-//!  
-//!This crate includes a bunch of different "domains" that encapsulate various aspects of the simulation.
-//!Each domain is responsible for handling specific types of actions and decisions within the simulation.
-//! 
-//!   
-//! - **[`Domain`]:** A trait representing a service that handles a specific category of actions.
-//!   For example, [`BankingDomain`] handles all [`BankingAction`]s.
-//! - **Behavior (`behavior.rs`):** Each domain typically has a corresponding behavior module
-//!   that implements [`DecisionModel`] traits. These models contain the "AI" or logic that
-//!   agents use to generate intentions.
-//! - **Resolution:** The process of converting a high-level [`SimIntention`] (e.g., "borrow reserves")
-//!   into a concrete [`SimAction`] (e.g., "post a bid in the federal funds market").
 pub use std::any::Any;
 use serde::Serialize;
 use sim_core::*;
@@ -19,11 +6,9 @@ extern crate inventory;
 pub trait Domain: Send + Sync {
     fn name(&self) -> &'static str;
     fn execute(&self, action: &SimAction, state: &SimState) -> DomainResult;
-    /// Attempt to resolve a high-level intention into concrete actions. 
     fn resolve_intention(&self, _intention: &SimIntention, _context: &ResolutionContext) -> Option<ResolutionResult> {
         None
     }
-    /// Determine the resolution phase for a given intention, if applicable.
     fn resolution_phase(&self, _intention: &SimIntention) -> Option<ResolutionPhase> {
         None
     }
@@ -90,66 +75,6 @@ impl ResolutionResult {
     }
 }
 
-pub struct DomainValidator;
-
-impl DomainValidator {
-    pub fn positive_amount(amount: f64) -> Result<(), String> {
-        if amount <= 0.0 {
-            Err("Amount must be positive".to_string())
-        } else {
-            Ok(())
-        }
-    }
-    
-    pub fn non_negative_amount(amount: f64) -> Result<(), String> {
-        if amount < 0.0 {
-            Err("Amount cannot be negative".to_string())
-        } else {
-            Ok(())
-        }
-    }
-    
-    pub fn agent_exists(agent_id: AgentId, state: &SimState) -> Result<(), String> {
-        if state.financial_system.balance_sheets.contains_key(&agent_id) {
-            Ok(())
-        } else {
-            Err(format!("Agent {} does not exist", agent_id.0))
-        }
-    }
-    
-    pub fn bank_exists(bank_id: AgentId, state: &SimState) -> Result<(), String> {
-        if state.agents.banks.contains_key(&bank_id) {
-            Ok(())
-        } else {
-            Err("Target is not a valid commercial bank".to_string())
-        }
-    }
-    
-    pub fn firm_exists(firm_id: AgentId, state: &SimState) -> Result<(), String> {
-        if state.agents.firms.contains_key(&firm_id) {
-            Ok(())
-        } else {
-            Err("Target is not a valid firm".to_string())
-        }
-    }
-    
-    pub fn positive_integer(value: u32, field_name: &str) -> Result<(), String> {
-        if value == 0 {
-            Err(format!("{} must be positive", field_name))
-        } else {
-            Ok(())
-        }
-    }
-    
-    pub fn percentage(value: f64) -> Result<(), String> {
-        if value < 0.0 || value > 1.0 {
-            Err("Value must be between 0.0 and 1.0".to_string())
-        } else {
-            Ok(())
-        }
-    }
-}
-
 pub struct DomainRegistration {
     pub name: &'static str,
     pub constructor: fn() -> Box<dyn Domain>,
@@ -157,28 +82,26 @@ pub struct DomainRegistration {
 
 inventory::collect!(DomainRegistration);
 
-pub mod banking;
-pub mod consumption;
-pub mod fiscal;
-pub mod labour;
-pub mod production;
-pub mod settlement;
-pub mod trading;
+pub mod banking_domain;
+pub mod consumption_domain;
+pub mod fiscal_domain;
+pub mod production_domain;
+pub mod monetary_domain;
+pub mod transaction_domain;
 
 pub mod prelude {
     pub use crate::{
-        Domain, DomainResult, DomainValidator, DomainRegistration,
+        Domain, DomainResult,DomainRegistration,
         ResolutionContext, ResolutionResult, ResolutionPhase,
     };
     
-    pub use crate::banking::{BankingDomain, BasicBankDecisionModel};
-    pub use crate::consumption::{ConsumptionDomain, SimpleConsumerDecisionModel, CESConsumerDecisionModel};
-    pub use crate::fiscal::{FiscalDomain, BasicGovernmentDecisionModel};
-    pub use crate::labour::LabourDomain;
-    pub use crate::production::{ProductionDomain, ProductionFirmDecisionModel, InvestmentFirmDecisionModel};
-    pub use crate::settlement::SettlementDomain;
-    pub use crate::trading::TradingDomain;
-    
+    pub use crate::banking_domain::{behaviour::*, domain::*};
+    pub use crate::consumption_domain::{behaviour::*, domain::*};
+    pub use crate::fiscal_domain::{behaviour::*, domain::*};
+    pub use crate::monetary_domain::{behaviour::*, domain::*};
+    pub use crate::production_domain::{behaviour::*, domain::*};
+    pub use crate::transaction_domain::{domain::*};
+
     pub use sim_core::*;
     pub use std::any::Any;
 }

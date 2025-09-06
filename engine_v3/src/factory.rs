@@ -1,11 +1,21 @@
 use crate::scenario::{AssetConfig, BankConfig, ConsumerConfig, FirmConfig, LiabilityConfig};
 use chrono::{Duration, NaiveDate};
 use rand::prelude::*;
+use rust_decimal::prelude::*;
+use rust_decimal_macros::dec;
 use sim_core::prelude::*;
 use std::collections::HashMap;
 use uuid::Uuid;
-use rust_decimal::prelude::*; // Import ToPrimitive trait
-use rust_decimal_macros::dec;
+
+fn is_security(inst: &Instrument) -> bool {
+    matches!(
+        inst.instrument_type,
+        InstrumentType::Bond(_)
+            | InstrumentType::Equity(_)
+            | InstrumentType::StructuredTranche(_)
+            | InstrumentType::Derivative(_)
+    )
+}
 
 pub struct AgentFactory<'a> {
     pub state: &'a mut SimState,
@@ -18,164 +28,131 @@ impl<'a> AgentFactory<'a> {
     }
 
     fn create_and_register_instrument(
-        &mut self,
-        owner_id: AgentId,
-        issuer_id: AgentId,
-        instrument: Instrument,
-        quantity: f64,
+        &mut self, owner_id: AgentId, issuer_id: AgentId, instrument: Instrument, quantity: f64,
         book_value_per_unit: f64,
     ) -> Result<(), String> {
-        self.state
-            .financial_system
-            .create_or_consolidate_instrument(
-                owner_id,
-                issuer_id,
-                instrument,
+        let inst_id = instrument.id;
+        let is_sec = is_security(&instrument);
+
+        let instrument_clone_for_csd = instrument.clone();
+        self.state.financial_system.instruments.insert(inst_id, instrument);
+
+        if is_sec {
+            self.state.financial_system.clearing_house.csd
+                .register_security(inst_id, &instrument_clone_for_csd, self.state.current_date)
+                .map_err(|e| e.to_string())?;
+
+            if quantity > 0.0 {
+                self.state.financial_system.clearing_house.csd
+                    .credit_securities(owner_id, inst_id, quantity)
+                    .map_err(|e| e.to_string())?;
+            }
+
+            let book_value_money = Money::from_f64(book_value_per_unit).unwrap_or(Money::ZERO);
+            let issuer_bs = self.state.financial_system.balance_sheets.get_mut(&issuer_id).ok_or("Issuer not found")?;
+            let liability_pos = issuer_bs.liabilities.entry(inst_id).or_insert_with(|| Position {
+                quantity: 0.0,
+                book_value_per_unit: book_value_money,
+                cost_basis_per_unit: book_value_money,
+            });
+            liability_pos.quantity += quantity;
+
+        } else {
+            self.state.financial_system.create_or_consolidate_position(
+                &owner_id,
+                &issuer_id,
+                &inst_id,
                 quantity,
                 book_value_per_unit,
             )?;
+        }
         Ok(())
     }
 
     pub fn create_bank(&mut self, config: &BankConfig, cb_id: AgentId) -> Bank {
         let bank = Bank::new(config.name.clone(), dec!(200.0), dec!(-70.0));
-        self.state
-            .financial_system
-            .balance_sheets
-            .insert(bank.id, BalanceSheet::new(bank.id));
+        self.state.financial_system.balance_sheets.insert(bank.id, BalanceSheet::new(bank.id));
         for asset in &config.initial_assets {
-            self.create_asset_for_agent(bank.id, asset, cb_id, &HashMap::new())
-                .unwrap();
+            self.create_asset_for_agent(bank.id, asset, cb_id, &HashMap::new()).unwrap();
         }
         for liability in &config.initial_liabilities {
-            self.create_liability_for_agent(bank.id, liability, cb_id, &HashMap::new())
-                .unwrap();
+            self.create_liability_for_agent(bank.id, liability, cb_id, &HashMap::new()).unwrap();
         }
         self.state.agents.banks.insert(bank.id, bank.clone());
         bank
     }
 
     pub fn create_consumer(
-        &mut self,
-        config: &ConsumerConfig,
-        bank_id: AgentId,
-        cb_id: AgentId,
-        agent_ids: &HashMap<String, AgentId>,
+        &mut self, config: &ConsumerConfig, bank_id: AgentId, cb_id: AgentId, agent_ids: &HashMap<String, AgentId>,
     ) -> Consumer {
-        let personality = *vec![
-            PersonalityArchetype::Balanced,
-            PersonalityArchetype::Saver,
-            PersonalityArchetype::Spender,
-        ]
-        .choose(self.rng)
-        .unwrap();
+        let personality =
+            *vec![PersonalityArchetype::Balanced, PersonalityArchetype::Saver, PersonalityArchetype::Spender]
+                .choose(self.rng)
+                .unwrap();
         let mut consumer = Consumer::new(self.rng.random_range(25..65), bank_id, personality);
         consumer.income = config.income;
-        self.state
-            .financial_system
-            .balance_sheets
-            .insert(consumer.id, BalanceSheet::new(consumer.id));
+        self.state.financial_system.balance_sheets.insert(consumer.id, BalanceSheet::new(consumer.id));
         for asset in &config.initial_assets {
-            self.create_asset_for_agent(consumer.id, asset, cb_id, agent_ids)
-                .unwrap();
+            self.create_asset_for_agent(consumer.id, asset, cb_id, agent_ids).unwrap();
         }
         for liability in &config.initial_liabilities {
-            self.create_liability_for_agent(consumer.id, liability, cb_id, agent_ids)
-                .unwrap();
+            self.create_liability_for_agent(consumer.id, liability, cb_id, agent_ids).unwrap();
         }
-        self.state
-            .agents
-            .consumers
-            .insert(consumer.id, consumer.clone());
+        self.state.agents.consumers.insert(consumer.id, consumer.clone());
         consumer
     }
 
     pub fn create_firm(
-        &mut self,
-        config: &FirmConfig,
-        bank_id: AgentId,
-        cb_id: AgentId,
-        agent_ids: &HashMap<String, AgentId>,
+        &mut self, config: &FirmConfig, bank_id: AgentId, cb_id: AgentId, agent_ids: &HashMap<String, AgentId>,
     ) -> Firm {
         let recipe_id = config.recipe_name.as_ref().and_then(|name| {
-            self.state
-                .financial_system
-                .goods
-                .recipes
-                .iter()
-                .find(|(_, r)| &r.name == name)
-                .map(|(id, _)| *id)
+            self.state.financial_system.goods.recipes.iter().find(|(_, r)| &r.name == name).map(|(id, _)| *id)
         });
         let mut firm = Firm::new(bank_id, config.name.clone(), recipe_id, 25.0);
         if let Some(markup) = config.desired_markup {
             firm.desired_markup = markup;
         }
-        self.state
-            .financial_system
-            .balance_sheets
-            .insert(firm.id, BalanceSheet::new(firm.id));
-    
-        // --- FIXED: Create a single, empty inventory instrument for the firm ---
-        // This ensures every firm has an inventory container on its balance sheet.
-        // It will be populated later in scenario.rs where the slug->id map is available.
+        self.state.financial_system.balance_sheets.insert(firm.id, BalanceSheet::new(firm.id));
+
         let inventory_instrument = Instrument::new(
             InstrumentId(Uuid::new_v4()),
-            InstrumentType::RealAsset(RealAssetType::Inventory {
-                owner: firm.id,
-                goods: HashMap::new(),
-            }),
-            // Market classification is a placeholder as inventory isn't a tradable security.
+            InstrumentType::RealAsset(RealAssetType::Inventory { owner: firm.id, goods: HashMap::new() }),
             InstrumentMarket::CapitalMarket(CapitalMarketSegment::StructuredFinance),
         );
-        // The firm is both creditor and debtor to itself for this real asset.
         self.create_and_register_instrument(
             firm.id,
             firm.id,
             inventory_instrument,
-            1.0, // Represents one 'inventory' asset on the balance sheet
-            0.0, // Initial book value is zero, determined by contents
-        ).unwrap();
-    
-        // Process other assets (Cash, Deposits, etc.)
+            1.0,
+            0.0,
+        )
+        .unwrap();
+
         for asset in &config.initial_assets {
-            // Inventory assets are now handled in scenario.rs, so we skip them here.
             if !matches!(asset, AssetConfig::Inventory { .. }) {
-                self.create_asset_for_agent(firm.id, asset, cb_id, agent_ids)
-                    .unwrap();
+                self.create_asset_for_agent(firm.id, asset, cb_id, agent_ids).unwrap();
             }
         }
-    
+
         for liability in &config.initial_liabilities {
-            self.create_liability_for_agent(firm.id, liability, cb_id, agent_ids)
-                .unwrap();
+            self.create_liability_for_agent(firm.id, liability, cb_id, agent_ids).unwrap();
         }
         self.state.agents.firms.insert(firm.id, firm.clone());
         firm
     }
 
     fn create_asset_for_agent(
-        &mut self,
-        agent_id: AgentId,
-        asset: &AssetConfig,
-        cb_id: AgentId,
-        agent_ids: &HashMap<String, AgentId>,
+        &mut self, agent_id: AgentId, asset: &AssetConfig, cb_id: AgentId, agent_ids: &HashMap<String, AgentId>,
     ) -> Result<(), String> {
         match asset {
             AssetConfig::Cash { amount } => {
-                let cash = Instrument::cash(
-                    InstrumentId(Uuid::new_v4()),
-                    cb_id,
-                    CashType::Currency,
-                    Currency::USD,
-                    dec!(0.0),
-                )
-                .build();
+                let cash =
+                    Instrument::cash(InstrumentId(Uuid::new_v4()), cb_id, CashType::Currency, Currency::USD, dec!(0.0))
+                        .build();
                 self.create_and_register_instrument(agent_id, cb_id, cash, *amount, 1.0)?;
             }
             AssetConfig::Deposit { bank_id, amount } => {
-                let bank_agent_id = *agent_ids
-                    .get(bank_id)
-                    .ok_or_else(|| format!("Bank ID {} not found", bank_id))?;
+                let bank_agent_id = *agent_ids.get(bank_id).ok_or_else(|| format!("Bank ID {} not found", bank_id))?;
                 let rate = self.state.financial_system.central_bank.policy_rate_bps;
                 let deposit = Instrument::cash(
                     InstrumentId(Uuid::new_v4()),
@@ -185,13 +162,7 @@ impl<'a> AgentFactory<'a> {
                     rate,
                 )
                 .build();
-                self.create_and_register_instrument(
-                    agent_id,
-                    bank_agent_id,
-                    deposit,
-                    *amount,
-                    1.0,
-                )?;
+                self.create_and_register_instrument(agent_id, bank_agent_id, deposit, *amount, 1.0)?;
             }
             AssetConfig::Reserves { amount } => {
                 let rate = self.state.financial_system.central_bank.policy_rate_bps;
@@ -232,18 +203,9 @@ impl<'a> AgentFactory<'a> {
                     .coupon_bps(coupon_bps)
                     .frequency(2)
                 };
-                let bond_instrument = bond_builder
-                    .rating(CreditRating::AAA)
-                    .auto_market()
-                    .build()
-                    .map_err(|e| e.to_string())?;
-                self.create_and_register_instrument(
-                    agent_id,
-                    gov_id,
-                    bond_instrument,
-                    *quantity as f64,
-                    1000.0,
-                )?;
+                let bond_instrument =
+                    bond_builder.rating(CreditRating::AAA).auto_market().build().map_err(|e| e.to_string())?;
+                self.create_and_register_instrument(agent_id, gov_id, bond_instrument, *quantity as f64, 1000.0)?;
             }
             AssetConfig::Inventory { .. } => {}
         }
@@ -251,21 +213,13 @@ impl<'a> AgentFactory<'a> {
     }
 
     fn create_liability_for_agent(
-        &mut self,
-        agent_id: AgentId,
-        liability: &LiabilityConfig,
-        _cb_id: AgentId,
+        &mut self, agent_id: AgentId, liability: &LiabilityConfig, _cb_id: AgentId,
         agent_ids: &HashMap<String, AgentId>,
     ) -> Result<(), String> {
         match liability {
-            LiabilityConfig::Deposit {
-                creditor_id,
-                amount,
-                ..
-            } => {
-                let creditor_agent_id = *agent_ids
-                    .get(creditor_id)
-                    .ok_or_else(|| format!("Creditor ID {} not found", creditor_id))?;
+            LiabilityConfig::Deposit { creditor_id, amount, .. } => {
+                let creditor_agent_id =
+                    *agent_ids.get(creditor_id).ok_or_else(|| format!("Creditor ID {} not found", creditor_id))?;
                 let rate = self.state.financial_system.central_bank.policy_rate_bps;
                 let deposit = Instrument::cash(
                     InstrumentId(Uuid::new_v4()),
@@ -275,26 +229,13 @@ impl<'a> AgentFactory<'a> {
                     rate,
                 )
                 .build();
-                self.create_and_register_instrument(
-                    creditor_agent_id,
-                    agent_id,
-                    deposit,
-                    *amount,
-                    1.0,
-                )?;
+                self.create_and_register_instrument(creditor_agent_id, agent_id, deposit, *amount, 1.0)?;
             }
-            LiabilityConfig::Loan {
-                creditor_id,
-                amount,
-                rate_bps,
-                maturity_days,
-            } => {
-                let creditor_agent_id = *agent_ids
-                    .get(creditor_id)
-                    .ok_or_else(|| format!("Creditor ID {} not found", creditor_id))?;
+            LiabilityConfig::Loan { creditor_id, amount, rate_bps, maturity_days } => {
+                let creditor_agent_id =
+                    *agent_ids.get(creditor_id).ok_or_else(|| format!("Creditor ID {} not found", creditor_id))?;
                 let issue_date = self.state.current_date;
-                let maturity_date =
-                    issue_date + Duration::days(maturity_days.unwrap_or(365) as i64);
+                let maturity_date = issue_date + Duration::days(maturity_days.unwrap_or(365) as i64);
                 let loan_instrument = Instrument::bond(
                     InstrumentId(Uuid::new_v4()),
                     agent_id,
@@ -308,23 +249,59 @@ impl<'a> AgentFactory<'a> {
                 .rating(CreditRating::B)
                 .build()
                 .map_err(|e| format!("Failed to build loan instrument: {}", e))?;
-                self.create_and_register_instrument(
-                    creditor_agent_id,
-                    agent_id,
-                    loan_instrument,
-                    1.0,
-                    *amount,
-                )?;
+                self.create_and_register_instrument(creditor_agent_id, agent_id, loan_instrument, 1.0, *amount)?;
             }
         }
+        Ok(())
+    }
+    pub fn initialize_treasury_general_account(&mut self) -> Result<(), String> {
+        let gov_id = self.state.financial_system.government.id;
+        let cb_id = self.state.financial_system.central_bank.id;
+
+        let tga = Instrument::cash(
+            InstrumentId(Uuid::new_v4()),
+            cb_id,
+            CashType::TreasuryGeneralAccount,
+            Currency::USD,
+            dec!(0),
+        )
+        .build();
+
+        self.state.financial_system.instruments.insert(tga.id, tga.clone());
+
+        let initial_balance = 1_000_000.0;
+
+        let gov_bs =
+            self.state.financial_system.balance_sheets.entry(gov_id).or_insert_with(|| BalanceSheet::new(gov_id));
+
+        gov_bs.assets.insert(
+            tga.id,
+            Position {
+                quantity: initial_balance,
+                book_value_per_unit: Money::from(1),
+                cost_basis_per_unit: Money::from(1),
+            },
+        );
+
+        let cb_bs = self.state.financial_system.balance_sheets.entry(cb_id).or_insert_with(|| BalanceSheet::new(cb_id));
+
+        cb_bs.liabilities.insert(
+            tga.id,
+            Position {
+                quantity: initial_balance,
+                book_value_per_unit: Money::from(1),
+                cost_basis_per_unit: Money::from(1),
+            },
+        );
+
+        self.state.financial_system.clearing_house.csd.initialize_government_account(gov_id);
+
         Ok(())
     }
 }
 
 fn parse_tenor_to_date(tenor_str: &str, start_date: NaiveDate) -> Result<NaiveDate, String> {
-    let s = tenor_str
-        .strip_prefix('T')
-        .ok_or_else(|| format!("Invalid tenor format: {}", tenor_str))?;
+    let s = tenor_str.strip_prefix('T').ok_or_else(|| format!("Invalid tenor format: {}", tenor_str))?;
     if let Some(years_str) = s.strip_suffix('Y') {
         Ok(TimePeriod::Years(years_str.parse::<u32>().unwrap()).add_to_date(start_date))
     } else if let Some(months_str) = s.strip_suffix('M') {

@@ -30,3 +30,85 @@ impl AgentEffect {
         }
     }
 }
+
+impl StateEffectApplicator {
+    pub fn apply_agent_effect(state: &mut SimState, effect: &AgentEffect) -> Result<(), EffectError> {
+        match effect {
+            AgentEffect::UpdateRevenue { id: _, revenue: _ } => {
+                // TODO implement revenue tracking
+                Ok(())
+            }
+            AgentEffect::Produce {
+                firm: _,
+                good_id: _,
+                amount: _,
+            } => Ok(()),
+            AgentEffect::EstablishEmployment {
+                firm_id,
+                consumer_id,
+                contract,
+            } => {
+                let firm = state.agents.firms.get_mut(firm_id);
+                let consumer = state.agents.consumers.get_mut(consumer_id);
+
+                match (firm, consumer) {
+                    (Some(firm), Some(consumer)) => {
+                        firm.employees.insert(*consumer_id, contract.clone());
+                        consumer.employed_by = Some(*firm_id);
+                        consumer.hours_worked = contract.hours;
+                        consumer.income = contract.wage_rate * contract.hours;
+                        Ok(())
+                    }
+                    (None, _) => Err(EffectError::AgentNotFound { id: *firm_id }),
+                    (_, None) => Err(EffectError::AgentNotFound { id: *consumer_id }),
+                }
+            }
+            AgentEffect::TerminateEmployment {
+                firm_id,
+                consumer_id,
+            } => {
+                let firm = state.agents.firms.get_mut(firm_id);
+                let consumer = state.agents.consumers.get_mut(consumer_id);
+
+                match (firm, consumer) {
+                    (Some(firm), Some(consumer)) => {
+                        if firm.employees.contains_key(consumer_id)
+                            && consumer.employed_by == Some(*firm_id)
+                        {
+                            firm.employees.remove(consumer_id);
+                            consumer.employed_by = None;
+                            consumer.income = 0.0;
+                            consumer.hours_worked = 0.0;
+                            Ok(())
+                        } else {
+                            Err(EffectError::InvalidState(format!(
+                                "Employment relationship mismatch for termination between firm {} and consumer {}.",
+                                firm_id, consumer_id
+                            )))
+                        }
+                    }
+                    (None, _) => Err(EffectError::AgentNotFound { id: *firm_id }),
+                    (_, None) => Err(EffectError::AgentNotFound { id: *consumer_id }),
+                }
+            }
+            AgentEffect::UpdateIncome { id, new_income } => {
+                if let Some(consumer) = state.agents.consumers.get_mut(id) {
+                    consumer.income = *new_income;
+                    Ok(())
+                } else {
+                    Err(EffectError::AgentNotFound { id: *id })
+                }
+            }
+            AgentEffect::RecordDividendIncome { recipient, amount } => {
+                if let Some(consumer) = state.agents.consumers.get_mut(recipient) {
+                    consumer.income += *amount;
+                    Ok(())
+                } else if let Some(_firm) = state.agents.firms.get_mut(recipient) {
+                    Ok(())
+                } else {
+                    Err(EffectError::AgentNotFound { id: *recipient })
+                }
+            }
+        }
+    }
+}
