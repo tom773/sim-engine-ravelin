@@ -5,7 +5,6 @@ use rand::prelude::*;
 use sim_core::*;
 use std::time::Instant;
 use tracing::instrument;
-use tracing::{Level, event};
 use uuid::Uuid;
 
 fn execute_step<F>(step_fn: F) -> StepResult
@@ -22,18 +21,10 @@ where
 pub struct UpkeepHandler;
 
 impl StepHandler for UpkeepHandler {
-    fn execute(&self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
+    fn execute(&self, engine: &mut SimulationEngine, _context: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
         execute_step(|| {
             engine.state.advance_time();
-            let upkeep_actions = engine.process_financial_updates();
-            let (_, _, upkeep_effects) = engine.execute_actions(&upkeep_actions);
-
-            context.store("all_effects", &upkeep_effects)?;
-            Ok(serde_json::json!({
-                "date": engine.state.current_date.format("%Y-%m-%d").to_string(),
-                "upkeep_actions": upkeep_actions.len(),
-                "upkeep_effects": upkeep_effects.len()
-            }))
+            Ok(serde_json::json!({"current_date": engine.state.current_date, "tick_number": engine.state.ticknum}))
         })
     }
 }
@@ -171,26 +162,31 @@ impl StepHandler for SettleTradesHandler {
                 }));
             }
 
-            event!(Level::INFO, trade_count = trades.len(), "📋 Starting trade settlement through domain layer");
-
             let settlement_effects = engine.settle_trades(&trades);
 
             let mut all_effects = context.get_all_effects().unwrap_or_default();
             let effect_count = settlement_effects.len();
-            all_effects.extend(settlement_effects);
+            all_effects.extend(settlement_effects); // Still add to context for logging/history
             context.store("all_effects", &all_effects)?;
-
-            event!(
-                Level::INFO,
-                trades_processed = trades.len(),
-                effects_generated = effect_count,
-                "✅ Trade settlement prepared"
-            );
 
             Ok(serde_json::json!({
                 "trades_processed": trades.len(),
                 "settlement_effects": effect_count
             }))
+        })
+    }
+}
+#[derive(Debug)]
+pub struct ApplyPaymentQueuingHandler;
+impl StepHandler for ApplyPaymentQueuingHandler {
+    fn execute(&self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
+        execute_step(|| {
+            let count = engine.consume_effects(context, |effect| {
+                matches!(effect, StateEffect::Financial(
+                    FinancialEffect::QueuePayment(_) | FinancialEffect::RecordSettlementInstruction(_)
+                ))
+            })?;
+            Ok(serde_json::json!({ "payments_and_settlements_queued": count }))
         })
     }
 }
@@ -204,29 +200,18 @@ impl StepHandler for RunRTGSHandler {
         execute_step(|| {
             let initial_pending = engine.state.financial_system.rtgs.pending.len();
 
-            run_rtgs(&mut engine.state).map_err(|e| format!("RTGS execution failed: {:?}", e))?;
+            let finalization_effects = run_rtgs(&mut engine.state)
+                .map_err(|e| format!("RTGS execution failed: {:?}", e))?;
 
-            let mut finalization_effects = Vec::new();
-
-            for p in &engine.state.financial_system.rtgs.settled {
-                if let TransactionContext::TradeSettlement { trade_id } = p.context {
-                    finalization_effects.push(StateEffect::Financial(FinancialEffect::DvPFinalize { trade_id }));
-                }
-            }
-            for (p, _reason) in &engine.state.financial_system.rtgs.rejected {
-                if let TransactionContext::TradeSettlement { trade_id } = p.context {
-                    finalization_effects.push(StateEffect::Financial(FinancialEffect::DvPCancel { trade_id }));
-                }
-            }
             let mut all_effects: Vec<StateEffect> = context.get("all_effects").unwrap_or_default();
             all_effects.extend(finalization_effects);
-
             context.store("all_effects", &all_effects)?;
+
             let final_pending = engine.state.financial_system.rtgs.pending.len();
-            let settled_count = initial_pending - final_pending;
+            let settled_this_tick = initial_pending - final_pending;
 
             Ok(serde_json::json!({
-                "payments_settled": settled_count,
+                "payments_settled": settled_this_tick,
                 "payments_remaining": final_pending
             }))
         })
@@ -309,11 +294,6 @@ impl StepHandler for UpdateHistoryHandler {
                 events: engine.event_log.clone(),
             };
 
-            tracing::event!(
-                Level::INFO,
-                "\n\n===Custody Accounts: === {:#?}",
-                engine.state.financial_system.clearing_house.csd.custody_accounts
-            );
             engine.state.history.add_tick_record(tick_record);
             Ok(serde_json::Value::Null)
         })

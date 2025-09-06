@@ -123,6 +123,23 @@ impl Domain for TransactionsDomain {
     }
 
     fn settle_trade(&self, trade: &Trade, state: &SimState) -> DomainResult {
+        let (_, from_bank) = match state.financial_system.find_agent_liquid_account(&trade.buyer) {
+            Some((_, bank_id)) => ((), bank_id),
+            None => {
+                return DomainResult::failure(vec![format!("Could not find liquid account for buyer {}", trade.buyer)]);
+            }
+        };
+
+        let (_, to_bank) = match state.financial_system.find_agent_liquid_account(&trade.seller) {
+            Some((_, bank_id)) => ((), bank_id),
+            None => {
+                return DomainResult::failure(vec![format!(
+                    "Could not find liquid account for seller {}",
+                    trade.seller
+                )]);
+            }
+        };
+
         match &trade.market_id {
             MarketId::Financial(inst_id) => {
                 let mut effects = Vec::new();
@@ -139,20 +156,18 @@ impl Domain for TransactionsDomain {
                 };
 
                 effects.push(StateEffect::Financial(FinancialEffect::RecordSettlementInstruction(instruction)));
-                effects.push(
-                    StateEffect::Financial(FinancialEffect::QueuePayment(PaymentInstruction {
-                        id: Uuid::new_v4(),
-                        from_bank: state.agents.get_bank_for_agent(&trade.buyer).unwrap().id,
-                        to_bank: state.agents.get_bank_for_agent(&trade.seller).unwrap().id,
-                        payer: trade.buyer,
-                        payee: trade.seller,
-                        amount: (trade.price * trade.quantity).to_f64(),
-                        context: TransactionContext::TradeSettlement { trade_id: trade.trade_id },
-                        priority: PaymentPriority::Normal,
-                        earliest_release_tick: state.ticknum,
-                        deadline_tick: state.ticknum + 10,
-                    })
-                ));
+                effects.push(StateEffect::Financial(FinancialEffect::QueuePayment(PaymentInstruction {
+                    id: Uuid::new_v4(),
+                    from_bank, 
+                    to_bank, 
+                    payer: trade.buyer,
+                    payee: trade.seller,
+                    amount: (trade.price * trade.quantity).to_f64(),
+                    context: TransactionContext::TradeSettlement { trade_id: trade.trade_id },
+                    priority: PaymentPriority::Normal,
+                    earliest_release_tick: state.ticknum,
+                    deadline_tick: state.ticknum + 10,
+                })));
                 DomainResult::success(effects)
             }
             MarketId::Goods(good_id) => {

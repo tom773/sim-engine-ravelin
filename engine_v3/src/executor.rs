@@ -43,11 +43,8 @@ impl SimulationEngine {
             TickStep::ResolveIndependentPhase,
             PhaseResolutionHandler { phase: ResolutionPhase::Independent },
         );
-        scheduler.register_handler(TickStep::ApplyInstrumentCreation, ApplyInstrumentCreationHandler);
-        scheduler.register_handler(
-            TickStep::ResolveMarketPhase, 
-            PhaseResolutionHandler { phase: ResolutionPhase::Market }
-        );
+        scheduler
+            .register_handler(TickStep::ResolveMarketPhase, PhaseResolutionHandler { phase: ResolutionPhase::Market });
         scheduler.register_handler(TickStep::ApplyMarketEffectsForPriceDiscovery, ApplyMarketEffectsHandler);
         scheduler.register_handler(
             TickStep::ResolveDependentPhase,
@@ -55,9 +52,9 @@ impl SimulationEngine {
         );
         scheduler.register_handler(TickStep::Auction, DebtAuctionsHandler);
         scheduler.register_handler(TickStep::ClearMarkets, ClearMarketsHandler);
-        scheduler.register_handler(TickStep::StartSettlement, StartSettlementHandler);
+        scheduler.register_handler(TickStep::SettleTrades, SettleTradesHandler);
+        scheduler.register_handler(TickStep::ApplyPaymentQueuing, ApplyPaymentQueuingHandler); // ADD THIS
         scheduler.register_handler(TickStep::RunRTGS, RunRTGSHandler);
-        scheduler.register_handler(TickStep::FinalizeSettlement, FinalizeSettlementHandler); 
         scheduler.register_handler(TickStep::ApplyAllEffects, ApplyAllEffectsHandler);
         scheduler.register_handler(TickStep::UpdateHistory, UpdateHistoryHandler);
         scheduler
@@ -90,31 +87,6 @@ impl SimulationEngine {
             all_intentions.extend(model.decide(&self.state.financial_system.government, &self.state, rng));
         }
         all_intentions
-    }
-
-    pub fn process_financial_updates(&self) -> Vec<SimAction> {
-        let mut actions = Vec::new();
-        let current_date = self.state.current_date;
-        for (instrument_id, instrument) in &self.state.financial_system.instruments {
-            match &instrument.instrument_type {
-                InstrumentType::Cash(_) => {
-                    if is_last_day_of_month(current_date) {
-                        actions.push(SimAction::Settlement(SettlementAction::PayInterest {
-                            instrument_id: *instrument_id,
-                        }));
-                    }
-                }
-                InstrumentType::Bond(details) => {
-                    if is_coupon_date(current_date, details) {
-                        actions.push(SimAction::Settlement(SettlementAction::ProcessCouponPayment {
-                            instrument_id: *instrument_id,
-                        }));
-                    }
-                }
-                _ => {}
-            }
-        }
-        actions
     }
 
     pub fn execute_actions(
@@ -310,12 +282,42 @@ impl SimulationEngine {
 
         (agent_type, agent_name)
     }
+
+    pub fn consume_effects<F>(
+        &mut self, context: &mut crate::scheduler::StepContext, mut filter: F,
+    ) -> Result<usize, String>
+    where
+        F: FnMut(&StateEffect) -> bool,
+    {
+        let mut all_effects = context.get_all_effects().unwrap_or_default();
+
+        let mut effects_to_apply = Vec::new();
+        let mut remaining_effects = Vec::new();
+
+        for effect in all_effects.drain(..) {
+            if filter(&effect) {
+                effects_to_apply.push(effect);
+            } else {
+                remaining_effects.push(effect);
+            }
+        }
+
+        if effects_to_apply.is_empty() {
+            return Ok(0);
+        }
+
+        self.state.apply_effects(&effects_to_apply).map_err(|e| e.to_string())?;
+
+        context.store("all_effects", &remaining_effects)?;
+
+        Ok(effects_to_apply.len())
+    }
 }
 
-fn is_last_day_of_month(date: NaiveDate) -> bool {
+fn _is_last_day_of_month(date: NaiveDate) -> bool {
     date.month() != (date + chrono::Duration::days(1)).month()
 }
-fn is_coupon_date(date: NaiveDate, bond: &BondDetails) -> bool {
+fn _is_coupon_date(date: NaiveDate, bond: &BondDetails) -> bool {
     if bond.frequency == 0 {
         return false;
     }

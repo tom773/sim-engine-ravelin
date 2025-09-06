@@ -2,7 +2,6 @@ use crate::types::money::Money;
 use crate::*;
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::Entry;
-use tracing::{Level, event};
 use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -69,12 +68,6 @@ impl StateEffectApplicator {
                             .map_err(|e| EffectError::FinancialSystemError(e.to_string()))?;
                     }
 
-                    event!(Level::INFO,
-                        instrument_id = %instrument_id,
-                        creditor = %creditor,
-                        quantity = *quantity,
-                        "📈 Security created and credited ONLY in CSD"
-                    );
                 } else {
                     let book_value = match &inst.instrument_type {
                         InstrumentType::Cash(_) => 1.0,
@@ -94,13 +87,6 @@ impl StateEffectApplicator {
                             .map_err(EffectError::FinancialSystemError)?;
                     }
 
-                    event!(Level::INFO,
-                        instrument_id = %instrument_id,
-                        creditor = %creditor,
-                        debtor = %debtor,
-                        quantity = *quantity,
-                        "💵 Cash/RealAsset created ONLY in balance sheets"
-                    );
                 }
 
                 let final_inst = state.financial_system.instruments.get(&instrument_id).unwrap();
@@ -150,10 +136,6 @@ impl StateEffectApplicator {
             FinancialEffect::DvPFinalize { trade_id } => {
                 match state.financial_system.clearing_house.csd.finalize_book_entry_transfer(trade_id) {
                     Ok(_) => {
-                        event!(Level::INFO,
-                            trade_id = %trade_id.to_string()[..8],
-                            "✅ DvP fully settled - securities transferred in CSD"
-                        );
                         Ok(())
                     }
                     Err(e) => {
@@ -196,7 +178,7 @@ impl StateEffectApplicator {
             PositionSide::Liability => &mut bs.liabilities,
         };
 
-        let new_qty: f64 = match positions.entry(instrument_id) {
+        let _new_qty: f64 = match positions.entry(instrument_id) {
             Entry::Occupied(mut e) => {
                 let pos = e.get_mut();
                 pos.quantity += quantity_change;
@@ -222,16 +204,6 @@ impl StateEffectApplicator {
                 }
             }
         };
-
-        event!(
-            Level::DEBUG,
-            agent = %agent_id,
-            instrument = %instrument_id,
-            side = ?side,
-            change = quantity_change,
-            new_quantity = new_qty,
-            "💵 Cash position adjusted"
-        );
 
         Ok(())
     }

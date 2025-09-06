@@ -2,7 +2,7 @@ use crate::*;
 use tracing::{Level, event};
 use uuid::Uuid;
 
-// Modify the signature and implementation
+
 pub fn run_rtgs(state: &mut SimState) -> Result<Vec<StateEffect>, EffectError> {
     if !state.financial_system.rtgs_policy.enabled {
         return Ok(vec![]);
@@ -20,17 +20,10 @@ fn run_pure_rtgs(state: &mut SimState) -> Result<Vec<StateEffect>, EffectError> 
     let current_tick = state.ticknum;
     let mut finalization_effects = Vec::new();
 
-    event!(
-        Level::INFO,
-        tick = current_tick,
-        pending_count = state.financial_system.rtgs.pending.len(),
-        "🏦 Starting RTGS processing with effect generation"
-    );
-
     loop {
         let mut progressed = false;
 
-        // Sort by priority
+
         state.financial_system.rtgs.pending.sort_by(|a, b| {
             use PaymentPriority::*;
             let priority_order = |p: &PaymentPriority| match p {
@@ -55,20 +48,12 @@ fn run_pure_rtgs(state: &mut SimState) -> Result<Vec<StateEffect>, EffectError> 
             let can_use_credit = can_use_daylight_credit(state, &pi)?;
 
             if can_fund_result || can_use_credit {
-                // Apply the cash movements
                 apply_cash_movements_immediately(state, &pi)?;
 
-                // Generate finalization effect for trade settlements
                 if let TransactionContext::TradeSettlement { trade_id } = pi.context {
                     finalization_effects.push(StateEffect::Financial(
                         FinancialEffect::DvPFinalize { trade_id }
                     ));
-                    
-                    event!(Level::INFO,
-                        payment_id = %pi.id.to_string()[..8],
-                        trade_id = %trade_id.to_string()[..8],
-                        "💰 Cash leg settled - generating DvP finalization effect"
-                    );
                 }
 
                 let settled_payment = state.financial_system.rtgs.pending.remove(i);
@@ -78,7 +63,6 @@ fn run_pure_rtgs(state: &mut SimState) -> Result<Vec<StateEffect>, EffectError> 
                 if current_tick >= pi.deadline_tick {
                     let expired_payment = state.financial_system.rtgs.pending.remove(i);
                     
-                    // Generate cancellation effect for failed trade settlements
                     if let TransactionContext::TradeSettlement { trade_id } = expired_payment.context {
                         finalization_effects.push(StateEffect::Financial(
                             FinancialEffect::DvPCancel { trade_id }
@@ -106,15 +90,6 @@ fn run_pure_rtgs(state: &mut SimState) -> Result<Vec<StateEffect>, EffectError> 
             break;
         }
     }
-
-    event!(
-        Level::INFO,
-        settled_count = state.financial_system.rtgs.settled.len(),
-        pending_count = state.financial_system.rtgs.pending.len(),
-        rejected_count = state.financial_system.rtgs.rejected.len(),
-        finalization_effects = finalization_effects.len(),
-        "🏦 RTGS processing completed with effects"
-    );
 
     Ok(finalization_effects)
 }
@@ -559,7 +534,6 @@ pub fn settle_one_payment(state: &mut SimState, payment_id: PaymentId) -> Result
     apply_cash_movements_immediately(state, &payment)?;
 
     let settled_payment = state.financial_system.rtgs.pending.remove(payment_idx);
-    event!(Level::INFO, "Settled payment: {:?}", settled_payment.clone().id);
     state.financial_system.rtgs.settled.push(settled_payment);
 
     Ok(())

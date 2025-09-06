@@ -1,11 +1,21 @@
 use crate::scenario::{AssetConfig, BankConfig, ConsumerConfig, FirmConfig, LiabilityConfig};
 use chrono::{Duration, NaiveDate};
 use rand::prelude::*;
-use rust_decimal::prelude::*; // Import ToPrimitive trait
+use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
 use sim_core::prelude::*;
 use std::collections::HashMap;
 use uuid::Uuid;
+
+fn is_security(inst: &Instrument) -> bool {
+    matches!(
+        inst.instrument_type,
+        InstrumentType::Bond(_)
+            | InstrumentType::Equity(_)
+            | InstrumentType::StructuredTranche(_)
+            | InstrumentType::Derivative(_)
+    )
+}
 
 pub struct AgentFactory<'a> {
     pub state: &'a mut SimState,
@@ -21,13 +31,41 @@ impl<'a> AgentFactory<'a> {
         &mut self, owner_id: AgentId, issuer_id: AgentId, instrument: Instrument, quantity: f64,
         book_value_per_unit: f64,
     ) -> Result<(), String> {
-        self.state.financial_system.create_or_consolidate_instrument(
-            owner_id,
-            issuer_id,
-            instrument,
-            quantity,
-            book_value_per_unit,
-        )?;
+        let inst_id = instrument.id;
+        let is_sec = is_security(&instrument);
+
+        let instrument_clone_for_csd = instrument.clone();
+        self.state.financial_system.instruments.insert(inst_id, instrument);
+
+        if is_sec {
+            self.state.financial_system.clearing_house.csd
+                .register_security(inst_id, &instrument_clone_for_csd, self.state.current_date)
+                .map_err(|e| e.to_string())?;
+
+            if quantity > 0.0 {
+                self.state.financial_system.clearing_house.csd
+                    .credit_securities(owner_id, inst_id, quantity)
+                    .map_err(|e| e.to_string())?;
+            }
+
+            let book_value_money = Money::from_f64(book_value_per_unit).unwrap_or(Money::ZERO);
+            let issuer_bs = self.state.financial_system.balance_sheets.get_mut(&issuer_id).ok_or("Issuer not found")?;
+            let liability_pos = issuer_bs.liabilities.entry(inst_id).or_insert_with(|| Position {
+                quantity: 0.0,
+                book_value_per_unit: book_value_money,
+                cost_basis_per_unit: book_value_money,
+            });
+            liability_pos.quantity += quantity;
+
+        } else {
+            self.state.financial_system.create_or_consolidate_position(
+                &owner_id,
+                &issuer_id,
+                &inst_id,
+                quantity,
+                book_value_per_unit,
+            )?;
+        }
         Ok(())
     }
 
@@ -85,8 +123,8 @@ impl<'a> AgentFactory<'a> {
             firm.id,
             firm.id,
             inventory_instrument,
-            1.0, // Represents one 'inventory' asset on the balance sheet
-            0.0, // Initial book value is zero, determined by contents
+            1.0,
+            0.0,
         )
         .unwrap();
 
@@ -222,10 +260,10 @@ impl<'a> AgentFactory<'a> {
 
         let tga = Instrument::cash(
             InstrumentId(Uuid::new_v4()),
-            cb_id, // Issuer is central bank
+            cb_id,
             CashType::TreasuryGeneralAccount,
             Currency::USD,
-            dec!(0), // No interest on TGA
+            dec!(0),
         )
         .build();
 

@@ -72,13 +72,6 @@ fn handle_funding(
 
         let deficit = (tga_target - current_balance).max(0.0) + 500_000.0;
 
-        tracing::event!(
-            tracing::Level::INFO,
-            "Government has a deficit of ${}, current balance is ${}. Planning to issue debt.",
-            deficit,
-            current_balance
-        );
-
         let current_date = state.current_date;
 
         let maturity_date = TimePeriod::Years(5).add_to_date(current_date);
