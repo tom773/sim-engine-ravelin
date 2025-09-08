@@ -19,11 +19,22 @@ impl Domain for BankingDomain {
 
     fn resolve_intention(&self, intention: &SimIntention, context: &ResolutionContext) -> Option<ResolutionResult> {
         let actions = match intention {
-            SimIntention::LendExcessReserves { agent_id, amount, target_rate_bps } => {
+            SimIntention::Banking(BankingIntention::LendExcessReserves { agent_id, amount, target_rate_bps }) => {
                 self.resolve_reserve_lending(*agent_id, *amount, *target_rate_bps, context.state)
             }
-            SimIntention::BorrowReserves { agent_id, amount, target_rate_bps } => {
+            SimIntention::Banking(BankingIntention::BorrowReserves { agent_id, amount, target_rate_bps }) => {
                 self.resolve_reserve_borrowing(*agent_id, *amount, *target_rate_bps, context.state)
+            }
+            SimIntention::Banking(BankingIntention::RequestLoan { agent_id, bank_id, amount, purpose, collateral }) => {
+                self.resolve_loan_request(*agent_id, *bank_id, *amount, purpose.clone(), collateral.clone())
+            }
+
+            SimIntention::Banking(BankingIntention::ApproveLoan { bank_id, borrower_id, amount: _, terms }) => {
+                self.resolve_loan_approval(*bank_id, *borrower_id, terms.clone())
+            }
+
+            SimIntention::Banking(BankingIntention::RejectLoan { bank_id, borrower_id, application_id, reason }) => {
+                self.resolve_loan_rejection(*bank_id, *borrower_id, *application_id, reason.clone())
             }
             _ => return None,
         };
@@ -33,9 +44,8 @@ impl Domain for BankingDomain {
 
     fn resolution_phase(&self, intention: &SimIntention) -> Option<ResolutionPhase> {
         match intention {
-            SimIntention::LendExcessReserves { .. } | SimIntention::BorrowReserves { .. } => {
-                Some(ResolutionPhase::Market)
-            }
+            SimIntention::Banking(BankingIntention::LendExcessReserves { .. })
+            | SimIntention::Banking(BankingIntention::BorrowReserves { .. }) => Some(ResolutionPhase::Market),
             _ => None,
         }
     }
@@ -51,12 +61,22 @@ impl Domain for BankingDomain {
         }
 
         match banking_action {
-            BankingAction::PostInterbankLendingOffer { .. } | 
-            BankingAction::PostInterbankBorrowingRequest { .. } => {
+            BankingAction::PostInterbankLendingOffer { .. } | BankingAction::PostInterbankBorrowingRequest { .. } => {
                 DomainResult::success(vec![])
             }
             BankingAction::ExecuteInterbankLoan { lender_id, borrower_id, amount, rate_bps } => {
                 self.execute_interbank_loan(*lender_id, *borrower_id, *amount, *rate_bps, state)
+            }
+            BankingAction::CreateLoanApplication { bank_id, application } => {
+                self.execute_create_loan_application(*bank_id, application.clone())
+            }
+
+            BankingAction::ProcessLoanApplication { bank_id, application_id, decision } => {
+                self.execute_process_loan_application(*bank_id, *application_id, decision.clone(), state)
+            }
+
+            BankingAction::OriginateLoan { lender_id, borrower_id, loan_terms, application_id } => {
+                self.execute_loan_origination(*lender_id, *borrower_id, loan_terms.clone(), *application_id, state)
             }
         }
     }
@@ -102,16 +122,68 @@ impl BankingDomain {
                 Validator::bank_exists(*lender_id, state)?;
                 Validator::bank_exists(*borrower_id, state)
             }
+            BankingAction::OriginateLoan { lender_id, borrower_id, loan_terms, .. } => {
+                Validator::bank_exists(*lender_id, state)?;
+                Validator::agent_exists(*borrower_id, state)?;
+                Validator::positive_amount(loan_terms.principal)?;
+                if loan_terms.term_months == 0 {
+                    return Err("Loan term must be greater than zero".to_string());
+                }
+                Ok(())
+            }
+            BankingAction::CreateLoanApplication { bank_id, application } => {
+                Validator::bank_exists(*bank_id, state)?;
+                Validator::positive_amount(application.requested_amount)
+            }
+            BankingAction::ProcessLoanApplication { bank_id, application_id: _, .. } => {
+                Validator::bank_exists(*bank_id, state)
+            }
         }
     }
+    pub fn resolve_loan_approval(
+        &self, bank_id: AgentId, borrower_id: AgentId, terms: LoanTerms 
+    ) -> Vec<SimAction> {
+        let application_id = Uuid::new_v4(); // In real case, would track the actual application ID
+        vec![SimAction::Banking(BankingAction::OriginateLoan {
+            lender_id: bank_id,
+            borrower_id,
+            loan_terms: terms,
+            application_id,
+        })]
+    }
+    pub fn resolve_loan_request(
+        &self, borrower_id: AgentId, bank_id: AgentId, amount: f64, purpose: LoanPurpose,
+        collateral: Option<Vec<InstrumentId>>,
+    ) -> Vec<SimAction> {
+        let application = LoanApplication {
+            application_id: Uuid::new_v4(),
+            borrower_id,
+            requested_amount: amount,
+            purpose,
+            proposed_collateral: collateral,
+            borrower_income: None, // Will be filled in by bank during underwriting
+            debt_to_income_ratio: None,
+            application_date: chrono::Utc::now().date_naive(),
+            status: ApplicationStatus::Pending,
+        };
 
+        vec![SimAction::Banking(BankingAction::CreateLoanApplication { bank_id, application })]
+    }
+    pub fn resolve_loan_rejection(
+        &self, bank_id: AgentId, _borrower_id: AgentId, application_id: Uuid, reason: String,
+    ) -> Vec<SimAction> {
+        vec![SimAction::Banking(BankingAction::ProcessLoanApplication {
+            bank_id,
+            application_id,
+            decision: LoanDecision::Reject { reason },
+        })]
+    } 
     fn execute_interbank_loan(
         &self, lender_id: AgentId, borrower_id: AgentId, amount: f64, rate_bps: BasisPoints, state: &SimState,
     ) -> DomainResult {
         let current_date = state.current_date;
         let maturity_date = current_date + chrono::Duration::days(1); // Overnight loan
 
-        // Create the interbank loan bond
         let loan_instrument = match Instrument::bond(
             InstrumentId(Uuid::new_v4()),
             borrower_id,
@@ -133,7 +205,6 @@ impl BankingDomain {
 
         let loan_id = loan_instrument.id;
 
-        // Create the bond - this will be routed to CSD automatically
         let mut effects = vec![StateEffect::Financial(FinancialEffect::CreateInstrument {
             instrument: loan_instrument,
             creditor: lender_id,
@@ -141,7 +212,6 @@ impl BankingDomain {
             quantity: 1.0,
         })];
 
-        // Queue the payment through RTGS
         let payment_instruction = PaymentInstruction {
             id: Uuid::new_v4(),
             from_bank: lender_id,
@@ -149,11 +219,7 @@ impl BankingDomain {
             payer: lender_id,
             payee: borrower_id,
             amount,
-            context: TransactionContext::GenericTransfer {
-                from: lender_id,
-                to: borrower_id,
-                amount,
-            },
+            context: TransactionContext::GenericTransfer { from: lender_id, to: borrower_id, amount },
             priority: PaymentPriority::Urgent, // Interbank is high priority
             earliest_release_tick: state.ticknum,
             deadline_tick: state.ticknum + 1,
@@ -161,7 +227,6 @@ impl BankingDomain {
 
         effects.push(StateEffect::Financial(FinancialEffect::QueuePayment(payment_instruction)));
 
-        // Record the transaction
         effects.push(StateEffect::Financial(FinancialEffect::RecordTransaction(Transaction {
             id: Uuid::new_v4(),
             from_agent: lender_id,
@@ -175,6 +240,91 @@ impl BankingDomain {
 
         DomainResult::success(effects)
     }
+    fn execute_create_loan_application(&self, _bank_id: AgentId, application: LoanApplication) -> DomainResult {
+        println!("📋 Loan application received: ${:.0} for {:?}", application.requested_amount, application.purpose);
+        DomainResult::empty()
+    }
+
+    fn execute_process_loan_application(
+        &self, bank_id: AgentId, application_id: Uuid, decision: LoanDecision, state: &SimState,
+    ) -> DomainResult {
+        match decision {
+            LoanDecision::Approve { terms } => {
+                let borrower_id = AgentId::default(); // Would look up from application
+
+                self.execute_loan_origination(bank_id, borrower_id, terms, application_id, state)
+            }
+            LoanDecision::Reject { reason } => {
+                println!("❌ Loan application {} rejected: {}", application_id, reason);
+                DomainResult::empty()
+            }
+            LoanDecision::CounterOffer { alternative_terms } => {
+                println!("🔄 Loan application {} - counter offer: ${:.0}", application_id, alternative_terms.principal);
+                DomainResult::empty()
+            }
+        }
+    }
+
+    fn execute_loan_origination(
+        &self, lender_id: AgentId, borrower_id: AgentId, loan_terms: LoanTerms, _application_id: Uuid, state: &SimState,
+    ) -> DomainResult {
+        let issue_date = state.current_date;
+        let maturity_date = issue_date + chrono::Duration::days((loan_terms.term_months * 30) as i64);
+
+        let loan_instrument = match Instrument::bond(
+            InstrumentId(Uuid::new_v4()),
+            borrower_id,         // Borrower is the issuer of the debt
+            BondType::Corporate, // Or Personal for consumer loans
+            Money::from_f64(loan_terms.principal).unwrap_or(Money::ZERO),
+            issue_date,
+            maturity_date,
+        )
+        .coupon_bps(loan_terms.annual_rate_bps)
+        .frequency(match loan_terms.payment_frequency {
+            PaymentFrequency::Monthly => 12,
+            PaymentFrequency::Quarterly => 4,
+            PaymentFrequency::SemiAnnual => 2,
+            PaymentFrequency::Annual => 1,
+            PaymentFrequency::InterestOnly => 0,
+        })
+        .rating(CreditRating::BBB) // Would be determined by underwriting
+        .build()
+        {
+            Ok(instrument) => instrument,
+            Err(e) => return DomainResult::failure(vec![format!("Failed to build loan: {}", e)]),
+        };
+
+        let deposit_instrument = Instrument::cash(
+            InstrumentId(Uuid::new_v4()),
+            lender_id, // Bank is the issuer of the deposit liability
+            CashType::DemandDeposit,
+            Currency::USD,
+            state.financial_system.central_bank.policy_rate_bps,
+        )
+        .build();
+
+        let effects = vec![
+            StateEffect::Financial(FinancialEffect::CreateInstrument {
+                instrument: loan_instrument,
+                creditor: lender_id, // Bank owns the loan asset
+                debtor: borrower_id, // Borrower has the liability
+                quantity: 1.0,       // One loan contract
+            }),
+            StateEffect::Financial(FinancialEffect::CreateInstrument {
+                instrument: deposit_instrument,
+                creditor: borrower_id, // Borrower owns the deposit asset
+                debtor: lender_id,     // Bank has the deposit liability
+                quantity: loan_terms.principal,
+            }),
+        ];
+
+        println!(
+            "💰 CREDIT CREATED: Bank {} originated ${:.0} loan to {}",
+            lender_id, loan_terms.principal, borrower_id
+        );
+
+        DomainResult::success(effects)
+    }
 }
 
 inventory::submit! {
@@ -183,4 +333,3 @@ inventory::submit! {
         constructor: || Box::new(BankingDomain::new()),
     }
 }
-

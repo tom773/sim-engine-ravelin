@@ -85,7 +85,6 @@ pub struct BalanceSheetUpdateEvent {
     pub side: PositionSide,
 }
 
-// Comprehensive TransactionEventContext, including chain_id for Phase 4
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TransactionEventContext {
     pub purpose: String,
@@ -93,7 +92,6 @@ pub struct TransactionEventContext {
     pub metadata: HashMap<String, String>,
 }
 
-// 1. Payment Lifecycle Events
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PaymentLifecycleEvent {
     pub payment_id: Uuid,
@@ -117,7 +115,6 @@ pub enum PaymentStage {
     Rejected { reason: String },
 }
 
-// 2. Balance Sheet Change Events
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BalanceChangeEvent {
     pub agent_id: AgentId,
@@ -143,7 +140,6 @@ pub enum ChangeReason {
     TaxPayment { government: AgentId },
 }
 
-// 3. Banking System Events
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BankingSystemEvent {
     pub event_type: BankingEventType,
@@ -160,9 +156,9 @@ pub enum BankingEventType {
     DepositCreation { for_agent: AgentId, account_id: String },
     LiquidityInjection { from_central_bank: bool },
     InterbankTransfer { to_bank: AgentId, reference: String },
+    CreditCreation { to_agent: AgentId, instrument_id: InstrumentId },
 }
 
-// 4. Market Activity Events
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum OrderSide {
     Buy,
@@ -186,7 +182,6 @@ pub enum MarketActivityType {
     PriceUpdate { new_bid: Option<Money>, new_ask: Option<Money> },
 }
 
-// 5. Economic Indicator Events
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EconomicIndicatorEvent {
     pub indicator: IndicatorType,
@@ -205,7 +200,6 @@ pub enum IndicatorType {
     BankReserveRatio,
 }
 
-// 6. Money Flow Chain Events
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MoneyFlowChainEvent {
     pub chain_id: Uuid,

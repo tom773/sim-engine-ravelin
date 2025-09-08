@@ -19,26 +19,26 @@ impl Domain for MonetaryDomain {
 
     fn resolve_intention(&self, intention: &SimIntention, _context: &ResolutionContext) -> Option<ResolutionResult> {
         let actions = match intention {
-            SimIntention::ConductOMO { cb_id, operation_type, amount } => {
+            SimIntention::Monetary(MonetaryIntention::ConductOMO { cb_id, operation_type, amount }) => {
                 vec![SimAction::Monetary(MonetaryAction::OpenMarketOperation {
                     cb_id: *cb_id,
                     operation_type: *operation_type,
                     amount: *amount,
                 })]
             }
-            SimIntention::SetPolicyRate { cb_id, new_rate_bps } => {
+            SimIntention::Monetary(MonetaryIntention::SetPolicyRate { cb_id, new_rate_bps }) => {
                 vec![SimAction::Monetary(MonetaryAction::SetPolicyRate {
                     cb_id: *cb_id,
                     rate_bps: *new_rate_bps,
                 })]
             }
-            SimIntention::AdjustReserveRequirement { cb_id, new_ratio } => {
+            SimIntention::Monetary(MonetaryIntention::AdjustReserveRequirement { cb_id, new_ratio }) => {
                 vec![SimAction::Monetary(MonetaryAction::SetReserveRequirement {
                     cb_id: *cb_id,
                     ratio: *new_ratio,
                 })]
             }
-            SimIntention::ProvideLiquidityFacility { cb_id, bank_id, amount, collateral } => {
+            SimIntention::Monetary(MonetaryIntention::ProvideLiquidityFacility { cb_id, bank_id, amount, collateral })=> {
                 vec![SimAction::Monetary(MonetaryAction::ProvideLiquidityAssistance {
                     cb_id: *cb_id,
                     bank_id: *bank_id,
@@ -54,10 +54,10 @@ impl Domain for MonetaryDomain {
 
     fn resolution_phase(&self, intention: &SimIntention) -> Option<ResolutionPhase> {
         match intention {
-            SimIntention::ConductOMO { .. } => Some(ResolutionPhase::Market),
-            SimIntention::SetPolicyRate { .. } | 
-            SimIntention::AdjustReserveRequirement { .. } => Some(ResolutionPhase::Independent),
-            SimIntention::ProvideLiquidityFacility { .. } => Some(ResolutionPhase::Independent),
+            SimIntention::Monetary(MonetaryIntention::ConductOMO { .. }) => Some(ResolutionPhase::Market),
+            SimIntention::Monetary(MonetaryIntention::SetPolicyRate { .. }) | 
+            SimIntention::Monetary(MonetaryIntention::AdjustReserveRequirement { .. }) => Some(ResolutionPhase::Independent),
+            SimIntention::Monetary(MonetaryIntention::ProvideLiquidityFacility { .. }) => Some(ResolutionPhase::Independent),
             _ => None,
         }
     }

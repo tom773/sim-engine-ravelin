@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 use rust_decimal::prelude::*;
-
+use chrono::Datelike;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SimpleConsumerDecisionModel {
     pub mpc: f64,
@@ -44,7 +44,7 @@ impl DecisionModel for SimpleConsumerDecisionModel {
         let save_amount = total_resources - budget;
 
         self.make_purchases(consumer, budget, &mut intentions);
-
+        self.apply_for_loan(consumer, state, &mut intentions);
         if save_amount > 1.0 {
         }
 
@@ -74,24 +74,37 @@ impl SimpleConsumerDecisionModel {
                 hours_desired: 40.0,
             };
 
-            intentions.push(SimIntention::ApplyForJob {
+            intentions.push(SimIntention::Production(ProductionIntention::ApplyForJob {
                 agent_id: consumer.id,
                 market_id,
                 application,
-            });
+            }));
         }
     }
+    fn apply_for_loan(&self, consumer: &Consumer, state: &SimState, intentions: &mut Vec<SimIntention>) {
+        let fs = &state.financial_system;
+        let _liquid_assets = fs.get_liquid_assets(&consumer.id);
+        if state.current_date.day() == 4 {
 
+            intentions.push(SimIntention::Banking(BankingIntention::RequestLoan {
+                bank_id: consumer.bank_id,
+                agent_id: consumer.id,
+                amount: 1000.0,
+                purpose: LoanPurpose::PersonalConsumption,
+                collateral: None,
+            }));
+        }
+    }
     fn make_purchases(&self, consumer: &Consumer, budget: f64, intentions: &mut Vec<SimIntention>) {
         for (good_id, budget_share) in &self.consumption_basket {
             let allocation = budget * budget_share;
             
             if allocation > 0.01 {
-                intentions.push(SimIntention::SpendOnGood {
+                intentions.push(SimIntention::Consumption(ConsumptionIntention::SpendOnGood {
                     agent_id: consumer.id,
                     good_id: *good_id,
                     max_notional: allocation,
-                });
+                }));
             }
         }
     }
@@ -180,11 +193,11 @@ impl CESConsumerDecisionModel {
                 hours_desired: 40.0,
             };
 
-            intentions.push(SimIntention::ApplyForJob {
+            intentions.push(SimIntention::Production(ProductionIntention::ApplyForJob {
                 agent_id: consumer.id,
                 market_id,
                 application,
-            });
+            }));
         }
     }
 
@@ -224,11 +237,11 @@ impl CESConsumerDecisionModel {
             let notional = share * budget;
 
             if notional > 0.01 {
-                intentions.push(SimIntention::SpendOnGood {
+                intentions.push(SimIntention::Consumption(ConsumptionIntention::SpendOnGood {
                     agent_id: consumer.id,
                     good_id: *good_id,
                     max_notional: notional,
-                });
+                }));
             }
         }
     }

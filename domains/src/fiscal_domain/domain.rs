@@ -19,7 +19,7 @@ impl Domain for FiscalDomain {
 
     fn resolve_intention(&self, intention: &SimIntention, context: &ResolutionContext) -> Option<ResolutionResult> {
         let actions = match intention {
-            SimIntention::AnnounceDebtAuction { government_id, maturity_date, coupon_rate, quantity_to_issue } => {
+            SimIntention::Fiscal(FiscalIntention::AnnounceDebtAuction { government_id, maturity_date, coupon_rate, quantity_to_issue }) => {
                 const FACE_VALUE: f64 = 1000.0;
                 let issue_date = context.state.current_date;
 
@@ -48,7 +48,7 @@ impl Domain for FiscalDomain {
                     coupon_rate: *coupon_rate,
                 })]
             }
-            SimIntention::BidInDebtAuction { agent_id, auction_id, quantity, bid_price } => {
+            SimIntention::Fiscal(FiscalIntention::BidInDebtAuction { agent_id, auction_id, quantity, bid_price }) => {
                 vec![SimAction::Fiscal(FiscalAction::BidInDebtAuction {
                     agent_id: *agent_id,
                     auction_id: *auction_id,
@@ -63,8 +63,8 @@ impl Domain for FiscalDomain {
 
     fn resolution_phase(&self, intention: &SimIntention) -> Option<ResolutionPhase> {
         match intention {
-            SimIntention::AnnounceDebtAuction { .. } => Some(ResolutionPhase::Independent),
-            SimIntention::BidInDebtAuction { .. } => Some(ResolutionPhase::Market),
+            SimIntention::Fiscal(FiscalIntention::AnnounceDebtAuction { .. }) => Some(ResolutionPhase::Independent),
+            SimIntention::Fiscal(FiscalIntention::BidInDebtAuction { .. }) => Some(ResolutionPhase::Market),
             _ => None,
         }
     }

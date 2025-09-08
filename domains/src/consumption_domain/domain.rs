@@ -32,14 +32,14 @@ impl Domain for ConsumptionDomain {
 
     fn resolve_intention(&self, intention: &SimIntention, _context: &ResolutionContext) -> Option<ResolutionResult> {
         let actions = match intention {
-            SimIntention::ApplyForJob { agent_id: _, market_id, application } => {
+            SimIntention::Production(ProductionIntention::ApplyForJob { agent_id: _, market_id, application }) => {
                 vec![SimAction::Transaction(TransactionAction::PostJobApplication {
                     market_id: *market_id,
                     application: application.clone(),
                 })]
             }
 
-            SimIntention::ConsumeGood { agent_id, good_id, quantity } => {
+            SimIntention::Consumption(ConsumptionIntention::ConsumeGood { agent_id, good_id, quantity }) => {
                 vec![SimAction::Consumption(ConsumptionAction::Consume {
                     agent_id: *agent_id,
                     good_id: *good_id,
@@ -47,7 +47,7 @@ impl Domain for ConsumptionDomain {
                 })]
             }
 
-            SimIntention::SpendOnGood { agent_id, good_id, max_notional } => {
+            SimIntention::Consumption(ConsumptionIntention::SpendOnGood { agent_id, good_id, max_notional }) => {
                 // TODO Resolve this to use the basket of goods in the future
                 vec![SimAction::Transaction(TransactionAction::PostMarketOrder {
                     agent_id: *agent_id,
@@ -67,9 +67,9 @@ impl Domain for ConsumptionDomain {
 
     fn resolution_phase(&self, intention: &SimIntention) -> Option<ResolutionPhase> {
         match intention {
-            SimIntention::ApplyForJob { .. } => Some(ResolutionPhase::Independent),
-            SimIntention::ConsumeGood { .. } => Some(ResolutionPhase::Independent),
-            SimIntention::SpendOnGood { .. } => Some(ResolutionPhase::Market),
+            SimIntention::Production(ProductionIntention::ApplyForJob { .. }) => Some(ResolutionPhase::Independent),
+            SimIntention::Consumption(ConsumptionIntention::ConsumeGood { .. }) => Some(ResolutionPhase::Independent),
+            SimIntention::Consumption(ConsumptionIntention::SpendOnGood { .. }) => Some(ResolutionPhase::Market),
             _ => None,
         }
     }

@@ -60,11 +60,11 @@ impl ProductionFirmDecisionModel {
 
             let positions_to_fill = self.target_employees - current_employees;
 
-            intentions.push(SimIntention::HireWorkers {
+            intentions.push(SimIntention::Production(ProductionIntention::HireWorkers {
                 agent_id: firm.id,
                 count: positions_to_fill as u32,
                 wage_rate: self.base_wage,
-            });
+            }));
         }
     }
 
@@ -86,11 +86,11 @@ impl ProductionFirmDecisionModel {
                 });
 
                 if can_produce {
-                    intentions.push(SimIntention::Produce {
+                    intentions.push(SimIntention::Production(ProductionIntention::Produce {
                         agent_id: firm.id,
                         recipe_id,
                         batches: 1,
-                    });
+                    }));
                 }
             }
         }
@@ -101,11 +101,11 @@ impl ProductionFirmDecisionModel {
             for (employee_id, contract) in &firm.employees {
                 let fortnightly_wage = (contract.wage_rate * contract.hours) * 2.0;
                 if fortnightly_wage > 0.0 {
-                    intentions.push(SimIntention::PayWages {
+                    intentions.push(SimIntention::Transaction(TransactionIntention::PayWages {
                         employer: firm.id,
                         employee: *employee_id,
                         amount: fortnightly_wage,
-                    });
+                    }));
                 }
             }
         }
@@ -118,12 +118,12 @@ impl ProductionFirmDecisionModel {
         for (good_id, item) in inventory {
             if item.quantity > 0.1 {
                 let ask_price = item.unit_cost.to_f64() * self.target_markup;
-                intentions.push(SimIntention::PostGoodToMarket {
+                intentions.push(SimIntention::Production(ProductionIntention::PostGoodToMarket {
                     agent_id: firm.id,
                     good_id,
                     quantity: item.quantity * 0.2,
                     ask_price,
-                });
+                }));
             }
         }
     }
@@ -151,12 +151,12 @@ impl ProductionFirmDecisionModel {
 
                         let max_price = 100.0;
 
-                        intentions.push(SimIntention::PurchaseInputs {
+                        intentions.push(SimIntention::Production(ProductionIntention::PurchaseInputs {
                             agent_id: firm.id,
                             good_id: input.good_id,
                             quantity: buy_qty,
                             max_price,
-                        });
+                        }));
                     }
                 }
             }
@@ -234,13 +234,13 @@ impl InvestmentFirmDecisionModel {
                         if self.should_make_market_for_ytm(ytm) {
                             let (bid_bps, ask_bps) = self.calculate_yield_quotes(ytm, fs, rng);
 
-                            intentions.push(SimIntention::MarketMakeTreasuries {
+                            intentions.push(SimIntention::Banking(BankingIntention::MarketMakeTreasuries {
                                 agent_id: firm.id,
                                 maturity_date: details.maturity_date,
                                 quantity: self.quote_qty,
                                 bid_yield_bps: bid_bps,
                                 ask_yield_bps: ask_bps,
-                            });
+                            }));
                         }
                     }
                 }
@@ -287,12 +287,12 @@ impl InvestmentFirmDecisionModel {
                     let quantity_to_bid = (auction_budget / bid_price.to_f64()).floor() as u32;
 
                     if quantity_to_bid > 0 {
-                        intentions.push(SimIntention::BidInDebtAuction {
+                        intentions.push(SimIntention::Fiscal(FiscalIntention::BidInDebtAuction {
                             agent_id: firm.id,
                             auction_id: auction.auction_id,
                             quantity: quantity_to_bid,
                             bid_price,
-                        });
+                        }));
                     }
                 }
             }

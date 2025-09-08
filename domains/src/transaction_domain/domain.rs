@@ -19,7 +19,7 @@ impl Domain for TransactionsDomain {
 
     fn resolve_intention(&self, intention: &SimIntention, context: &ResolutionContext) -> Option<ResolutionResult> {
         let actions = match intention {
-            SimIntention::PayWages { employer, employee, amount } => {
+            SimIntention::Transaction(TransactionIntention::PayWages { employer, employee, amount }) => {
                 vec![SimAction::Transaction(TransactionAction::InitiatePayment {
                     from: *employer,
                     to: *employee,
@@ -31,7 +31,7 @@ impl Domain for TransactionsDomain {
                     },
                 })]
             }
-            SimIntention::CollectTaxes { government_id, target, amount } => {
+            SimIntention::Fiscal(FiscalIntention::CollectTaxes { government_id, target, amount }) => {
                 vec![SimAction::Transaction(TransactionAction::InitiatePayment {
                     from: *target,
                     to: *government_id,
@@ -43,7 +43,7 @@ impl Domain for TransactionsDomain {
                 })]
             }
 
-            SimIntention::MarketMakeTreasuries { agent_id, maturity_date, quantity, bid_yield_bps, ask_yield_bps } => {
+            SimIntention::Banking(BankingIntention::MarketMakeTreasuries { agent_id, maturity_date, quantity, bid_yield_bps, ask_yield_bps }) => {
                 self.resolve_treasury_market_making(
                     *agent_id,
                     *maturity_date,
@@ -53,7 +53,7 @@ impl Domain for TransactionsDomain {
                     context,
                 )
             }
-            SimIntention::PostGoodToMarket { agent_id, good_id, quantity, ask_price } => {
+            SimIntention::Production(ProductionIntention::PostGoodToMarket { agent_id, good_id, quantity, ask_price }) => {
                 vec![SimAction::Transaction(TransactionAction::PostMarketOrder {
                     agent_id: *agent_id,
                     market_id: MarketId::Goods(*good_id),
@@ -64,13 +64,13 @@ impl Domain for TransactionsDomain {
                 })]
             }
 
-            SimIntention::ApplyForJob { agent_id: _, market_id, application } => {
+            SimIntention::Production(ProductionIntention::ApplyForJob { agent_id: _, market_id, application }) => {
                 vec![SimAction::Transaction(TransactionAction::PostJobApplication {
                     market_id: *market_id,
                     application: application.clone(),
                 })]
             }
-            SimIntention::HireWorkers { agent_id, count, wage_rate } => {
+            SimIntention::Production(ProductionIntention::HireWorkers { agent_id, count, wage_rate }) => {
                 let market_id = context
                     .state
                     .financial_system
@@ -96,11 +96,17 @@ impl Domain for TransactionsDomain {
 
     fn resolution_phase(&self, intention: &SimIntention) -> Option<ResolutionPhase> {
         match intention {
-            SimIntention::PayWages { .. } | SimIntention::CollectTaxes { .. } => Some(ResolutionPhase::Independent),
-            SimIntention::MarketMakeTreasuries { .. } | SimIntention::PostGoodToMarket { .. } => {
+            SimIntention::Transaction(TransactionIntention::PayWages { .. }) | 
+            SimIntention::Fiscal(FiscalIntention::CollectTaxes { .. }) => Some(ResolutionPhase::Independent),
+            
+            SimIntention::Banking(BankingIntention::MarketMakeTreasuries { .. }) | 
+            SimIntention::Production(ProductionIntention::PostGoodToMarket { .. }) => {
                 Some(ResolutionPhase::Market)
             }
-            SimIntention::ApplyForJob { .. } | SimIntention::HireWorkers { .. } => Some(ResolutionPhase::Independent),
+            
+            SimIntention::Production(ProductionIntention::ApplyForJob { .. }) | 
+            SimIntention::Production(ProductionIntention::HireWorkers { .. }) => Some(ResolutionPhase::Independent),
+            
             _ => None,
         }
     }

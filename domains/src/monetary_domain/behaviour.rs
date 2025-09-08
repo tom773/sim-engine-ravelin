@@ -56,24 +56,24 @@ impl DecisionModel for CentralBankDecisionModel {
                         .max(dec!(0))
                         .min(dec!(2000)); // Cap at 20%
                     
-                    intentions.push(SimIntention::SetPolicyRate {
+                    intentions.push(SimIntention::Monetary(MonetaryIntention::SetPolicyRate {
                         cb_id,
                         new_rate_bps: new_rate,
-                    });
+                    }));
                 }
                 
                 if inflation_gap > 0.01 { // Inflation too high
-                    intentions.push(SimIntention::ConductOMO {
+                    intentions.push(SimIntention::Monetary(MonetaryIntention::ConductOMO {
                         cb_id,
                         operation_type: OMOType::QuantitativeEasing,
                         amount: 1_000_000.0,
-                    });
+                    }));
                 } else if inflation_gap < -0.01 { // Inflation too low
-                    intentions.push(SimIntention::ConductOMO {
+                    intentions.push(SimIntention::Monetary(MonetaryIntention::ConductOMO {
                         cb_id,
                         operation_type: OMOType::QuantitativeTightening,
                         amount: 1_000_000.0,
-                    });
+                    }));
                 }
             }
             ReactionFunction::InflationTargeting { band_width } => {
@@ -84,10 +84,10 @@ impl DecisionModel for CentralBankDecisionModel {
                     let adjustment = if inflation_gap > 0.0 { dec!(25) } else { dec!(-25) };
                     let new_rate = (current_rate + adjustment).max(dec!(0));
                     
-                    intentions.push(SimIntention::SetPolicyRate {
+                    intentions.push(SimIntention::Monetary(MonetaryIntention::SetPolicyRate {
                         cb_id,
                         new_rate_bps: new_rate,
-                    });
+                    }));
                 }
             }
             ReactionFunction::DualMandate { inflation_weight, employment_weight } => {
@@ -98,17 +98,17 @@ impl DecisionModel for CentralBankDecisionModel {
                 
                 if combined_gap.abs() > 0.005 {
                     if combined_gap > 0.0 {
-                        intentions.push(SimIntention::ConductOMO {
+                        intentions.push(SimIntention::Monetary(MonetaryIntention::ConductOMO {
                             cb_id,
                             operation_type: OMOType::QuantitativeEasing,
                             amount: 500_000.0,
-                        });
+                        }));
                     } else {
-                        intentions.push(SimIntention::ConductOMO {
+                        intentions.push(SimIntention::Monetary(MonetaryIntention::ConductOMO {
                             cb_id,
                             operation_type: OMOType::QuantitativeTightening,
                             amount: 500_000.0,
-                        });
+                        }));
                     }
                 }
             }

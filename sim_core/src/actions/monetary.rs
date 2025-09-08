@@ -51,3 +51,46 @@ impl OMOType {
         }
     }
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum MonetaryIntention {
+    ConductOMO {
+        cb_id: AgentId,
+        operation_type: OMOType,
+        amount: f64,
+    },
+    SetPolicyRate {
+        cb_id: AgentId,
+        new_rate_bps: BasisPoints,
+    },
+    AdjustReserveRequirement {
+        cb_id: AgentId,
+        new_ratio: f64,
+    },
+    ProvideLiquidityFacility {
+        cb_id: AgentId,
+        bank_id: AgentId,
+        amount: f64,
+        collateral: Option<Vec<InstrumentId>>,
+    },
+}
+
+impl MonetaryIntention {
+    pub fn name(&self) -> &'static str {
+        match self {
+            MonetaryIntention::ConductOMO { .. } => "ConductOMO",
+            MonetaryIntention::SetPolicyRate { .. } => "SetPolicyRate",
+            MonetaryIntention::AdjustReserveRequirement { .. } => "AdjustReserveRequirement",
+            MonetaryIntention::ProvideLiquidityFacility { .. } => "ProvideLiquidityFacility",
+        }
+    }
+
+    pub fn agent_id(&self) -> AgentId {
+        match self {
+            MonetaryIntention::ConductOMO { cb_id, .. } => *cb_id,
+            MonetaryIntention::SetPolicyRate { cb_id, .. } => *cb_id,
+            MonetaryIntention::AdjustReserveRequirement { cb_id, .. } => *cb_id,
+            MonetaryIntention::ProvideLiquidityFacility { cb_id, .. } => *cb_id,
+        }
+    }
+}

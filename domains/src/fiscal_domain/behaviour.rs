@@ -46,11 +46,11 @@ impl BasicGovernmentDecisionModel {
         for consumer in state.agents.consumers.values() {
             let monthly_tax_liability = (consumer.income / 12.0) * tax_rate;
             if monthly_tax_liability > 0.0 {
-                intentions.push(SimIntention::CollectTaxes {
+                intentions.push(SimIntention::Fiscal(FiscalIntention::CollectTaxes {
                     government_id: government.id,
                     target: consumer.id,
                     amount: monthly_tax_liability,
-                });
+                }));
             }
         }
     }
@@ -81,12 +81,12 @@ fn handle_funding(
         let quantity_to_issue = (deficit / FACE_VALUE).ceil() as u32;
 
         if quantity_to_issue > 0 {
-            intentions.push(SimIntention::AnnounceDebtAuction {
+            intentions.push(SimIntention::Fiscal(FiscalIntention::AnnounceDebtAuction {
                 government_id: government.id,
                 maturity_date,
                 coupon_rate,
                 quantity_to_issue,
-            });
+            }));
         }
     }
 }

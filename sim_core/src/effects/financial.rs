@@ -47,7 +47,7 @@ fn is_security(inst: &Instrument) -> bool {
 impl StateEffectApplicator {
     pub fn apply_financial_effect(state: &mut SimState, effect: &FinancialEffect) -> Result<(), EffectError> {
         match effect {
-            FinancialEffect::CreateInstrument { instrument: inst, creditor, debtor, quantity } => {
+           FinancialEffect::CreateInstrument { instrument: inst, creditor, debtor, quantity } => {
                 let instrument_id = inst.id;
                 state.financial_system.instruments.insert(instrument_id, inst.clone());
 
@@ -67,26 +67,23 @@ impl StateEffectApplicator {
                             .credit_securities(*creditor, instrument_id, *quantity)
                             .map_err(|e| EffectError::FinancialSystemError(e.to_string()))?;
                     }
+                    
+                    let book_value = inst.face_value().unwrap_or(Money::ZERO);
+                    let debtor_bs = state.financial_system.balance_sheets.entry(*debtor).or_insert_with(|| BalanceSheet::new(*debtor));
+                    let pos = debtor_bs.liabilities.entry(instrument_id).or_insert_with(Default::default);
+                    pos.quantity += quantity;
+                    pos.book_value_per_unit = book_value;
+
 
                 } else {
-                    let book_value = match &inst.instrument_type {
-                        InstrumentType::Cash(_) => 1.0,
-                        InstrumentType::RealAsset(RealAssetType::Property { market_value, .. }) => {
-                            market_value.to_f64()
-                        }
-                        InstrumentType::RealAsset(RealAssetType::Inventory { goods, .. }) => {
-                            goods.values().map(|item| (item.unit_cost * item.quantity).to_f64()).sum()
-                        }
-                        _ => 0.0,
-                    };
-
+                    let book_value = Money::from(1); // Deposits are 1-to-1 with currency
+                    
                     if *quantity > 0.0 {
                         state
                             .financial_system
-                            .create_or_consolidate_position(creditor, debtor, &instrument_id, *quantity, book_value)
+                            .create_or_consolidate_position(creditor, debtor, &instrument_id, *quantity, book_value.to_f64())
                             .map_err(EffectError::FinancialSystemError)?;
                     }
-
                 }
 
                 let final_inst = state.financial_system.instruments.get(&instrument_id).unwrap();
@@ -101,7 +98,6 @@ impl StateEffectApplicator {
                 Ok(())
             }
             FinancialEffect::RecordSettlementInstruction(instruction) => {
-                // Extract needed data before mutable borrow
                 let government_id = state.financial_system.government.id;
                 let instrument_name = state
                     .financial_system
@@ -111,7 +107,6 @@ impl StateEffectApplicator {
                     .unwrap_or("Unknown");
                 let current_date = state.current_date;
 
-                // Now safe to mutably borrow
                 state
                     .financial_system
                     .clearing_house

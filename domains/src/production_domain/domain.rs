@@ -24,7 +24,7 @@ impl Domain for ProductionDomain {
 
     fn resolve_intention(&self, intention: &SimIntention, context: &ResolutionContext) -> Option<ResolutionResult> {
         let actions = match intention {
-            SimIntention::Produce { agent_id, recipe_id, batches } => {
+            SimIntention::Production(ProductionIntention::Produce { agent_id, recipe_id, batches }) => {
                 vec![SimAction::Production(ProductionAction::Produce {
                     agent_id: *agent_id,
                     recipe_id: *recipe_id,
@@ -32,7 +32,7 @@ impl Domain for ProductionDomain {
                 })]
             }
 
-            SimIntention::HireWorkers { agent_id, count, wage_rate } => {
+            SimIntention::Production(ProductionIntention::HireWorkers { agent_id, count, wage_rate }) => {
                 let market_id = match context.state.financial_system.find_general_labour_market() {
                     Some(id) => id,
                     None => {
@@ -52,7 +52,7 @@ impl Domain for ProductionDomain {
                 })]
             }
 
-            SimIntention::PurchaseInputs { agent_id, good_id, quantity, max_price } => {
+            SimIntention::Production(ProductionIntention::PurchaseInputs { agent_id, good_id, quantity, max_price }) => {
                 vec![SimAction::Transaction(TransactionAction::PostMarketOrder {
                     agent_id: *agent_id,
                     market_id: MarketId::Goods(*good_id),
@@ -63,7 +63,7 @@ impl Domain for ProductionDomain {
                 })]
             }
 
-            SimIntention::PostGoodToMarket { agent_id, good_id, quantity, ask_price } => {
+            SimIntention::Production(ProductionIntention::PostGoodToMarket { agent_id, good_id, quantity, ask_price }) => {
                 vec![SimAction::Transaction(TransactionAction::PostMarketOrder {
                     agent_id: *agent_id,
                     market_id: MarketId::Goods(*good_id),
@@ -82,10 +82,10 @@ impl Domain for ProductionDomain {
 
     fn resolution_phase(&self, intention: &SimIntention) -> Option<ResolutionPhase> {
         match intention {
-            SimIntention::Produce { .. } => Some(ResolutionPhase::Independent),
-            SimIntention::HireWorkers { .. } => Some(ResolutionPhase::Independent),
-            SimIntention::PurchaseInputs { .. } => Some(ResolutionPhase::Market),
-            SimIntention::PostGoodToMarket { .. } => Some(ResolutionPhase::Market),
+            SimIntention::Production(ProductionIntention::Produce { .. }) => Some(ResolutionPhase::Independent),
+            SimIntention::Production(ProductionIntention::HireWorkers { .. }) => Some(ResolutionPhase::Independent),
+            SimIntention::Production(ProductionIntention::PurchaseInputs { .. }) => Some(ResolutionPhase::Market),
+            SimIntention::Production(ProductionIntention::PostGoodToMarket { .. }) => Some(ResolutionPhase::Market),
             _ => None,
         }
     }

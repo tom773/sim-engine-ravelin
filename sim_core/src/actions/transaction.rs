@@ -46,3 +46,26 @@ impl TransactionAction {
         }
     }
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum TransactionIntention {
+    PayWages {
+        employer: AgentId,
+        employee: AgentId,
+        amount: f64,
+    },
+}
+
+impl TransactionIntention {
+    pub fn name(&self) -> &'static str {
+        match self {
+            TransactionIntention::PayWages { .. } => "PayWages",
+        }
+    }
+
+    pub fn agent_id(&self) -> AgentId {
+        match self {
+            TransactionIntention::PayWages { employer, .. } => *employer,
+        }
+    }
+}
