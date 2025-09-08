@@ -46,6 +46,9 @@ impl Domain for BankingDomain {
         match intention {
             SimIntention::Banking(BankingIntention::LendExcessReserves { .. })
             | SimIntention::Banking(BankingIntention::BorrowReserves { .. }) => Some(ResolutionPhase::Market),
+            | SimIntention::Banking(BankingIntention::RequestLoan { .. })
+            | SimIntention::Banking(BankingIntention::ApproveLoan { .. })
+            | SimIntention::Banking(BankingIntention::RejectLoan { .. }) => Some(ResolutionPhase::Independent),
             _ => None,
         }
     }

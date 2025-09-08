@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 use rust_decimal::prelude::*;
-use chrono::Datelike;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SimpleConsumerDecisionModel {
     pub mpc: f64,
@@ -84,7 +83,7 @@ impl SimpleConsumerDecisionModel {
     fn apply_for_loan(&self, consumer: &Consumer, state: &SimState, intentions: &mut Vec<SimIntention>) {
         let fs = &state.financial_system;
         let _liquid_assets = fs.get_liquid_assets(&consumer.id);
-        if state.current_date.day() == 4 {
+        if state.ticknum == 4 {
 
             intentions.push(SimIntention::Banking(BankingIntention::RequestLoan {
                 bank_id: consumer.bank_id,
