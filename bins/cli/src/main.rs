@@ -89,6 +89,7 @@ fn api_v1_router() -> Router<Arc<AppState>> {
         .route("/markets", get(get_markets_list))
         .route("/markets/catalog", get(get_market_catalog))
         .route("/instruments", get(get_instrument_registry))
+        .route("/markets/infrastructure", get(get_infra))
         .route("/markets/{market_id}", get(get_market_detail))
         .route("/markets/{market_id}/history", get(get_market_history))
         .route("/markets/overview", get(get_market_overiew))
@@ -248,6 +249,13 @@ async fn get_tick_events(
     match state.bus.get(n) {
         Some(v) => Ok(Json(Arc::unwrap_or_clone(v))),
         None => Err(StatusCode::NOT_FOUND),
+    }
+}
+async fn get_infra(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let query_service = QueryService::new(state.engine.clone());
+    match query_service.get_financial_infrastructure_state() {
+        Ok(data) => (StatusCode::OK, Json(data)).into_response(),
+        Err((status, msg)) => (status, msg).into_response(),
     }
 }
 async fn ws_upgrade(State(state): State<Arc<AppState>>, ws: WebSocketUpgrade) -> impl IntoResponse {

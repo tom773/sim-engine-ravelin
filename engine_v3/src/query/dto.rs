@@ -32,6 +32,7 @@ pub struct StatusDto {
     pub agent_counts: AgentCounts,
     pub macro_stats: MacroStatsDto,
     pub monetary_stats: MonetaryStatsDto,
+    pub maps: MapsDto,
 }
 
 pub type DashboardDto = StatusDto;
@@ -230,4 +231,35 @@ impl From<&Exchange> for ExchangeDto {
             tape: exchange.tape.clone(),
         }
     }
+}
+
+#[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CsdStateDto {
+    #[serde_as(as = "HashMap<DisplayFromStr, _>")]
+    pub custody_accounts: HashMap<AgentId, CustodyAccount>,
+    #[serde_as(as = "HashMap<DisplayFromStr, _>")]
+    pub pending_settlements: HashMap<TradeId, SettlementInstruction>,
+    pub settlement_history: Vec<CompletedSettlement>,
+    #[serde_as(as = "HashMap<DisplayFromStr, _>")]
+    pub registered_securities: HashMap<InstrumentId, SecurityInfo>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RtgsStateDto {
+    pub pending_payments: Vec<PaymentInstruction>,
+    pub settled_payments: Vec<PaymentInstruction>,
+    pub rejected_payments: Vec<(PaymentInstruction, String)>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FinancialInfrastructureDto {
+    pub csd: CsdStateDto,
+    pub rtgs: RtgsStateDto,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MapsDto {
+    pub agents_map: HashMap<AgentId, String>,
+    pub instruments_map: HashMap<InstrumentId, String>,
 }

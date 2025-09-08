@@ -24,7 +24,11 @@ impl Domain for TransactionsDomain {
                     from: *employer,
                     to: *employee,
                     amount: *amount,
-                    context: TransactionContext::WagePayment,
+                    context: TransactionContext::WagePayment {
+                        employer: *employer,
+                        employee: *employee,
+                        amount: *amount,
+                    },
                 })]
             }
             SimIntention::CollectTaxes { government_id, target, amount } => {
@@ -32,7 +36,10 @@ impl Domain for TransactionsDomain {
                     from: *target,
                     to: *government_id,
                     amount: *amount,
-                    context: TransactionContext::TaxPayment,
+                    context: TransactionContext::TaxPayment {
+                        payer: *target,
+                        amount: *amount,
+                    },
                 })]
             }
 

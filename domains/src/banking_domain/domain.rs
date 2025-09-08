@@ -149,7 +149,11 @@ impl BankingDomain {
             payer: lender_id,
             payee: borrower_id,
             amount,
-            context: TransactionContext::GenericTransfer,
+            context: TransactionContext::GenericTransfer {
+                from: lender_id,
+                to: borrower_id,
+                amount,
+            },
             priority: PaymentPriority::Urgent, // Interbank is high priority
             earliest_release_tick: state.ticknum,
             deadline_tick: state.ticknum + 1,

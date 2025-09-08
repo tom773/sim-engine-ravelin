@@ -151,7 +151,11 @@ fn bilateral_netting(state: &mut SimState) -> Result<(), EffectError> {
                 payer: from_bank,
                 payee: to_bank,
                 amount: net_amount,
-                context: TransactionContext::GenericTransfer,
+                context: TransactionContext::GenericTransfer {
+                    from: from_bank,
+                    to: to_bank,
+                    amount: net_amount,
+                },
                 priority: PaymentPriority::Normal,
                 earliest_release_tick: state.ticknum,
                 deadline_tick: state.ticknum + 10,

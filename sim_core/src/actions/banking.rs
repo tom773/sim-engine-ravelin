@@ -53,16 +53,30 @@ pub enum TransactionContext {
     TradeSettlement {
         trade_id: Uuid,
     },
-    WagePayment,
-    TaxPayment,
-    GovTranseferPayment,
+    WagePayment {
+        employer: AgentId,
+        employee: AgentId,
+        amount: f64,
+    },
+    TaxPayment {
+        payer: AgentId,
+        amount: f64,
+    },
+    GovTranseferPayment {
+        recipient: AgentId,
+        amount: f64,
+    },
     CouponPayment {
         instrument_id: InstrumentId,
     },
     PrincipalRepayment {
         instrument_id: InstrumentId,
     },
-    GenericTransfer,
+    GenericTransfer {
+        from: AgentId,
+        to: AgentId,
+        amount: f64,
+    },
 }
 
 impl TransactionContext {
@@ -70,12 +84,12 @@ impl TransactionContext {
         match self {
             TransactionContext::GoodsPurchase { .. } => "GoodsPurchase",
             TransactionContext::TradeSettlement { .. } => "TradeSettlement",
-            TransactionContext::WagePayment => "WagePayment",
-            TransactionContext::TaxPayment => "TaxPayment",
-            TransactionContext::GovTranseferPayment => "GovTranseferPayment",
+            TransactionContext::WagePayment { .. } => "WagePayment",
+            TransactionContext::TaxPayment { .. }=> "TaxPayment",
+            TransactionContext::GovTranseferPayment { .. } => "GovTranseferPayment",
             TransactionContext::CouponPayment { .. } => "CouponPayment",
             TransactionContext::PrincipalRepayment { .. } => "PrincipalRepayment",
-            TransactionContext::GenericTransfer => "GenericTransfer",
+            TransactionContext::GenericTransfer { .. }=> "GenericTransfer",
         }
     }
 }
