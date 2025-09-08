@@ -21,6 +21,7 @@ pub struct FinancialSystem {
     pub clearing_house: ClearingHouse,
     pub yield_curve: YieldCurve,
     pub goods: GoodsRegistry,
+    pub credit_registry: CreditRegistry,
     pub rtgs: RtgsQueue,
     pub rtgs_policy: RtgsPolicy,
 }
@@ -61,6 +62,7 @@ impl Default for FinancialSystem {
                 yields: HashMap::new(),
             },
             goods: GoodsRegistry::default(),
+            credit_registry: CreditRegistry::default(),
             rtgs: RtgsQueue::default(),
             rtgs_policy: RtgsPolicy::default(),
         }

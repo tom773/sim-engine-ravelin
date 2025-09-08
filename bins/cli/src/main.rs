@@ -93,6 +93,7 @@ fn api_v1_router() -> Router<Arc<AppState>> {
         .route("/markets/{market_id}", get(get_market_detail))
         .route("/markets/{market_id}/history", get(get_market_history))
         .route("/markets/overview", get(get_market_overiew))
+        .route("/markets/credit/registry", get(get_credit_registry))
         .route("/exchange", get(get_exchange))
         .route("/history/ticks", get(list_ticks))
         .route("/history/ticks/{tick_number}", get(get_tick_detail))
@@ -261,7 +262,13 @@ async fn get_infra(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 async fn ws_upgrade(State(state): State<Arc<AppState>>, ws: WebSocketUpgrade) -> impl IntoResponse {
     ws.on_upgrade(move |socket| ws_conn(socket, state))
 }
-
+async fn get_credit_registry(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let query_service = QueryService::new(state.engine.clone());
+    match query_service.get_credit_registry() {
+        Ok(data) => (StatusCode::OK, Json(data)).into_response(),
+        Err((status, msg)) => (status, msg).into_response(),
+    }
+}
 async fn ws_conn(mut socket: WebSocket, state: Arc<AppState>) {
     for (tick, date, evs) in state.bus.latest_n(3) {
         let msg = serde_json::to_string(&ServerEvent::Tick {

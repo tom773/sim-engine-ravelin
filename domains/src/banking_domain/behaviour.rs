@@ -25,48 +25,77 @@ impl DecisionModel for BasicBankDecisionModel {
         self.assess_liquidity_needs(bank, fs, &mut intentions);
         self.handle_debt_auctions(state, bank, fs.get_liquid_assets(&bank.id), &mut intentions, rng);
         self.consider_treasury_market_making(bank, state, &mut intentions, rng);
-        self.evaluate_lending_opportunities(bank, fs, &mut intentions);
-        self.force_loan_approval(bank, state, &mut intentions);
+        self.process_loan_applications(bank, state, &mut intentions);
         intentions
     }
 }
 
 impl BasicBankDecisionModel {
-    fn force_loan_approval(&self, bank: &Bank, state: &SimState, intentions: &mut Vec<SimIntention>) {
-        if state.ticknum == 4 {
-            for consumer_id in state.agents.consumers.keys() {
-                println!("🎯 TICK 4: Bank {} approving loan for consumer {}", bank.id, consumer_id);
+    fn process_loan_applications(&self, bank: &Bank, state: &SimState, intentions: &mut Vec<SimIntention>) {
+        let applications_for_this_bank =
+            state.financial_system.credit_registry.applications_by_bank.get(&bank.id).cloned().unwrap_or_default();
 
-                let loan_terms = LoanTerms {
-                    principal: 25_000.0,
-                    annual_rate_bps: rust_decimal_macros::dec!(800), // 8% APR
-                    term_months: 60,                                 // 5 years
-                    payment_frequency: PaymentFrequency::Monthly,
-                    collateral_required: false,
-                    loan_to_value_ratio: None,
+        for app_id in applications_for_this_bank {
+            if let Some(application) = state.financial_system.credit_registry.applications.get(&app_id) {
+                if !matches!(application.status, ApplicationStatus::Pending) {
+                    continue;
+                }
+
+                println!(
+                    "🏦 Bank {} is reviewing loan application {} from {}",
+                    bank.id, application.application_id, application.borrower_id
+                );
+
+                let decision = if let Some(borrower) = state.agents.consumers.get(&application.borrower_id) {
+                    let debt_to_income = if borrower.income > 0.0 {
+                        state.financial_system.get_total_liabilities(&borrower.id) / borrower.income
+                    } else {
+                        1.0 // Infinite DTI if no income
+                    };
+
+                    if debt_to_income < 0.4 && borrower.income > 1000.0 {
+                        LoanDecision::Approve {
+                            terms: LoanTerms {
+                                principal: application.requested_amount,
+                                annual_rate_bps: rust_decimal_macros::dec!(850), // 8.5%
+                                term_months: 60,
+                                payment_frequency: PaymentFrequency::Monthly,
+                                collateral_required: false,
+                                loan_to_value_ratio: None,
+                            },
+                        }
+                    } else {
+                        LoanDecision::Reject {
+                            reason: format!("Debt-to-income ratio too high ({:.2}) or income too low.", debt_to_income),
+                        }
+                    }
+                } else {
+                    LoanDecision::Reject { reason: "Borrower not found".to_string() }
                 };
 
-                intentions.push(SimIntention::Banking(BankingIntention::ApproveLoan {
-                    bank_id: bank.id,
-                    borrower_id: *consumer_id,
-                    amount: 25_000.0,
-                    terms: loan_terms,
-                }));
+                match decision {
+                    LoanDecision::Approve { terms } => {
+                        intentions.push(SimIntention::Banking(BankingIntention::ApproveLoan {
+                            bank_id: bank.id,
+                            borrower_id: application.borrower_id,
+                            amount: terms.principal,
+                            terms,
+                        }));
+                    }
+                    LoanDecision::Reject { reason } => {
+                        intentions.push(SimIntention::Banking(BankingIntention::RejectLoan {
+                            bank_id: bank.id,
+                            borrower_id: application.borrower_id,
+                            application_id: application.application_id,
+                            reason,
+                        }));
+                    }
+                    _ => {}
+                }
             }
         }
     }
 
-    fn evaluate_lending_opportunities(&self, bank: &Bank, fs: &FinancialSystem, _intentions: &mut Vec<SimIntention>) {
-        let available_capital = fs.get_liquid_assets(&bank.id);
-        let rwa = fs.balance_sheets.get(&bank.id).map(|bs| bs.calculate_rwa(fs)).unwrap_or(0.0);
-
-        let capital_ratio = if rwa > 0.0 { available_capital / rwa } else { 1.0 };
-        let min_capital_ratio = 0.08; // 8% minimum
-
-        if capital_ratio > min_capital_ratio && available_capital > 10_000.0 {
-            // TODO actual liquidity checks
-        }
-    }
     pub fn assess_liquidity_needs(&self, bank: &Bank, fs: &FinancialSystem, intentions: &mut Vec<SimIntention>) {
         let bank_bs = match fs.balance_sheets.get(&bank.id) {
             Some(bs) => bs,
@@ -233,5 +262,4 @@ impl BasicBankDecisionModel {
 
         (bid_yield_bps, ask_yield_bps)
     }
-
 }

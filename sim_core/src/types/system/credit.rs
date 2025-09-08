@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use crate::*;
 use uuid::Uuid;
+use std::collections::HashMap;
+use chrono::NaiveDate;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum LoanPurpose {
@@ -58,4 +60,49 @@ pub enum LoanDecision {
     Approve { terms: LoanTerms },
     Reject { reason: String },
     CounterOffer { alternative_terms: LoanTerms },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PaymentRecord {
+    pub payment_date: NaiveDate,
+    pub due_date: NaiveDate,
+    pub amount: f64,
+    pub principal_paid: f64,
+    pub interest_paid: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum LoanStatus {
+    Current,
+    Deliquent30,
+    Deliquent60,
+    Deliquent90,
+    Defaulted,
+    Resolved,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct CreditRegistry {
+    pub applications: HashMap<Uuid, LoanApplication>,
+    pub active_loans: HashMap<InstrumentId, ActiveLoan>,
+    pub loans_by_borrower: HashMap<AgentId, Vec<InstrumentId>>,
+    pub loans_by_lender: HashMap<AgentId, Vec<InstrumentId>>,
+    pub applications_by_bank: HashMap<AgentId, Vec<Uuid>>,
+    pub credit_histories: HashMap<AgentId, CreditHistory>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ActiveLoan {
+    pub instrument_id: InstrumentId,
+    pub origination_date: NaiveDate,
+    pub original_terms: LoanTerms,
+    pub outstanding_principal: f64,
+    pub payment_history: Vec<PaymentRecord>,
+    pub status: LoanStatus,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreditHistory {
+    pub total_loans_originated: u32,
+    pub total_loans_repaid: u32,
+    pub total_defaults: u32,
+    pub current_debt_service: f64,
+    pub payment_performance: f64,
 }

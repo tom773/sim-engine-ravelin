@@ -10,6 +10,10 @@ pub enum FinancialEffect {
     CreateInstrument { instrument: Instrument, creditor: AgentId, debtor: AgentId, quantity: f64 },
     RecordTransaction(Transaction),
     RecordSettlementInstruction(SettlementInstruction),
+    RecordLoanApplication { bank_id: AgentId, application: LoanApplication },
+    UpdateApplicationStatus { application_id: Uuid, status: ApplicationStatus },
+    RecordActiveLoan { loan: ActiveLoan },
+    RecordLoanPayment { loan_id: InstrumentId, payment: PaymentRecord },
     QueuePayment(PaymentInstruction),
     DvPFinalize { trade_id: Uuid },
     DvPCancel { trade_id: Uuid },
@@ -27,6 +31,10 @@ impl FinancialEffect {
             FinancialEffect::CreateInstrument { .. } => "CreateInstrument",
             FinancialEffect::RecordTransaction(_) => "RecordTransaction",
             FinancialEffect::RecordSettlementInstruction(_) => "RecordSettlementInstruction",
+            FinancialEffect::RecordLoanApplication { .. } => "RecordLoanApplication",
+            FinancialEffect::UpdateApplicationStatus { .. } => "UpdateApplicationStatus",
+            FinancialEffect::RecordActiveLoan { .. } => "RecordActiveLoan",
+            FinancialEffect::RecordLoanPayment { .. } => "RecordLoanPayment",
             FinancialEffect::DvPFinalize { .. } => "DvPFinalize",
             FinancialEffect::DvPCancel { .. } => "DvPCancel",
             FinancialEffect::QueuePayment(_) => "QueuePayment",
@@ -47,7 +55,7 @@ fn is_security(inst: &Instrument) -> bool {
 impl StateEffectApplicator {
     pub fn apply_financial_effect(state: &mut SimState, effect: &FinancialEffect) -> Result<(), EffectError> {
         match effect {
-           FinancialEffect::CreateInstrument { instrument: inst, creditor, debtor, quantity } => {
+            FinancialEffect::CreateInstrument { instrument: inst, creditor, debtor, quantity } => {
                 let instrument_id = inst.id;
                 state.financial_system.instruments.insert(instrument_id, inst.clone());
 
@@ -67,21 +75,29 @@ impl StateEffectApplicator {
                             .credit_securities(*creditor, instrument_id, *quantity)
                             .map_err(|e| EffectError::FinancialSystemError(e.to_string()))?;
                     }
-                    
+
                     let book_value = inst.face_value().unwrap_or(Money::ZERO);
-                    let debtor_bs = state.financial_system.balance_sheets.entry(*debtor).or_insert_with(|| BalanceSheet::new(*debtor));
+                    let debtor_bs = state
+                        .financial_system
+                        .balance_sheets
+                        .entry(*debtor)
+                        .or_insert_with(|| BalanceSheet::new(*debtor));
                     let pos = debtor_bs.liabilities.entry(instrument_id).or_insert_with(Default::default);
                     pos.quantity += quantity;
                     pos.book_value_per_unit = book_value;
-
-
                 } else {
                     let book_value = Money::from(1); // Deposits are 1-to-1 with currency
-                    
+
                     if *quantity > 0.0 {
                         state
                             .financial_system
-                            .create_or_consolidate_position(creditor, debtor, &instrument_id, *quantity, book_value.to_f64())
+                            .create_or_consolidate_position(
+                                creditor,
+                                debtor,
+                                &instrument_id,
+                                *quantity,
+                                book_value.to_f64(),
+                            )
                             .map_err(EffectError::FinancialSystemError)?;
                     }
                 }
@@ -119,6 +135,52 @@ impl StateEffectApplicator {
                 state.financial_system.rtgs.pending.push(pi.clone());
                 Ok(())
             }
+            FinancialEffect::RecordLoanApplication { bank_id, application } => {
+                let registry = &mut state.financial_system.credit_registry;
+                let app_id = application.application_id;
+
+                registry.applications.insert(app_id, application.clone());
+
+                registry.applications_by_bank.entry(*bank_id).or_default().push(app_id);
+
+                registry.loans_by_borrower.entry(application.borrower_id).or_default();
+
+                Ok(())
+            }
+            FinancialEffect::UpdateApplicationStatus { application_id, status } => {
+                if let Some(app) = state.financial_system.credit_registry.applications.get_mut(application_id) {
+                    app.status = status.clone();
+                }
+                Ok(())
+            }
+
+            FinancialEffect::RecordActiveLoan { loan } => {
+                let registry = &mut state.financial_system.credit_registry;
+
+                registry.active_loans.insert(loan.instrument_id.clone(), loan.clone());
+
+                Ok(())
+            }
+
+            FinancialEffect::RecordLoanPayment { loan_id, payment } => {
+                if let Some(loan) = state.financial_system.credit_registry.active_loans.get_mut(loan_id) {
+                    loan.payment_history.push(payment.clone());
+                    loan.outstanding_principal -= payment.principal_paid;
+
+                    if payment.payment_date > payment.due_date {
+                        let days_late = (payment.payment_date - payment.due_date).num_days();
+                        loan.status = match days_late {
+                            1..=30 => LoanStatus::Deliquent30,
+                            31..=60 => LoanStatus::Deliquent60,
+                            61..=90 => LoanStatus::Deliquent90,
+                            _ => LoanStatus::Defaulted,
+                        };
+                    } else {
+                        loan.status = LoanStatus::Current;
+                    }
+                }
+                Ok(())
+            }
             FinancialEffect::DvPCancel { trade_id } => {
                 match state.financial_system.clearing_house.csd.cancel_security_reservation(trade_id) {
                     Ok(_) => Ok(()),
@@ -130,9 +192,7 @@ impl StateEffectApplicator {
             }
             FinancialEffect::DvPFinalize { trade_id } => {
                 match state.financial_system.clearing_house.csd.finalize_book_entry_transfer(trade_id) {
-                    Ok(_) => {
-                        Ok(())
-                    }
+                    Ok(_) => Ok(()),
                     Err(e) => {
                         tracing::error!("CSD finalize_book_entry_transfer error: {:?}", e);
                         Err(EffectError::FinancialSystemError(e.to_string()))

@@ -1,10 +1,10 @@
+use rand::prelude::*;
+use rust_decimal::prelude::*;
+use serde::{Deserialize, Serialize};
 use sim_core::*;
 use std::any::Any;
-use rand::prelude::*;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
-use rust_decimal::prelude::*;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SimpleConsumerDecisionModel {
     pub mpc: f64,
@@ -19,7 +19,9 @@ impl Default for SimpleConsumerDecisionModel {
 
 #[typetag::serde]
 impl DecisionModel for SimpleConsumerDecisionModel {
-    fn name(&self) -> &str { "Simple Consumer" }
+    fn name(&self) -> &str {
+        "Simple Consumer"
+    }
     fn decide(&self, agent: &dyn Any, state: &SimState, _rng: &mut dyn RngCore) -> Vec<SimIntention> {
         let consumer = match agent.downcast_ref::<Consumer>() {
             Some(c) => c,
@@ -34,7 +36,7 @@ impl DecisionModel for SimpleConsumerDecisionModel {
         let weekly_income = consumer.income / 52.0;
         let liquid_assets = fs.get_liquid_assets(&consumer.id);
         let total_resources = weekly_income + liquid_assets;
-        
+
         if total_resources < 1.0 {
             return intentions;
         }
@@ -43,9 +45,8 @@ impl DecisionModel for SimpleConsumerDecisionModel {
         let save_amount = total_resources - budget;
 
         self.make_purchases(consumer, budget, &mut intentions);
-        self.apply_for_loan(consumer, state, &mut intentions);
-        if save_amount > 1.0 {
-        }
+        self.apply_for_loan(consumer, &state.financial_system, &mut intentions);
+        if save_amount > 1.0 {}
 
         intentions
     }
@@ -54,7 +55,6 @@ impl DecisionModel for SimpleConsumerDecisionModel {
 impl SimpleConsumerDecisionModel {
     fn handle_employment(&self, consumer: &Consumer, state: &SimState, intentions: &mut Vec<SimIntention>) {
         if consumer.employed_by.is_none() {
-            
             let market_id = match state.financial_system.find_general_labour_market() {
                 Some(id) => id,
                 None => return,
@@ -80,15 +80,28 @@ impl SimpleConsumerDecisionModel {
             }));
         }
     }
-    fn apply_for_loan(&self, consumer: &Consumer, state: &SimState, intentions: &mut Vec<SimIntention>) {
-        let fs = &state.financial_system;
-        let _liquid_assets = fs.get_liquid_assets(&consumer.id);
-        if state.ticknum == 4 {
+    fn apply_for_loan(
+        &self,
+        consumer: &Consumer,
+        fs: &FinancialSystem,
+        intentions: &mut Vec<SimIntention>,
+    ) {
+        if let Some(_apps) = fs.credit_registry.applications.get(&consumer.id.0) {
+            return;
+        }
+        let liquid_assets = fs.get_liquid_assets(&consumer.id);
+        if liquid_assets < 10_000.0 && consumer.income > 1000.0 {
+            let existing_debt = fs.get_total_liabilities(&consumer.id);
+            if existing_debt > consumer.income * 0.5 {
+                return; 
+            }
+
+            let desired_amount = 5_000.0;
 
             intentions.push(SimIntention::Banking(BankingIntention::RequestLoan {
-                bank_id: consumer.bank_id,
                 agent_id: consumer.id,
-                amount: 1000.0,
+                bank_id: consumer.bank_id,
+                amount: desired_amount,
                 purpose: LoanPurpose::PersonalConsumption,
                 collateral: None,
             }));
@@ -97,7 +110,7 @@ impl SimpleConsumerDecisionModel {
     fn make_purchases(&self, consumer: &Consumer, budget: f64, intentions: &mut Vec<SimIntention>) {
         for (good_id, budget_share) in &self.consumption_basket {
             let allocation = budget * budget_share;
-            
+
             if allocation > 0.01 {
                 intentions.push(SimIntention::Consumption(ConsumptionIntention::SpendOnGood {
                     agent_id: consumer.id,
@@ -118,17 +131,15 @@ pub struct CESConsumerDecisionModel {
 
 impl Default for CESConsumerDecisionModel {
     fn default() -> Self {
-        Self {
-            sigma: 1.5,
-            weights: HashMap::new(),
-            mpc_base: 0.8,
-        }
+        Self { sigma: 1.5, weights: HashMap::new(), mpc_base: 0.8 }
     }
 }
 
 #[typetag::serde]
 impl DecisionModel for CESConsumerDecisionModel {
-    fn name (&self) -> &str { "CES Consumer" }
+    fn name(&self) -> &str {
+        "CES Consumer"
+    }
     fn decide(&self, agent: &dyn Any, state: &SimState, _rng: &mut dyn RngCore) -> Vec<SimIntention> {
         let consumer = match agent.downcast_ref::<Consumer>() {
             Some(c) => c,
@@ -173,7 +184,6 @@ impl DecisionModel for CESConsumerDecisionModel {
 impl CESConsumerDecisionModel {
     fn handle_employment(&self, consumer: &Consumer, state: &SimState, intentions: &mut Vec<SimIntention>) {
         if consumer.employed_by.is_none() {
-            
             let market_id = match state.financial_system.find_general_labour_market() {
                 Some(id) => id,
                 None => return,
@@ -217,15 +227,9 @@ impl CESConsumerDecisionModel {
     }
 
     fn optimize_ces_consumption(
-        &self,
-        consumer: &Consumer,
-        budget: f64,
-        market_data: &[(GoodId, f64, f64)],
-        intentions: &mut Vec<SimIntention>,
+        &self, consumer: &Consumer, budget: f64, market_data: &[(GoodId, f64, f64)], intentions: &mut Vec<SimIntention>,
     ) {
-        let denominator: f64 = market_data.iter()
-            .map(|(_, price, weight)| weight * price.powf(1.0 - self.sigma))
-            .sum();
+        let denominator: f64 = market_data.iter().map(|(_, price, weight)| weight * price.powf(1.0 - self.sigma)).sum();
 
         if denominator <= 1e-9 {
             return;
@@ -246,7 +250,6 @@ impl CESConsumerDecisionModel {
     }
 
     fn handle_savings(&self, _consumer: &Consumer, save_amount: f64, _intentions: &mut Vec<SimIntention>) {
-        if save_amount > 1.0 {
-        }
+        if save_amount > 1.0 {}
     }
 }

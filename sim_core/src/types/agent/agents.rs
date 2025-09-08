@@ -84,7 +84,7 @@ impl Bank {
             id: AgentId(uuid::Uuid::new_v4()), 
             name, 
             lending_spread_bps,
-            deposit_spread_bps, 
+            deposit_spread_bps,
         }
     }
 }

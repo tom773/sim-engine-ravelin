@@ -368,4 +368,24 @@ impl FinancialSystem {
     pub fn get_market_price(&self, instrument_id: &InstrumentId) -> Option<Money> {
         self.exchange.financial_market(instrument_id).and_then(|market| market.representative_price())
     }
+
+    pub fn get_borrower_credit_score(&self, borrower_id: &AgentId) -> f64 {
+        let history = self.credit_registry.credit_histories.get(borrower_id);
+        match history {
+            Some(h) if h.total_loans_originated > 0 => {
+                let repayment_rate = h.total_loans_repaid as f64 / h.total_loans_originated as f64;
+                let default_penalty = h.total_defaults as f64 * 0.2;
+                (repayment_rate - default_penalty).max(0.0).min(1.0)
+            }
+            _ => 0.5, // Default score for new borrowers
+        }
+    }
+
+    pub fn get_active_loans_for_borrower(&self, borrower_id: &AgentId) -> Vec<&ActiveLoan> {
+        self.credit_registry
+            .loans_by_borrower
+            .get(borrower_id)
+            .map(|loan_ids| loan_ids.iter().filter_map(|id| self.credit_registry.active_loans.get(id)).collect())
+            .unwrap_or_default()
+    }
 }

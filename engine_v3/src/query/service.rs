@@ -438,4 +438,19 @@ impl QueryService {
 
         Ok(FinancialInfrastructureDto { csd: csd_dto, rtgs: rtgs_dto })
     }
+    pub fn get_credit_registry(&self) -> QueryResult<CreditRegistryDto> {
+        let engine_lock = self.get_engine_lock()?;
+        let state = &engine_lock.state;
+        let reg = &state.financial_system.credit_registry.clone();
+        Ok({
+            CreditRegistryDto {
+                applications: reg.applications.clone(),
+                active_loans: reg.active_loans.clone(),
+                loans_by_borrower: reg.loans_by_borrower.clone(),
+                loans_by_lender: reg.loans_by_lender.clone(),
+                applications_by_bank: reg.applications_by_bank.clone(),
+                credit_histories: reg.credit_histories.clone(),
+            }
+        })
+    }
 }

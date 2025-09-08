@@ -263,3 +263,13 @@ pub struct MapsDto {
     pub agents_map: HashMap<AgentId, String>,
     pub instruments_map: HashMap<InstrumentId, String>,
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreditRegistryDto {
+    pub applications: HashMap<Uuid, LoanApplication>,
+    pub active_loans: HashMap<InstrumentId, ActiveLoan>,
+    pub loans_by_borrower: HashMap<AgentId, Vec<InstrumentId>>,
+    pub loans_by_lender: HashMap<AgentId, Vec<InstrumentId>>,
+    pub applications_by_bank: HashMap<AgentId, Vec<Uuid>>,
+    pub credit_histories: HashMap<AgentId, CreditHistory>,
+}
