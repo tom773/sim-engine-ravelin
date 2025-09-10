@@ -1,8 +1,8 @@
 use crate::{Any, Domain, DomainResult, ResolutionContext, ResolutionPhase, ResolutionResult, inventory};
+use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use sim_core::*;
 use uuid::Uuid;
-use rust_decimal_macros::dec;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TransactionsDomain {}
 
@@ -93,11 +93,14 @@ impl Domain for TransactionsDomain {
                     },
                 })]
             }
-            SimIntention::Production(ProductionIntention::FireWorkers { agent_id , employee_ids }) => {
+            SimIntention::Production(ProductionIntention::FireWorkers { agent_id, employee_ids }) => {
                 println!("Firing employees: {:?}", employee_ids);
                 let mut actions_loc = vec![];
                 employee_ids.iter().for_each(|eid| {
-                    actions_loc.push(SimAction::Production(ProductionAction::Fire { agent_id: *agent_id, employee_id: eid.clone() }));
+                    actions_loc.push(SimAction::Production(ProductionAction::Fire {
+                        agent_id: *agent_id,
+                        employee_id: eid.clone(),
+                    }));
                 });
                 return Some(ResolutionResult::success(actions_loc));
             }
@@ -118,7 +121,7 @@ impl Domain for TransactionsDomain {
 
             SimIntention::Production(ProductionIntention::ApplyForJob { .. })
             | SimIntention::Production(ProductionIntention::HireWorkers { .. })
-            | SimIntention::Production(ProductionIntention::FireWorkers { .. })=> Some(ResolutionPhase::Independent),
+            | SimIntention::Production(ProductionIntention::FireWorkers { .. }) => Some(ResolutionPhase::Independent),
 
             _ => None,
         }
@@ -178,7 +181,6 @@ impl Domain for TransactionsDomain {
                             let payment_amount = (trade.price * trade.quantity).to_f64();
 
                             if let Some((_tga_id, _)) = state.financial_system.find_government_tga_account() {
-
                                 let payment = PaymentInstruction {
                                     id: Uuid::new_v4(),
                                     from_bank: state.financial_system.central_bank.id, // CB as payer
@@ -266,6 +268,16 @@ impl Domain for TransactionsDomain {
             }
             MarketId::Goods(good_id) => {
                 let mut effects = vec![];
+                let revenue = (trade.price * trade.quantity).to_f64();
+                let unit_cost = state
+                    .financial_system
+                    .get_agent_inventory(&trade.seller) // helper exists
+                    .get(good_id)
+                    .map(|it| it.unit_cost.to_f64())
+                    .unwrap_or(0.0);
+                let cogs = unit_cost * trade.quantity;
+                effects.push(StateEffect::Agent(AgentEffect::UpdateRevenue { id: trade.seller, revenue }));
+                effects.push(StateEffect::Agent(AgentEffect::RecordCogs { id: trade.seller, amount: cogs }));
 
                 effects.push(StateEffect::Inventory(InventoryEffect::RemoveInventory {
                     owner: trade.seller,
@@ -403,7 +415,6 @@ impl TransactionsDomain {
         if let MarketId::Financial(_inst_id) = &market_id {
             if side == Side::Ask {}
         }
-
         let order = Order { id: Uuid::new_v4(), agent_id, side, quantity, price, order_type };
 
         let effect = StateEffect::Market(MarketEffect::PlaceOrderInBook { market_id, order });

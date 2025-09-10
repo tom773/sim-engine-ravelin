@@ -3,6 +3,7 @@ use rust_decimal::prelude::*;
 use serde::{Deserialize, Serialize};
 use sim_core::*;
 use std::any::Any;
+use tracing::{debug, info, trace, warn};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProductionFirmDecisionModel {
@@ -43,46 +44,150 @@ impl DecisionModel for ProductionFirmDecisionModel {
 
 impl ProductionFirmDecisionModel {
     fn handle_hiring(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
-        let current_employees = firm.employees.len();
-        if current_employees < self.target_employees {
-            if state.financial_system.find_general_labour_market().is_none() {
-                return;
-            }
-
-            let positions_to_fill = self.target_employees - current_employees;
-
-            intentions.push(SimIntention::Production(ProductionIntention::HireWorkers {
-                agent_id: firm.id,
-                count: positions_to_fill as u32,
-                wage_rate: self.base_wage,
-            }));
+        let current = firm.employees.len();
+        if current >= self.target_employees {
+            return;
         }
+        if state.financial_system.find_general_labour_market().is_none() {
+            return;
+        }
+        let open_roles = (self.target_employees - current) as u32;
+        intentions.push(SimIntention::Production(ProductionIntention::HireWorkers {
+            agent_id: firm.id,
+            count: open_roles,
+            wage_rate: self.base_wage,
+        }));
     }
 
     fn handle_production(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
+        let fs = &state.financial_system;
+        let firm_name = &firm.name;
+        trace!(target: "sim.prod", firm_id = ?firm.id, firm_name, "consider_production");
+
         if firm.employees.is_empty() {
+            debug!(target: "sim.prod", firm_id = ?firm.id, firm_name, reason = "no_employees", "skip_production");
             return;
         }
 
-        let fs = &state.financial_system;
+        let Some(recipe_id) = firm.recipe.clone() else {
+            debug!(target: "sim.prod", firm_id = ?firm.id, firm_name, reason = "no_recipe", "skip_production");
+            return;
+        };
+        let Some(recipe) = fs.goods.recipes.get(&recipe_id) else {
+            warn!(target: "sim.prod", firm_id = ?firm.id, firm_name, ?recipe_id, reason = "recipe_missing_from_registry", "skip_production");
+            return;
+        };
 
-        if let Some(recipe_id) = firm.recipe {
-            if let Some(recipe) = fs.goods.recipes.get(&recipe_id) {
-                let inventory = fs.get_agent_inventory(&firm.id);
+        let inventory = fs.get_agent_inventory(&firm.id);
 
-                let can_produce = recipe
-                    .inputs
-                    .iter()
-                    .all(|input| inventory.get(&input.good_id).map_or(false, |item| item.quantity >= input.quantity));
+        let max_batches_by_inputs = recipe
+            .inputs
+            .iter()
+            .map(|inp| {
+                let have = inventory.get(&inp.good_id).map_or(0.0, |it| it.quantity);
+                if inp.quantity <= 0.0 { f64::INFINITY } else { (have / inp.quantity).floor().max(0.0) }
+            })
+            .fold(f64::INFINITY, f64::min) as u32;
 
-                if can_produce {
-                    intentions.push(SimIntention::Production(ProductionIntention::Produce {
-                        agent_id: firm.id,
-                        recipe_id,
-                        batches: 1,
-                    }));
+        if max_batches_by_inputs == 0 {
+            let missing: Vec<(String, f64, f64)> = recipe
+                .inputs
+                .iter()
+                .filter_map(|inp| {
+                    let have = inventory.get(&inp.good_id).map_or(0.0, |it| it.quantity);
+                    let need_one = inp.quantity;
+                    if need_one > 0.0 && have < need_one {
+                        let name = fs
+                            .goods
+                            .goods
+                            .get(&inp.good_id)
+                            .map(|g| g.name.clone())
+                            .unwrap_or_else(|| format!("{:?}", inp.good_id));
+                        Some((name, need_one, have))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            warn!(target: "sim.prod", firm_id = ?firm.id, firm_name, missing_inputs = ?missing, "skip_production_inputs_unavailable");
+            return;
+        }
+
+        let total_hours: f64 = firm.employees.values().map(|c| c.hours).sum();
+        let labour_batches =
+            if recipe.labour_hours > 1e-9 { (total_hours / recipe.labour_hours).floor().max(0.0) as u32 } else { 1 };
+        let capacity_batches = labour_batches.min(max_batches_by_inputs).max(1);
+
+        debug!(target: "sim.prod",
+            firm_id=?firm.id, firm_name,
+            total_hours, recipe_labour_hours = recipe.labour_hours,
+            labour_batches, max_batches_by_inputs, capacity_batches,
+            "capacity_computed"
+        );
+
+        let input_cost_est: f64 = recipe
+            .inputs
+            .iter()
+            .map(|inp| {
+                let unit = inventory
+                    .get(&inp.good_id)
+                    .map(|it| it.unit_cost.to_f64())
+                    .or_else(|| state.market_view(&MarketId::Goods(inp.good_id)).and_then(|v| v.last_or_mid()))
+                    .or_else(|| state.financial_system.exchange.fair_price_for_good(&inp.good_id).map(|m| m.to_f64()))
+                    .unwrap_or(0.0);
+                unit * inp.quantity
+            })
+            .sum();
+
+        let avg_output_px: f64 = {
+            let mut sum = 0.0;
+            let mut n = 0.0;
+            for out in &recipe.outputs {
+                let px_market = state.market_view(&MarketId::Goods(out.good_id)).and_then(|v| v.last_or_mid());
+                let px_struct = state.financial_system.exchange.fair_price_for_good(&out.good_id).map(|m| m.to_f64());
+                if let Some(px) = px_market.or(px_struct) {
+                    sum += px;
+                    n += 1.0;
                 }
             }
+            if n > 0.0 { sum / n } else { 0.0 }
+        };
+        let labour_cost_est = recipe.labour_hours * firm.wage_rate;
+        let total_out_qty: f64 = recipe.outputs.iter().map(|o| o.quantity).sum();
+        let unit_cost_est = if total_out_qty > 0.0 { (input_cost_est + labour_cost_est) / total_out_qty } else { 0.0 };
+
+        let low_inventory = recipe.outputs.iter().any(|out| {
+            let have = inventory.get(&out.good_id).map_or(0.0, |it| it.quantity);
+            have < out.quantity
+        });
+        let expected_margin_ok = avg_output_px > unit_cost_est * 0.99;
+
+        debug!(target: "sim.prod",
+            firm_id=?firm.id, firm_name,
+            input_cost_est, labour_cost_est, unit_cost_est, avg_output_px,
+            low_inventory, expected_margin_ok,
+            "pricing_signal"
+        );
+
+        if low_inventory || expected_margin_ok {
+            let batches = capacity_batches.max(1).min(4);
+            info!(target: "sim.prod",
+                firm_id=?firm.id, firm_name, ?recipe_id, batches,
+                reason = if low_inventory { "replenish_inventory" } else { "positive_expected_margin" },
+                "produce_intention"
+            );
+            intentions.push(SimIntention::Production(ProductionIntention::Produce {
+                agent_id: firm.id,
+                recipe_id,
+                batches,
+            }));
+        } else {
+            debug!(target: "sim.prod",
+                firm_id=?firm.id, firm_name, ?recipe_id,
+                reason = "negative_expected_margin",
+                "skip_production"
+            );
         }
     }
 
@@ -100,27 +205,26 @@ impl ProductionFirmDecisionModel {
             }
         }
     }
+
     fn consider_financing(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
         let fs = &state.financial_system;
-
         let liquid = fs.get_liquid_assets(&firm.id);
 
         let wage_bill = firm.employees.values().map(|c| c.wage_rate * c.hours).sum::<f64>() * 2.0;
 
-        let input_budget = if let Some(recipe_id) = firm.recipe {
+        let input_budget: f64 = if let Some(recipe_id) = firm.recipe.clone() {
             if let Some(recipe) = fs.goods.recipes.get(&recipe_id) {
                 recipe
                     .inputs
                     .iter()
                     .map(|inp| {
-                        let price = state
+                        let px = state
                             .market_view(&MarketId::Goods(inp.good_id))
                             .and_then(|v| v.last_or_mid())
-                            .map(|m| m.to_f64())
-                            .unwrap_or(Some(0.0));
-                        price.unwrap() * inp.quantity
+                            .unwrap_or(0.0);
+                        px * inp.quantity
                     })
-                    .sum::<f64>()
+                    .sum()
             } else {
                 0.0
             }
@@ -132,11 +236,9 @@ impl ProductionFirmDecisionModel {
         if planned_need <= 1.0 {
             return;
         }
-
         if liquid + 0.01 < planned_need {
             let shortfall = planned_need - liquid;
             let requested = (shortfall * 1.10).max(1_000.0);
-
             intentions.push(SimIntention::Banking(BankingIntention::RequestLoan {
                 agent_id: firm.id,
                 bank_id: firm.bank_id,
@@ -146,64 +248,108 @@ impl ProductionFirmDecisionModel {
             }));
         }
     }
+
     fn handle_sales(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
         let fs = &state.financial_system;
-        let inventory = fs.get_agent_inventory(&firm.id);
 
+        let (rev, cogs) = fs
+            .balance_sheets
+            .get(&firm.id)
+            .map(|bs| (bs.income_statement.revenue.to_f64(), bs.income_statement.cost_of_goods_sold.to_f64()))
+            .unwrap_or((0.0, 0.0));
+        let gm = if rev > 1e-9 { ((rev - cogs) / rev).clamp(-0.99, 0.99) } else { 0.0 };
+
+        let target_gm = 0.25;
+        let learn = 0.10;
+        let theoretical_markup = if target_gm < 0.99 { 1.0 / (1.0 - target_gm) } else { self.target_markup };
+        let mut markup = self.target_markup * (1.0 + learn * (target_gm - gm));
+        markup = markup.clamp(1.0, theoretical_markup * 1.5);
+
+        let inventory = fs.get_agent_inventory(&firm.id);
         for (good_id, item) in inventory {
-            if item.quantity > 0.1 {
-                let ask_price = item.unit_cost.to_f64() * self.target_markup;
-                intentions.push(SimIntention::Production(ProductionIntention::PostGoodToMarket {
-                    agent_id: firm.id,
-                    good_id,
-                    quantity: item.quantity * 0.2,
-                    ask_price,
-                }));
+            if item.quantity <= 1e-6 {
+                continue;
             }
+            let unit_cost = item.unit_cost.to_f64();
+
+            let ref_structural = state.financial_system.exchange.fair_price_for_good(&good_id).map(|m| m.to_f64());
+            let px_hint = state.market_view(&MarketId::Goods(good_id)).and_then(|v| v.last_or_mid());
+            let anchor = if let Some(px_hint) = px_hint.or(ref_structural) {
+                0.7 * unit_cost * (1.0 + markup) + 0.3 * px_hint
+            } else {
+                unit_cost * (1.0 + markup)
+            };
+
+            let ask_price = anchor.max(0.0);
+
+            let frac = (0.20 + 0.30 * (gm - target_gm)).clamp(0.05, 0.50);
+            let qty = (item.quantity * frac).max(1.0).min(item.quantity);
+
+            intentions.push(SimIntention::Production(ProductionIntention::PostGoodToMarket {
+                agent_id: firm.id,
+                good_id,
+                quantity: qty,
+                ask_price,
+            }));
         }
     }
-    fn handle_separations(&self, firm: &Firm, _state: &SimState, intentions: &mut Vec<SimIntention>, rng: &mut dyn RngCore) {
+
+    fn handle_separations(
+        &self, firm: &Firm, _state: &SimState, intentions: &mut Vec<SimIntention>, rng: &mut dyn RngCore,
+    ) {
         let quit_rate = 0.005;
-        let mut emp_to_fire = vec![];
+        let mut departures = Vec::new();
         for emp in firm.get_employees() {
-            let p = rng.random::<f64>();
-            if p < quit_rate {
-                emp_to_fire.push(emp);
+            if rng.random::<f64>() < quit_rate {
+                departures.push(emp);
             }
         }
-        if emp_to_fire.is_empty() {
-            return;
+        if !departures.is_empty() {
+            intentions.push(SimIntention::Production(ProductionIntention::FireWorkers {
+                agent_id: firm.id,
+                employee_ids: departures,
+            }));
         }
-        intentions.push(SimIntention::Production(ProductionIntention::FireWorkers {
-            agent_id: firm.id,
-            employee_ids: emp_to_fire.clone(),
-        }));
     }
+
     fn handle_input_purchases(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
         let fs = &state.financial_system;
+        let Some(recipe_id) = firm.recipe.clone() else {
+            return;
+        };
+        let Some(recipe) = fs.goods.recipes.get(&recipe_id) else {
+            return;
+        };
 
-        if let Some(recipe_id) = firm.recipe {
-            if let Some(recipe) = fs.goods.recipes.get(&recipe_id) {
-                let inventory = fs.get_agent_inventory(&firm.id);
+        let inventory = fs.get_agent_inventory(&firm.id);
+        let total_hours: f64 = firm.employees.values().map(|c| c.hours).sum();
+        let desired_batches =
+            if recipe.labour_hours > 1e-9 { (total_hours / recipe.labour_hours).ceil().max(1.0) } else { 1.0 } as f64;
 
-                for input in &recipe.inputs {
-                    let current_qty = inventory.get(&input.good_id).map_or(0.0, |item| item.quantity);
-
-                    let target_qty = input.quantity * 2.0;
-                    if current_qty < target_qty {
-                        let buy_qty = target_qty - current_qty;
-
-                        let max_price = 100.0;
-
-                        intentions.push(SimIntention::Production(ProductionIntention::PurchaseInputs {
-                            agent_id: firm.id,
-                            good_id: input.good_id,
-                            quantity: buy_qty,
-                            max_price,
-                        }));
-                    }
-                }
+        for input in &recipe.inputs {
+            let have = inventory.get(&input.good_id).map_or(0.0, |it| it.quantity);
+            let target = input.quantity * desired_batches;
+            if have + 1e-9 >= target {
+                continue;
             }
+            let buy_qty = (target - have).max(0.0);
+
+            let ref_struct = state.financial_system.exchange.fair_price_for_good(&input.good_id).map(|m| m.to_f64());
+            let inv_cost = inventory.get(&input.good_id).map(|it| it.unit_cost.to_f64());
+            let ref_px = inv_cost.or(ref_struct).unwrap_or(0.0);
+            let max_price = (ref_px * 1.05).max(0.0); // small premium to clear
+            tracing::debug!(
+                target: "sim.prod",
+                firm_id = ?firm.id, firm_name = ?firm.name,
+                ?input.good_id, have, target, buy_qty, ref_px, max_price,
+                "consider_input_purchase"
+            );
+            intentions.push(SimIntention::Production(ProductionIntention::PurchaseInputs {
+                agent_id: firm.id,
+                good_id: input.good_id,
+                quantity: buy_qty,
+                max_price,
+            }));
         }
     }
 }

@@ -153,6 +153,7 @@ pub struct PopulatedPositionDto {
 pub struct PopulatedBalanceSheetDto {
     pub assets: Vec<PopulatedPositionDto>,
     pub liabilities: Vec<PopulatedPositionDto>,
+    pub income_statement: IncomeStatement,
 }
 
 #[derive(Serialize, Clone, Deserialize, Debug)]

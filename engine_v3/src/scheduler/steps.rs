@@ -12,50 +12,41 @@ pub enum TickStep {
     Auction,
     ClearMarkets,
     SettleTrades,
+    ServiceCredit,
     ApplyPaymentQueuing,
     RunRTGS,
+    ReconcileCredit,
     ApplyAllEffects,
     UpdateHistory,
 }
 
 impl TickStep {
-    pub fn all() -> Vec<Self> {
-        use TickStep::*;
-        vec![
-            Upkeep,
-            GatherIntentions,
-            ResolveIndependentPhase,
-            ResolveMarketPhase,
-            ApplyMarketEffectsForPriceDiscovery,
-            ResolveDependentPhase,
-            Auction,
-            ClearMarkets,
-            SettleTrades,
-            ApplyPaymentQueuing,
-            RunRTGS,
-            ApplyAllEffects,
-            UpdateHistory,
-        ]
-    }
-
-    pub fn dependencies(&self) -> Vec<Self> {
-        use TickStep::*;
-        match self {
-            Upkeep => vec![],
-            GatherIntentions => vec![Upkeep],
-            ResolveIndependentPhase => vec![GatherIntentions],
-            ResolveMarketPhase => vec![ResolveIndependentPhase],
-            ApplyMarketEffectsForPriceDiscovery => vec![ResolveMarketPhase],
-            ResolveDependentPhase => vec![ApplyMarketEffectsForPriceDiscovery],
-            Auction => vec![ResolveDependentPhase],
-            ClearMarkets => vec![Auction],
-            SettleTrades => vec![ClearMarkets],
-            ApplyPaymentQueuing => vec![SettleTrades],
-            RunRTGS => vec![SettleTrades],
-            ApplyAllEffects => vec![RunRTGS],
-            UpdateHistory => vec![RunRTGS],
-        }
-    }
+    pub fn all() -> Vec<Self> { use TickStep::*; vec![
+        Upkeep, GatherIntentions, ResolveIndependentPhase, ResolveMarketPhase,
+        ApplyMarketEffectsForPriceDiscovery, ResolveDependentPhase, Auction,
+        ClearMarkets, SettleTrades,
+        ServiceCredit,
+        ApplyPaymentQueuing, RunRTGS,
+        ReconcileCredit,
+        ApplyAllEffects, UpdateHistory,
+    ]}
+    pub fn dependencies(&self) -> Vec<Self> { use TickStep::*; match self {
+        Upkeep => vec![],
+        GatherIntentions => vec![Upkeep],
+        ResolveIndependentPhase => vec![GatherIntentions],
+        ResolveMarketPhase => vec![ResolveIndependentPhase],
+        ApplyMarketEffectsForPriceDiscovery => vec![ResolveMarketPhase],
+        ResolveDependentPhase => vec![ApplyMarketEffectsForPriceDiscovery],
+        Auction => vec![ResolveDependentPhase],
+        ClearMarkets => vec![Auction],
+        SettleTrades => vec![ClearMarkets],
+        ServiceCredit => vec![SettleTrades],
+        ApplyPaymentQueuing => vec![ServiceCredit],
+        RunRTGS => vec![SettleTrades],
+        ReconcileCredit => vec![RunRTGS],
+        ApplyAllEffects => vec![ReconcileCredit],
+        UpdateHistory => vec![RunRTGS],
+    }}
 
     pub fn should_abort_on_failure(&self) -> bool {
         true

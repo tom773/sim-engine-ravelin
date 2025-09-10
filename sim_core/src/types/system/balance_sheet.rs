@@ -3,6 +3,7 @@ use crate::types::money::Money;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use std::collections::HashMap;
+use rust_decimal::prelude::*;
 
 #[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
@@ -31,6 +32,40 @@ pub struct IncomeStatement {
     pub interest_income: Money,
     pub interest_expense: Money,
     pub net_income: Money,
+}
+impl IncomeStatement {
+    pub fn add_revenue(&mut self, x: f64) {
+        self.revenue += Money::from_f64(x.max(0.0)).unwrap();
+        self.recompute();
+    }
+    pub fn add_cogs(&mut self, x: f64) {
+        self.cost_of_goods_sold += Money::from_f64(x.max(0.0)).unwrap();
+        self.recompute();
+    }
+    pub fn add_opex(&mut self, x: f64) {
+        self.operating_expenses += Money::from_f64(x.max(0.0)).unwrap();
+        self.recompute();
+    }
+    pub fn add_interest_income(&mut self, x: f64) {
+        self.interest_income += Money::from_f64(x.max(0.0)).unwrap();
+        self.recompute();
+    }
+    pub fn add_interest_expense(&mut self, x: f64) {
+        self.interest_expense += Money::from_f64(x.max(0.0)).unwrap();
+        self.recompute();
+    }
+    fn recompute(&mut self) {
+        self.net_income = self.revenue
+            - self.cost_of_goods_sold
+            - self.operating_expenses
+            + self.interest_income
+            - self.interest_expense;
+    }
+    pub fn gross_margin_rate(&self) -> Decimal {
+        if self.revenue.to_f64().abs() < 1e-9 { Decimal::from_f64(0.0_f64).unwrap() } else {
+            (self.revenue - self.cost_of_goods_sold) / self.revenue
+        }
+    }
 }
 
 fn get_market_price(inst: &Instrument, exchange: &Exchange) -> Option<Money> {

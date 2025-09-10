@@ -229,10 +229,6 @@ impl EconomicAnalytics for SimState {
         let household_debt: f64 = self.agents.consumers.keys().map(|id| fs.get_total_liabilities(id)).sum();
         let corporate_debt: f64 = self.agents.firms.keys().map(|id| fs.get_total_liabilities(id)).sum();
         let government_debt = fs.get_total_liabilities(&fs.government.id);
-        println!(
-            "Household debt: {}, Corporate debt: {}, Government debt: {}",
-            household_debt, corporate_debt, government_debt
-        );
         CoreEconomicStats {
             gdp,
             consumption: consumer_spending_daily,

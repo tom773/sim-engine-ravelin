@@ -6,7 +6,7 @@ use rust_decimal_macros::dec;
 use sim_core::*;
 use std::time::Instant;
 use tracing::instrument;
-
+use uuid::Uuid;
 fn execute_step<F>(step_fn: F) -> StepResult
 where
     F: FnOnce() -> Result<serde_json::Value, String>,
@@ -17,6 +17,7 @@ where
         Err(e) => StepResult::failure(start.elapsed().as_millis() as u64, e),
     }
 }
+
 #[derive(Debug)]
 pub struct UpkeepHandler;
 
@@ -26,6 +27,7 @@ impl StepHandler for UpkeepHandler {
             if engine.state.current_session == Session::AM {
                 engine.state.advance_time();
             }
+            tracing::event!(tracing::Level::INFO, "{:#?}", engine.state.financial_system.pricing_feeds);
             if let Err(e) = engine.state.financial_system.validate_accounting_identity() {
                 return Err(format!("Accounting validation failed on tick {}: {}", engine.state.ticknum, e));
             }
@@ -186,6 +188,184 @@ impl StepHandler for SettleTradesHandler {
     }
 }
 #[derive(Debug)]
+pub struct CreditReconciliationHandler;
+
+impl StepHandler for CreditReconciliationHandler {
+    fn execute(
+        &self, engine: &mut SimulationEngine, _ctx: &mut StepContext, _rng: &mut dyn rand::RngCore,
+    ) -> StepResult {
+        execute_step(|| {
+            let state = &mut engine.state;
+            let fs = &mut state.financial_system;
+            let settled: std::collections::HashSet<Uuid> = fs.rtgs.settled.iter().map(|p| p.id).collect();
+            let rejected: std::collections::HashSet<Uuid> = fs.rtgs.rejected.iter().map(|(pi, _)| pi.id).collect();
+
+            let mut effects: Vec<StateEffect> = Vec::new();
+            let mut loans_to_enforce: Vec<Uuid> = Vec::new();
+
+            for (loan_id, sched) in fs.credit_registry.payment_schedules.iter_mut() {
+                for sp in sched.scheduled_payments.iter_mut() {
+                    if sp.status != PaymentStatus::Scheduled {
+                        continue;
+                    }
+
+                    let both_present = sp.interest_payment_id.is_some() && sp.principal_payment_id.is_some();
+                    if !both_present {
+                        continue;
+                    }
+
+                    let i_id = sp.interest_payment_id.unwrap();
+                    let p_id = sp.principal_payment_id.unwrap();
+
+                    let paid_interest = settled.contains(&i_id);
+                    let paid_principal = settled.contains(&p_id);
+                    let missed = rejected.contains(&i_id) || rejected.contains(&p_id);
+
+                    if paid_interest || paid_principal {
+                        let principal_paid = if paid_principal { sp.principal_amount } else { Money::ZERO };
+                        let interest_paid = if paid_interest { sp.interest_amount } else { Money::ZERO };
+                        effects.push(StateEffect::Credit(CreditEffect::ProcessLoanPayment {
+                            loan_id: *loan_id,
+                            principal_paid,
+                            interest_paid,
+                            fees_paid: Money::ZERO,
+                            payment_date: state.current_date,
+                        }));
+                    }
+
+                    if paid_interest && paid_principal {
+                        sp.status = PaymentStatus::Paid;
+                        sp.paid_date = Some(state.current_date);
+                        sp.dpd_days = 0;
+                    } else if missed {
+                        sp.status = PaymentStatus::Missed;
+                        sp.dpd_days += 1; // daily ticks; change to +30 if monthly ticks
+                    }
+                }
+
+                let dpd_max = sched.scheduled_payments.iter().map(|sp| sp.dpd_days).max().unwrap_or(0);
+                let stage = if dpd_max >= 90 {
+                    ImpairmentStage::Stage3NonPerforming
+                } else if dpd_max >= 30 {
+                    ImpairmentStage::Stage2Underperforming
+                } else {
+                    ImpairmentStage::Stage1Performing
+                };
+                effects.push(StateEffect::Credit(CreditEffect::RecordImpairment {
+                    loan_id: *loan_id,
+                    stage,
+                    provision: Money::ZERO,
+                }));
+                if stage == ImpairmentStage::Stage3NonPerforming {
+                    loans_to_enforce.push(*loan_id);
+                }
+            }
+
+            // Enforce any liens *after* we release the mutable borrow of payment_schedules
+            for loan_id in loans_to_enforce {
+                if let Some(liens) = fs.credit_registry.liens_by_loan.get(&loan_id) {
+                    for lien_id in liens {
+                        effects.push(StateEffect::Credit(CreditEffect::UpdateLienStatus {
+                            lien_id: *lien_id,
+                            new_status: LienStatus::Enforced,
+                        }));
+                    }
+                }
+            }
+
+            engine.state.apply_effects(&effects).map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({ "credit_effects": effects.len() }))
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct CreditServicingHandler;
+
+impl StepHandler for CreditServicingHandler {
+    fn execute(
+        &self, engine: &mut SimulationEngine, _ctx: &mut StepContext, _rng: &mut dyn rand::RngCore,
+    ) -> StepResult {
+        execute_step(|| {
+            let state = &mut engine.state;
+            let fs = &mut state.financial_system;
+
+            let mut effects: Vec<StateEffect> = Vec::new();
+            for (inst_id, inst) in fs.instruments.clone() {
+                if let InstrumentType::Debt(DebtInstrument::Loan(details)) = &inst.instrument_type {
+                    let servicer = LoanServicer::new(state.current_date);
+                    // accrual computes with a clone to avoid mutating borrowed details here
+                    let mut tmp = details.clone();
+                    let interest = servicer.accrue_interest(&mut tmp);
+                    if interest > Money::ZERO {
+                        effects.push(StateEffect::Credit(CreditEffect::AccrueLoanInterest {
+                            loan_id: details.loan_id,
+                            interest_amount: interest,
+                            accrual_date: state.current_date,
+                        }));
+                    }
+                    // Precompute routing before borrowing the schedule
+                    let payer = details.borrower;
+                    let payee = details.lender;
+                    let (from_bank, to_bank) = {
+                        let (_, fb) = fs
+                            .find_agent_liquid_account(&payer)
+                            .ok_or_else(|| format!("Borrower {:?} has no liquid account", payer))?;
+                        let (_, tb) = fs
+                            .find_agent_liquid_account(&payee)
+                            .or_else(|| fs.find_any_bank_account())
+                            .ok_or_else(|| "No banks to receive loan payment".to_string())?;
+                        (fb, tb)
+                    };
+                    let schedule = fs
+                        .credit_registry
+                        .payment_schedules
+                        .entry(details.loan_id)
+                        .or_insert_with(|| LoanServicer::new(state.current_date).generate_schedule(details));
+
+                    for sp in schedule.scheduled_payments.iter_mut() {
+                        if sp.status == PaymentStatus::Scheduled && sp.payment_date <= state.current_date {
+                            let mk_pi = |amount: f64, ctx: TransactionContext| -> PaymentInstruction {
+                                PaymentInstruction {
+                                    id: Uuid::new_v4(),
+                                    from_bank,
+                                    to_bank,
+                                    payer,
+                                    payee,
+                                    amount,
+                                    context: ctx,
+                                    priority: PaymentPriority::Normal,
+                                    earliest_release_tick: state.ticknum,
+                                    deadline_tick: state.ticknum + 10,
+                                }
+                            };
+
+                            let i_pi = mk_pi(
+                                sp.interest_amount.to_f64(),
+                                TransactionContext::CouponPayment { instrument_id: inst_id },
+                            );
+                            let p_pi = mk_pi(
+                                sp.principal_amount.to_f64(),
+                                TransactionContext::PrincipalRepayment { instrument_id: inst_id },
+                            );
+
+                            sp.interest_payment_id = Some(i_pi.id);
+                            sp.principal_payment_id = Some(p_pi.id);
+
+                            effects.push(StateEffect::Financial(FinancialEffect::QueuePayment(i_pi)));
+                            effects.push(StateEffect::Financial(FinancialEffect::QueuePayment(p_pi)));
+                        }
+                    }
+                }
+            }
+
+            engine.state.apply_effects(&effects).map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({ "serviced_loans": effects.len() }))
+        })
+    }
+}
+
+#[derive(Debug)]
 pub struct ApplyPaymentQueuingHandler;
 impl StepHandler for ApplyPaymentQueuingHandler {
     fn execute(&self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
@@ -195,7 +375,7 @@ impl StepHandler for ApplyPaymentQueuingHandler {
                     effect,
                     StateEffect::Financial(
                         FinancialEffect::QueuePayment(_) | FinancialEffect::RecordSettlementInstruction(_)
-                    )| StateEffect::Inventory(_)    
+                    ) | StateEffect::Inventory(_)
                 )
             })?;
             Ok(serde_json::json!({ "payments_and_settlements_queued": count }))
@@ -294,7 +474,7 @@ impl StepHandler for UpdateHistoryHandler {
             let trades = context.get_trades().unwrap_or_default();
             let snapshots = context.get_market_snapshots().unwrap_or_default();
             engine.update_market_history(&trades, &snapshots);
-            engine.state.financial_system.update_yield_curve(engine.state.current_date);
+            engine.refresh_pricing_feeds();
             let tick_record = TickRecord {
                 tick_number: engine.state.ticknum,
                 date: engine.state.current_date,

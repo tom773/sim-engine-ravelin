@@ -2,8 +2,10 @@ use crate::registry::DomainRegistry;
 use crate::scheduler::*;
 use chrono::{Datelike, NaiveDate};
 use domains::prelude::*;
+use ordered_float::NotNan;
 use rand::RngCore;
-use rand::prelude::{ThreadRng};
+use rand::prelude::ThreadRng;
+use rust_decimal::prelude::*;
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -53,8 +55,10 @@ impl SimulationEngine {
         scheduler.register_handler(TickStep::Auction, DebtAuctionsHandler);
         scheduler.register_handler(TickStep::ClearMarkets, ClearMarketsHandler);
         scheduler.register_handler(TickStep::SettleTrades, SettleTradesHandler);
-        scheduler.register_handler(TickStep::ApplyPaymentQueuing, ApplyPaymentQueuingHandler); // ADD THIS
+        scheduler.register_handler(TickStep::ServiceCredit, CreditServicingHandler); // NEW
+        scheduler.register_handler(TickStep::ApplyPaymentQueuing, ApplyPaymentQueuingHandler);
         scheduler.register_handler(TickStep::RunRTGS, RunRTGSHandler);
+        scheduler.register_handler(TickStep::ReconcileCredit, CreditReconciliationHandler); // NEW
         scheduler.register_handler(TickStep::ApplyAllEffects, ApplyAllEffectsHandler);
         scheduler.register_handler(TickStep::UpdateHistory, UpdateHistoryHandler);
         scheduler
@@ -88,7 +92,6 @@ impl SimulationEngine {
             day_events.extend(self.event_log.drain(..));
         }
 
-        // increment daily tick once per calendar day
         self.state.ticknum += 1;
         (results, day_events)
     }
@@ -226,18 +229,14 @@ impl SimulationEngine {
         let mut effects = Vec::new();
 
         for (_id, market) in self.state.financial_system.exchange.labour_markets.iter_mut() {
-            // 1) purge stale applications: keep only unemployed
             market.job_applications.retain(|app| {
                 self.state.agents.consumers.get(&app.consumer_id).map_or(false, |c| c.employed_by.is_none())
             });
 
-            // 2) randomize offers (existing behavior)
             market.job_offers.shuffle(rng);
 
-            // 3) match only unemployed applicants
             for offer in &mut market.job_offers {
                 while offer.quantity > 0 {
-                    // find the first unemployed applicant willing to accept offer.wage_rate
                     let idx = market.job_applications.iter().position(|app| {
                         app.reservation_wage <= offer.wage_rate
                             && self
@@ -250,10 +249,14 @@ impl SimulationEngine {
                     let Some(app_idx) = idx else { break };
 
                     let app = market.job_applications.swap_remove(app_idx);
-
+                    let wage = match market.wage_rule {
+                        WageRule::Posted => offer.wage_rate,
+                        WageRule::Nash { beta } => (1.0 - beta) * offer.wage_rate + beta * app.reservation_wage,
+                    }
+                    .max(app.reservation_wage);
                     let contract = EmploymentContract {
                         employee_id: app.consumer_id,
-                        wage_rate: offer.wage_rate,
+                        wage_rate: wage,
                         hours: offer.hours_required.min(offer.hours_required),
                         start_date: self.state.current_date,
                         next_pay_date: self.state.current_date + chrono::Duration::days(14),
@@ -269,8 +272,6 @@ impl SimulationEngine {
                     offer.quantity -= 1;
                 }
             }
-
-            // 4) Remove dead offers
             market.job_offers.retain(|o| o.quantity > 0);
         }
 
@@ -355,6 +356,118 @@ impl SimulationEngine {
         context.store("all_effects", &remaining_effects)?;
 
         Ok(effects_to_apply.len())
+    }
+    pub fn refresh_pricing_feeds(&mut self) {
+        let fs = &mut self.state.financial_system;
+
+        if let Ok(mut pr) = fs.pricing_feeds.policy_rate_bps.write() {
+            *pr = fs.central_bank.policy_rate_bps.to_f64().unwrap_or(69.0);
+        }
+        if let Ok(mut d) = fs.pricing_feeds.current_date.write() {
+            *d = self.state.current_date;
+        }
+
+        use std::collections::BTreeMap;
+        let mut points: BTreeMap<NotNan<f64>, f64> = BTreeMap::new();
+        if let Ok(mut yc) = fs.pricing_feeds.yield_curve.write() {
+            yc.date = self.state.current_date;
+            if let Some(treasury_ids) = fs.exchange.index.by_bond_type.get(&BondType::Government) {
+                for inst_id in treasury_ids {
+                    if let (Some(inst), Some(market)) = (fs.instruments.get(inst_id), fs.exchange.markets.get(inst_id))
+                    {
+                        if let InstrumentType::Debt(DebtInstrument::Bond(b)) = &inst.instrument_type {
+                            if let Some(mid) = market.book.mid_price() {
+                                let tenor = b.remaining_tenor_years(self.state.current_date);
+                                let spec = BondSpec {
+                                    face: b.face_value,
+                                    coupon_bps: b.coupon_rate_bps,
+                                    freq_per_year: b.frequency,
+                                    issue: b.issue_date,
+                                    maturity: b.maturity_date,
+                                };
+                                let tmp = GovTermStructurePricer::new(
+                                    spec,
+                                    TermStructureMethod::Bootstrapped,
+                                    fs.pricing_feeds.clone(),
+                                );
+                                if let Some(y) = tmp.yield_from_price(inst_id, mid) {
+                                    points.insert(NotNan::new(tenor.max(0.1)).unwrap(), y);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            yc.points = points;
+        }
+
+        let prev_wage = fs.pricing_feeds.goods.read().ok().map(|g| g.avg_wage).unwrap_or(0.0);
+        let mut avg_wage = 0.0;
+        let mut n_w = 0usize;
+        for (_, f) in &self.state.agents.firms {
+            if f.wage_rate.is_finite() && f.wage_rate > 0.0 {
+                avg_wage += f.wage_rate;
+                n_w += 1;
+            }
+        }
+        if n_w > 0 {
+            avg_wage /= n_w as f64;
+        }
+
+        use std::collections::HashMap;
+        let mut unit_cost_sum: HashMap<GoodId, (f64 /*sum qty*/, f64 /*sum qty*cost*/)> = HashMap::new();
+        let mut inv_qty: HashMap<GoodId, f64> = HashMap::new();
+
+        for (_id, inst) in &fs.instruments {
+            if let InstrumentType::RealAsset(RealAssetType::Inventory { goods, .. }) = &inst.instrument_type {
+                for (gid, item) in goods {
+                    let q = item.quantity.max(0.0);
+                    let c = item.unit_cost.to_f64();
+                    let e = unit_cost_sum.entry(*gid).or_insert((0.0, 0.0));
+                    e.0 += q;
+                    e.1 += q * c;
+                    *inv_qty.entry(*gid).or_insert(0.0) += q;
+                }
+            }
+        }
+
+        let mut sales_per_day: HashMap<GoodId, f64> = HashMap::new();
+        for (mid, ticks) in &self.state.history.market_ticks {
+            if let MarketId::Goods(gid) = mid {
+                let mut cnt = 0usize;
+                let mut vol = 0.0;
+                for t in ticks.iter().rev().take(7) {
+                    if let Some(v) = Some(t.volume) {
+                        vol += v;
+                        cnt += 1;
+                    }
+                }
+                let avg = if cnt > 0 { vol / cnt as f64 } else { 0.0 };
+                sales_per_day.insert(*gid, avg);
+            }
+        }
+
+        if let Ok(mut gm) = fs.pricing_feeds.goods.write() {
+            gm.last_avg_wage = prev_wage;
+            gm.avg_wage = avg_wage;
+            gm.per_good.clear();
+            for (gid, (sum_q, sum_qc)) in unit_cost_sum {
+                let wuc = if sum_q > 1e-9 { sum_qc / sum_q } else { 0.0 };
+                let qty = inv_qty.get(&gid).copied().unwrap_or(0.0);
+                let sales = sales_per_day.get(&gid).copied().unwrap_or(0.0);
+                let base_markup = 0.20;
+                gm.per_good.insert(
+                    gid,
+                    GoodMetric {
+                        weighted_unit_cost: wuc,
+                        inventory_qty: qty,
+                        avg_daily_sales: sales,
+                        supply_shock: 1.0,
+                        base_markup,
+                    },
+                );
+            }
+        }
     }
 }
 

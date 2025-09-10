@@ -51,6 +51,7 @@ async fn main() {
         let mut rng = StdRng::from_os_rng();
         let tick = eng.state.ticknum;
         let date = eng.state.current_date;
+        eng.state.financial_system.attach_default_pricing_feeds(date);
         let (_res, events) = eng.run_tick(&mut rng);
 
         bus.push_tick(tick, date, events);

@@ -56,7 +56,7 @@ impl QueryService {
             })
             .collect();
 
-        PopulatedBalanceSheetDto { assets, liabilities }
+        PopulatedBalanceSheetDto { assets, liabilities, income_statement: bs.income_statement.clone() }
     }
 
     pub fn get_status_data(&self) -> QueryResult<StatusDto> {

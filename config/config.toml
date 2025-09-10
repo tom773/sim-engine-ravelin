@@ -79,7 +79,7 @@ category="ConsumerGood"
 cpi_weight=0.25
 
 [[goods]]
-id="Diesel"
+id="diesel"
 name="Diesel"
 unit="gallon"
 category="ConsumerGood"
@@ -153,7 +153,7 @@ inputs = [{ good_id = "oil", quantity = 1.0 }]
 outputs = [
     { good_id = "petroleum", quantity = 0.4 },
     { good_id = "plastic", quantity = 0.3 },
-    { good_id = "Diesel", quantity = 0.3 }
+    { good_id = "diesel", quantity = 0.3 }
 ]
 labour_hours = 4.0
 
@@ -258,4 +258,4 @@ count=10
 bank_mix = { bank_a = 0.5, bank_b = 0.5 }
 income = { type = "normal", mean = 60_000.0, stdev = 10_000.0 }
 deposit = { type = "pct_of_income", pct = 0.10 }
-consumption_basket = { general_good = 0.1, bread = 0.9 }
+consumption_basket = { bread = 0.1, electronics = 0.05, diesel = 0.02, car = 0.005, toys = 0.03 }

@@ -28,7 +28,25 @@ impl<'a> AgentFactory<'a> {
     pub fn new(state: &'a mut SimState, rng: &'a mut StdRng) -> Self {
         Self { state, rng }
     }
+    fn resolve_recipe_id(&self, selector: &str) -> Option<RecipeId> {
+        let recipes = &self.state.financial_system.goods.recipes;
 
+        let as_id = RecipeId(selector.to_string());
+        if recipes.contains_key(&as_id) {
+            return Some(as_id);
+        }
+
+        if let Some((rid, _)) = recipes.iter().find(|(_, r)| r.name == selector) {
+            return Some(rid.clone());
+        }
+
+        if let Some((rid, _)) = recipes.iter().find(|(_, r)| r.name.eq_ignore_ascii_case(selector)) {
+            return Some(rid.clone());
+        }
+
+        let norm = selector.to_ascii_lowercase().replace(['_', '-'], " ");
+        recipes.iter().find_map(|(rid, r)| (r.name.to_ascii_lowercase() == norm).then(|| rid.clone()))
+    }
     fn create_and_register_instrument(
         &mut self, owner_id: AgentId, issuer_id: AgentId, instrument: Instrument, quantity: f64,
         book_value_per_unit: f64,
@@ -112,9 +130,8 @@ impl<'a> AgentFactory<'a> {
     pub fn create_firm(
         &mut self, config: &FirmConfig, bank_id: AgentId, cb_id: AgentId, agent_ids: &HashMap<String, AgentId>,
     ) -> Firm {
-        let recipe_id = config.recipe_name.as_ref().and_then(|name| {
-            self.state.financial_system.goods.recipes.iter().find(|(_, r)| &r.name == name).map(|(id, _)| *id)
-        });
+        let recipe_id = config.recipe_name.as_deref().and_then(|s| self.resolve_recipe_id(s));
+
         let mut firm = Firm::new(bank_id, config.name.clone(), recipe_id, 25.0);
         if let Some(markup) = config.desired_markup {
             firm.desired_markup = markup;

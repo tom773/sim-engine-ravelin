@@ -7,3 +7,5 @@ pub use market::*;
 pub use orderbook::*;
 pub use goods::*;
 pub use labour::*;
+pub mod pricers;
+pub use pricers::*;

@@ -38,10 +38,9 @@ impl DomainRegistry {
             }
         }
 
-        for (domain_name, domain) in &self.domains {
+        for (_domain_name, domain) in &self.domains {
             let result = domain.settle_trade(trade, state);
             if result.success {
-                println!("[REGISTRY] Trade settled by domain: {}", domain_name);
                 return Ok(result.effects);
             }
         }

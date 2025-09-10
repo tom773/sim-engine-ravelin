@@ -8,11 +8,12 @@ use serde::{
     de::Deserializer,
     ser::{SerializeStruct, Serializer},
 };
-use std::collections::HashMap;
+use std::collections::{HashMap};
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::sync::Arc;
 use uuid::Uuid;
+use std::sync::{Arc};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimedTrade {
     pub ts: std::time::SystemTime,
@@ -126,7 +127,7 @@ pub fn listing_key_from_instrument(inst: &Instrument) -> ListingKey {
         InstrumentType::StructuredTranche(s) => {
             ListingKey::StructuredTranche { rating: s.rating, tranche_type: s.tranche_type }
         }
-        InstrumentType::Debt(_) => ListingKey::CashON, // Other debt types are unlisted
+        InstrumentType::Debt(_) => ListingKey::CashON,
     }
 }
 
@@ -134,8 +135,10 @@ pub trait Pricer<P: Product>: Send + Sync + Debug {
     fn mid_yield(&self, key: &P::Key) -> Option<f64>;
     fn price_from_yield(&self, key: &P::Key, y: f64) -> Option<P::Quote>;
     fn yield_from_price(&self, key: &P::Key, px: P::Quote) -> Option<f64>;
+    fn fair_price(&self, _key: &P::Key) -> Option<P::Quote> {
+        None
+    }
 }
-
 pub trait Settlement<P: Product>: Send + Sync + Debug {
     fn dvp(&self, key: &P::Key, buyer: AgentId, seller: AgentId, qty: P::Lot, price: P::Quote) -> Result<(), String>;
 }
@@ -232,18 +235,58 @@ pub struct Exchange {
     pub labour_markets: HashMap<LabourMarketId, LabourMarket>,
     pub open_auctions: HashMap<Uuid, DebtAuction>,
     pub tape: HashMap<MarketId, Vec<TimedTrade>>,
+    pricing_feeds: Option<PricingFeeds>,
 }
 
 impl Exchange {
+    pub fn attach_pricing_feeds(&mut self, feeds: PricingFeeds) {
+        self.pricing_feeds = Some(feeds);
+    }
+
     pub fn ensure_listed(&mut self, inst_id: InstrumentId, inst: &Instrument) {
         if !inst.should_create_order_book() {
             self.update_index_only(inst_id, inst);
             return;
         }
-
-        self.markets.entry(inst_id).or_insert_with(|| make_financial_market(inst_id));
-
+        self.markets.entry(inst_id).or_insert_with(|| {
+            let pricer: Arc<dyn Pricer<FinancialProduct>> = match &inst.instrument_type {
+                InstrumentType::Debt(DebtInstrument::Bond(b)) if b.bond_type == BondType::Government => {
+                    let feeds = self.pricing_feeds.clone().expect("attach_pricing_feeds before listing");
+                    let spec = BondSpec {
+                        face: b.face_value,
+                        coupon_bps: b.coupon_rate_bps,
+                        freq_per_year: b.frequency,
+                        issue: b.issue_date,
+                        maturity: b.maturity_date,
+                    };
+                    let method = TermStructureMethod::Bootstrapped;
+                    Arc::new(GovTermStructurePricer::new(spec, method, feeds))
+                }
+                _ => Arc::new(NoOpPricer),
+            };
+            MarketGeneric {
+                key: inst_id,
+                book: OrderBook::new(),
+                pricer,
+                settlement: Arc::new(NoopSettlement),
+            }
+        });
         self.update_index_only(inst_id, inst);
+    }
+
+    pub fn register_goods_market(&mut self, good_id: GoodId) {
+        self.goods_markets.entry(good_id).or_insert_with(|| {
+            let pricer: Arc<dyn Pricer<GoodProduct>> = if let Some(feeds) = self.pricing_feeds.clone() {
+                Arc::new(CostPlusGoodsPricer::new(feeds, CostPlusParams::default()))
+            } else {
+                Arc::new(NoOpPricer)
+            };
+            MarketGeneric { key: good_id, book: OrderBook::new(), pricer, settlement: Arc::new(NoopSettlement) }
+        });
+    }
+
+    pub fn fair_price_for_good(&self, id: &GoodId) -> Option<Money> {
+        self.goods_markets.get(id).and_then(|m| m.pricer.fair_price(id))
     }
 
     fn update_index_only(&mut self, inst_id: InstrumentId, inst: &Instrument) {
@@ -301,10 +344,6 @@ impl Exchange {
 
     pub fn has_order_book(&self, inst_id: &InstrumentId) -> bool {
         self.markets.contains_key(inst_id)
-    }
-
-    pub fn register_goods_market(&mut self, good_id: GoodId) {
-        self.goods_markets.entry(good_id).or_insert_with(|| make_goods_market(good_id));
     }
 
     pub fn register_labour_market(&mut self, market_id: LabourMarketId) {
@@ -532,6 +571,7 @@ impl<'de> Deserialize<'de> for Exchange {
             labour_markets: data.labour_markets,
             open_auctions: HashMap::new(),
             tape: data.tape,
+            pricing_feeds: None,
         })
     }
 }

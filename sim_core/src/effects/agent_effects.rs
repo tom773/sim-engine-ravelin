@@ -7,8 +7,10 @@ pub enum AgentEffect {
     TerminateEmployment { firm_id: AgentId, consumer_id: AgentId },
     UpdateIncome { id: AgentId, new_income: f64 },
     RecordDividendIncome { recipient: AgentId, amount: f64 },
-    UpdateRevenue { id: AgentId, revenue: f64 },
     Produce { firm: AgentId, good_id: GoodId, amount: f64 },
+    UpdateRevenue { id: AgentId, revenue: f64 },
+    RecordCogs { id: AgentId, amount: f64 },
+    RecordOpEx { id: AgentId, amount: f64 },
 }
 
 impl AgentEffect {
@@ -20,6 +22,8 @@ impl AgentEffect {
             AgentEffect::RecordDividendIncome { .. } => "RecordDividendIncome",
             AgentEffect::UpdateRevenue { .. } => "UpdateRevenue",
             AgentEffect::Produce { .. } => "Produce",
+            AgentEffect::RecordCogs { .. } => "RecordCogs",
+            AgentEffect::RecordOpEx { .. } => "RecordOpEx",
         }
     }
 }
@@ -27,8 +31,46 @@ impl AgentEffect {
 impl StateEffectApplicator {
     pub fn apply_agent_effect(state: &mut SimState, effect: &AgentEffect) -> Result<(), EffectError> {
         match effect {
-            AgentEffect::UpdateRevenue { id: _, revenue: _ } => Ok(()),
-            AgentEffect::Produce { firm: _, good_id: _, amount: _ } => Ok(()),
+            AgentEffect::Produce { firm, good_id, amount } => {
+                let firm_ref = state.agents.firms.get_mut(firm).ok_or(EffectError::AgentNotFound { id: *firm })?;
+                let recipe_id = firm_ref
+                    .recipe.as_mut()
+                    .ok_or_else(|| EffectError::InvalidState("Firm has no recipe configured".to_string()))?;
+                let recipe = state
+                    .financial_system
+                    .goods
+                    .recipes
+                    .get(&recipe_id)
+                    .ok_or(EffectError::RecipeError { id: recipe_id.clone() })?;
+
+                let out_per_batch =
+                    recipe.outputs.iter().find(|o| o.good_id == *good_id).map(|o| o.quantity).ok_or_else(|| {
+                        EffectError::InvalidState(format!(
+                            "Produced good {:?} not part of firm's recipe {:?}",
+                            good_id, recipe_id
+                        ))
+                    })?;
+                let batches_realized = if out_per_batch > 0.0 { (*amount / out_per_batch).max(0.0) } else { 0.0 };
+
+                let hours_available: f64 = firm_ref.employees.values().map(|c| c.hours).sum();
+                let batches_theoretical = if recipe.labour_hours > 1e-9 {
+                    hours_available / recipe.labour_hours
+                } else {
+                    batches_realized.max(1.0)
+                };
+
+                let realized = if batches_theoretical > 1e-9 {
+                    (batches_realized / batches_theoretical).clamp(0.0, 2.0)
+                } else {
+                    1.0
+                };
+
+                let alpha = 0.20;
+                firm_ref.productivity = alpha * realized + (1.0 - alpha) * firm_ref.productivity;
+
+                Ok(())
+            }
+
             AgentEffect::EstablishEmployment { firm_id, consumer_id, contract } => {
                 let prev_firm_id = if let Some(consumer) = state.agents.consumers.get(consumer_id) {
                     consumer.employed_by
@@ -95,6 +137,30 @@ impl StateEffectApplicator {
                     Ok(())
                 } else {
                     Err(EffectError::AgentNotFound { id: *recipient })
+                }
+            }
+            AgentEffect::UpdateRevenue { id, revenue } => {
+                if let Some(bs) = state.financial_system.balance_sheets.get_mut(id) {
+                    bs.income_statement.add_revenue(*revenue);
+                    Ok(())
+                } else {
+                    Err(EffectError::AgentNotFound { id: *id })
+                }
+            }
+            AgentEffect::RecordCogs { id, amount } => {
+                if let Some(bs) = state.financial_system.balance_sheets.get_mut(id) {
+                    bs.income_statement.add_cogs(*amount);
+                    Ok(())
+                } else {
+                    Err(EffectError::AgentNotFound { id: *id })
+                }
+            }
+            AgentEffect::RecordOpEx { id, amount } => {
+                if let Some(bs) = state.financial_system.balance_sheets.get_mut(id) {
+                    bs.income_statement.add_opex(*amount);
+                    Ok(())
+                } else {
+                    Err(EffectError::AgentNotFound { id: *id })
                 }
             }
         }

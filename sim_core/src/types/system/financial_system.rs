@@ -1,12 +1,15 @@
 use crate::prelude::*;
 use crate::types::money::Money;
-use chrono::NaiveDate;
 use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use std::collections::HashMap;
 use uuid::Uuid;
+use std::collections::BTreeMap;
+use std::sync::{Arc, RwLock};
+use ordered_float::NotNan;
+
 pub fn is_security(inst: &Instrument) -> bool {
     matches!(
         inst.instrument_type,
@@ -27,17 +30,41 @@ pub struct FinancialSystem {
     pub government: Government,
     pub exchange: Exchange,
     pub clearing_house: ClearingHouse,
-    pub yield_curve: YieldCurve,
     pub goods: GoodsRegistry,
     pub credit_registry: CreditRegistry,
     pub rtgs: RtgsQueue,
     pub rtgs_policy: RtgsPolicy,
+    #[serde(skip)]
+    pub pricing_feeds: PricingFeeds,
+}
+#[derive(Clone, Default, Debug)]
+pub struct GoodsMetrics {
+    pub last_avg_wage: f64,
+    pub avg_wage: f64,
+    pub per_good: std::collections::HashMap<GoodId, GoodMetric>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Default, Debug)]
+pub struct GoodMetric {
+    pub weighted_unit_cost: f64,
+    pub inventory_qty: f64,
+    pub avg_daily_sales: f64,
+    pub supply_shock: f64,
+    pub base_markup: f64,
+}
+
+#[derive(Clone, Default, Debug)]
 pub struct YieldCurve {
     pub date: chrono::NaiveDate,
-    pub yields: HashMap<u16, f64>,
+    pub points: BTreeMap<NotNan<f64>, f64>,
+}
+
+#[derive(Clone, Default, Debug)]
+pub struct PricingFeeds {
+    pub policy_rate_bps: Arc<RwLock<f64>>,
+    pub yield_curve: Arc<RwLock<YieldCurve>>,
+    pub goods: Arc<RwLock<GoodsMetrics>>,
+    pub current_date: Arc<RwLock<chrono::NaiveDate>>,
 }
 
 impl Default for FinancialSystem {
@@ -62,51 +89,25 @@ impl Default for FinancialSystem {
             government,
             exchange: Exchange::default(),
             clearing_house: ClearingHouse::default(),
-            yield_curve: YieldCurve { date: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(), yields: HashMap::new() },
             goods: GoodsRegistry::default(),
             credit_registry: CreditRegistry::default(),
             rtgs: RtgsQueue::default(),
             rtgs_policy: RtgsPolicy::default(),
+            pricing_feeds: PricingFeeds::default(),
         }
     }
 }
 
 impl FinancialSystem {
-    pub fn update_yield_curve(&mut self, date: NaiveDate) {
-        let mut yields = HashMap::new();
-
-        for bond_type_instruments in &self.exchange.index.by_bond_type {
-            if let (BondType::Government, instrument_ids) = bond_type_instruments {
-                for inst_id in instrument_ids {
-                    if let Some(instrument) = self.instruments.get(inst_id) {
-                        if let InstrumentType::Debt(DebtInstrument::Bond(bond_details)) = &instrument.instrument_type {
-                            let years = ((bond_details.maturity_date - bond_details.issue_date).num_days() as f64
-                                / 365.0)
-                                .round() as u16;
-
-                            if let Some(order_book) = self.exchange.financial_market(inst_id) {
-                                if let Some(mid_price) = order_book.mid_price() {
-                                    let mid_price_f64 = mid_price.to_f64();
-                                    let face_value_f64 = bond_details.face_value.to_f64();
-
-                                    let yield_estimate = if mid_price_f64 > 0.0 {
-                                        (face_value_f64 / mid_price_f64 - 1.0) / (years as f64)
-                                    } else {
-                                        bond_details.coupon_rate_bps.to_f64().unwrap_or(0.0) / 10000.0
-                                    };
-
-                                    yields.insert(years, yield_estimate);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        self.yield_curve = YieldCurve { date, yields };
+    pub fn attach_default_pricing_feeds(&mut self, now: chrono::NaiveDate) {
+        self.pricing_feeds = PricingFeeds {
+            policy_rate_bps: Arc::new(RwLock::new(self.central_bank.policy_rate_bps.to_f64().unwrap_or(69.0))),
+            yield_curve: Arc::new(RwLock::new(YieldCurve { date: now, points: BTreeMap::new() })),
+            goods: Arc::new(RwLock::new(GoodsMetrics::default())),
+            current_date: Arc::new(RwLock::new(now)),
+        };
+        self.exchange.attach_pricing_feeds(self.pricing_feeds.clone());
     }
-
     fn find_inventory_instrument_mut(&mut self, agent_id: &AgentId) -> Option<&mut Instrument> {
         let bs = self.balance_sheets.get(agent_id)?;
         let inventory_inst_id = bs.assets.keys().find(|inst_id| {
@@ -126,7 +127,7 @@ impl FinancialSystem {
         }) = self.instruments.get_mut(&inst_id)
         {
             let item = goods.entry(*good_id).or_default();
-            
+
             let new_qty = item.quantity.round() + qty.round();
             item.unit_cost =
                 if new_qty > 0.0 { (item.unit_cost * item.quantity + unit_cost * qty) / new_qty } else { Money::ZERO };
@@ -190,7 +191,7 @@ impl FinancialSystem {
         }
 
         let discrepancy = total_assets - total_liabilities;
-        const TOLERANCE: f64 = 1.0; // Allow a small tolerance for floating point inaccuracies
+        const TOLERANCE: f64 = 1.0;
 
         if discrepancy.to_f64().abs() > TOLERANCE {
             Err(format!(

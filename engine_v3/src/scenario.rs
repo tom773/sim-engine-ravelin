@@ -292,7 +292,6 @@ impl Scenario {
                 }
 
                 let desired_markup = group.desired_markup.as_ref().map(|dm| dm.sample(rng));
-
                 generated_firms.push(FirmConfig {
                     id: firm_id,
                     name: format!("{} {}", group.id_prefix, i),
@@ -305,7 +304,6 @@ impl Scenario {
                 });
             }
         }
-
         (generated_consumers, generated_firms)
     }
 
@@ -339,7 +337,7 @@ impl Scenario {
         }
 
         for recipe_conf in &self.recipes {
-            let recipe_id = RecipeId(Uuid::new_v4());
+            let recipe_id = RecipeId(recipe_conf.id.clone());
             let inputs = recipe_conf
                 .inputs
                 .iter()
@@ -351,9 +349,9 @@ impl Scenario {
                 .map(|io| RecipeIO { good_id: *good_ids.get(&io.good_id).unwrap(), quantity: io.quantity })
                 .collect();
             state.financial_system.goods.recipes.insert(
-                recipe_id,
+                recipe_id.clone(),
                 ProductionRecipe {
-                    id: recipe_id,
+                    id: recipe_id.clone(),
                     name: recipe_conf.name.clone(),
                     inputs,
                     outputs,
