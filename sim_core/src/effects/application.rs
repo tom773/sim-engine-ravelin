@@ -48,6 +48,7 @@ impl StateEffectApplicator {
             StateEffect::Market(market_effect) => Self::apply_market_effect(state, market_effect),
             StateEffect::Agent(agent_effect) => Self::apply_agent_effect(state, agent_effect),
             StateEffect::Monetary(monetary_effect) => Self::apply_central_bank_effect(state, monetary_effect),
+            StateEffect::Credit(credit_effect) => Self::apply_credit_effect(state, credit_effect),
         }
     }
 }

@@ -27,3 +27,4 @@ rust_decimal = { workspace = true }
 rust_decimal_macros = { workspace = true }
 serde_with = { workspace = true }
 tracing = "0.1.41"
+rand_distr = "0.5.1"

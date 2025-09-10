@@ -15,6 +15,9 @@ pub struct AgentCounts {
 pub struct MacroStatsDto {
     pub nominal_gdp_proxy: f64,
     pub consumer_spending_daily: f64,
+    pub household_debt: f64,
+    pub corporate_debt: f64,
+    pub government_debt: f64,
     pub cpi: f64,
     pub inflation_rate: f64,
     pub unemployment_rate: f64,
@@ -32,6 +35,7 @@ pub struct StatusDto {
     pub agent_counts: AgentCounts,
     pub macro_stats: MacroStatsDto,
     pub monetary_stats: MonetaryStatsDto,
+    pub labor_force_stats: LabourMarketStatsDto,
     pub maps: MapsDto,
 }
 
@@ -186,6 +190,7 @@ pub struct ExchangeDto {
     
     #[serde_as(as = "HashMap<DisplayFromStr, _>")]
     pub tape: HashMap<MarketId, Vec<TimedTrade>>,
+    
 }
 
 
@@ -267,9 +272,27 @@ pub struct MapsDto {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreditRegistryDto {
     pub applications: HashMap<Uuid, LoanApplication>,
-    pub active_loans: HashMap<InstrumentId, ActiveLoan>,
-    pub loans_by_borrower: HashMap<AgentId, Vec<InstrumentId>>,
-    pub loans_by_lender: HashMap<AgentId, Vec<InstrumentId>>,
+    pub loans: HashMap<Uuid, Loan>,
+    pub loans_by_borrower: HashMap<AgentId, Vec<Uuid>>,
+    pub loans_by_lender: HashMap<AgentId, Vec<Uuid>>,
     pub applications_by_bank: HashMap<AgentId, Vec<Uuid>>,
     pub credit_histories: HashMap<AgentId, CreditHistory>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EmploymentRecordDto {
+    pub firm_id: AgentId,
+    pub firm_name: String,
+    pub contract: EmploymentContract,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LabourMarketStatsDto {
+    pub employment: usize,
+    pub unemployment: usize,
+    pub labour_force: usize,
+    pub unemployment_rate: f64,
+    pub payroll_proxy: usize,
+    pub avg_wage_rate: f64,
+    pub labor_force_participation: f64,
+    pub job_openings: usize,
+    pub contracts: Vec<EmploymentRecordDto>
 }

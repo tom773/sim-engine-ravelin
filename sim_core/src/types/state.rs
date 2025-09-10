@@ -1,7 +1,7 @@
 use crate::prelude::*;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
-use serde_with::{serde_as, DisplayFromStr};
+use serde_with::{DisplayFromStr, serde_as};
 use std::collections::{HashMap, HashSet, VecDeque};
 use uuid::Uuid;
 
@@ -13,6 +13,7 @@ pub struct SimState {
     pub agents: AgentRegistry,
     pub config: SimConfig,
     pub history: SimHistory,
+    pub current_session: Session,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -30,6 +31,7 @@ impl Default for SimState {
             agents: AgentRegistry::default(),
             config: SimConfig::default(),
             history: SimHistory::default(),
+            current_session: Session::AM,
         }
     }
 }
@@ -37,6 +39,10 @@ impl Default for SimState {
 impl SimState {
     pub fn advance_time(&mut self) {
         self.current_date += chrono::Duration::days(1);
+    }
+    #[inline]
+    pub fn current_slot(&self) -> Slot {
+        Slot::of(self.ticknum, self.current_session)
     }
     pub fn get_agent_type_string(&self, id: &AgentId) -> Option<&'static str> {
         if self.agents.banks.contains_key(id) {
@@ -68,9 +74,7 @@ pub struct AgentRegistry {
 
 impl AgentRegistry {
     pub fn agent_exists(&self, id: &AgentId) -> bool {
-        self.banks.contains_key(id)
-            || self.consumers.contains_key(id)
-            || self.firms.contains_key(id)
+        self.banks.contains_key(id) || self.consumers.contains_key(id) || self.firms.contains_key(id)
     }
     pub fn get_bank_for_agent(&self, agent_id: &AgentId) -> Option<&Bank> {
         if let Some(consumer) = self.consumers.get(agent_id) {
@@ -109,12 +113,7 @@ impl AgentRegistry {
     }
 
     pub fn all_agent_ids(&self) -> HashSet<AgentId> {
-        self.banks
-            .keys()
-            .cloned()
-            .chain(self.consumers.keys().cloned())
-            .chain(self.firms.keys().cloned())
-            .collect()
+        self.banks.keys().cloned().chain(self.consumers.keys().cloned()).chain(self.firms.keys().cloned()).collect()
     }
     pub fn get_agent_type_string(&self, id: &AgentId) -> Option<&'static str> {
         if self.banks.contains_key(id) {

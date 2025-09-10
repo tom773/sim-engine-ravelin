@@ -33,10 +33,27 @@ impl Instrument {
                 instrument_type: "Cash".to_string(),
                 subtype: format!("{:?}", d.cash_type),
             },
-            InstrumentType::Bond(d) => ConsolidationKey {
-                issuer: d.issuer,
-                instrument_type: "Bond".to_string(),
-                subtype: format!("{:?}_{:?}_{:?}_{:?}", d.bond_type, d.rating, d.maturity_date, d.coupon_rate_bps),
+            InstrumentType::Debt(debt) => match debt {
+                DebtInstrument::Bond(d) => ConsolidationKey {
+                    issuer: d.issuer,
+                    instrument_type: "Bond".to_string(),
+                    subtype: format!("{:?}_{:?}_{:?}_{:?}", d.bond_type, d.rating, d.maturity_date, d.coupon_rate_bps),
+                },
+                DebtInstrument::Loan(d) => ConsolidationKey {
+                    issuer: d.lender,
+                    instrument_type: "Loan".to_string(),
+                    subtype: format!("{:?}_{:?}", d.loan_type, d.loan_id),
+                },
+                DebtInstrument::CreditLine(d) => ConsolidationKey {
+                    issuer: d.lender,
+                    instrument_type: "CreditLine".to_string(),
+                    subtype: format!("{:?}_{:?}", d.facility_type, d.facility_id),
+                },
+                DebtInstrument::TradeCredit(d) => ConsolidationKey {
+                    issuer: d.creditor,
+                    instrument_type: "TradeCredit".to_string(),
+                    subtype: format!("{:?}", d.status),
+                },
             },
             InstrumentType::RealAsset(d) => {
                 let (owner, subtype) = match d {
@@ -134,7 +151,7 @@ impl FinancialSystem {
     ) -> Result<(), String> {
         if let Some(inst) = self.instruments.get(instrument_id) {
             match inst.instrument_type {
-                InstrumentType::Bond(_)
+                InstrumentType::Debt(_)
                 | InstrumentType::Equity(_)
                 | InstrumentType::StructuredTranche(_)
                 | InstrumentType::Derivative(_) => {
@@ -189,13 +206,30 @@ impl FinancialSystem {
                 info.currency = Some(d.currency);
                 Some(d.issuer)
             }
-            InstrumentType::Bond(d) => {
-                info.face_value = Some(d.face_value);
-                info.coupon_rate_bps = Some(d.coupon_rate_bps);
-                info.maturity_date = Some(d.maturity_date);
-                info.remaining_years = Some(d.remaining_tenor_years(current_date));
-                Some(d.issuer)
-            }
+            InstrumentType::Debt(debt) => match debt {
+                DebtInstrument::Bond(d) => {
+                    info.face_value = Some(d.face_value);
+                    info.coupon_rate_bps = Some(d.coupon_rate_bps);
+                    info.maturity_date = Some(d.maturity_date);
+                    info.remaining_years = Some(d.remaining_tenor_years(current_date));
+                    Some(d.issuer)
+                }
+                DebtInstrument::Loan(d) => {
+                    info.face_value = Some(d.principal);
+                    info.maturity_date = Some(d.maturity_date);
+                    Some(d.lender)
+                }
+                DebtInstrument::CreditLine(d) => {
+                    info.face_value = Some(d.commitment_amount);
+                    info.maturity_date = Some(d.expiry_date);
+                    Some(d.lender)
+                }
+                DebtInstrument::TradeCredit(d) => {
+                    info.face_value = Some(d.amount);
+                    info.maturity_date = Some(d.due_date);
+                    Some(d.creditor)
+                }
+            },
             InstrumentType::Equity(d) => Some(d.issuer),
             InstrumentType::Repo(d) => Some(d.borrower),
             InstrumentType::StructuredTranche(d) => {
@@ -381,11 +415,11 @@ impl FinancialSystem {
         }
     }
 
-    pub fn get_active_loans_for_borrower(&self, borrower_id: &AgentId) -> Vec<&ActiveLoan> {
+    pub fn get_active_loans_for_borrower(&self, borrower_id: &AgentId) -> Vec<&Loan> {
         self.credit_registry
             .loans_by_borrower
             .get(borrower_id)
-            .map(|loan_ids| loan_ids.iter().filter_map(|id| self.credit_registry.active_loans.get(id)).collect())
+            .map(|loan_ids| loan_ids.iter().filter_map(|id| self.credit_registry.loans.get(id)).collect())
             .unwrap_or_default()
     }
 }

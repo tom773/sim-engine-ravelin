@@ -134,16 +134,14 @@ impl CentralSecuritiesDepository {
         &mut self, instrument_id: InstrumentId, instrument: &Instrument, issue_date: NaiveDate,
     ) -> Result<(), CSDError> {
         let (security_type, issuer, maturity) = match &instrument.instrument_type {
-            InstrumentType::Bond(details) => (SecurityType::Bond, details.issuer, Some(details.maturity_date)),
+            InstrumentType::Debt(DebtInstrument::Bond(details)) => {
+                (SecurityType::Bond, details.issuer, Some(details.maturity_date))
+            }
             InstrumentType::Equity(details) => (SecurityType::Equity, details.issuer, None),
             InstrumentType::StructuredTranche(details) => {
                 (SecurityType::StructuredProduct, details.issuer, Some(details.maturity_date))
             }
-            InstrumentType::Derivative(_) => (
-                SecurityType::Derivative,
-                AgentId::default(),
-                None,
-            ),
+            InstrumentType::Derivative(_) => (SecurityType::Derivative, AgentId::default(), None),
             _ => return Ok(()),
         };
 
@@ -198,11 +196,7 @@ impl CentralSecuritiesDepository {
             account.holdings.get_mut(&instrument_id).ok_or(CSDError::SecurityNotFound(agent_id, instrument_id))?;
 
         if holding.available < quantity {
-            return Err(CSDError::InsufficientSecurities(
-                Uuid::new_v4(),
-                holding.available,
-                quantity,
-            ));
+            return Err(CSDError::InsufficientSecurities(Uuid::new_v4(), holding.available, quantity));
         }
 
         holding.available -= quantity;
@@ -233,10 +227,7 @@ impl CentralSecuritiesDepository {
     }
 
     pub fn reserve_securities_for_dvp(
-        &mut self,
-        instruction: SettlementInstruction,
-        government_id: AgentId,
-        _instrument_name: &str,
+        &mut self, instruction: SettlementInstruction, government_id: AgentId, _instrument_name: &str,
         current_date: NaiveDate,
     ) -> Result<(), CSDError> {
         let seller_id = instruction.seller;
@@ -296,7 +287,6 @@ impl CentralSecuritiesDepository {
         let buyer_holding = buyer_account.holdings.entry(instruction.instrument_id).or_default();
 
         buyer_holding.available += instruction.quantity;
-
 
         self.settlement_history.push(CompletedSettlement {
             trade_id: *trade_id,

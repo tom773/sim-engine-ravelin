@@ -144,7 +144,7 @@ impl BankingDomain {
         }
     }
     pub fn resolve_loan_approval(&self, bank_id: AgentId, borrower_id: AgentId, terms: LoanTerms) -> Vec<SimAction> {
-        let application_id = Uuid::new_v4(); // In real case, would track the actual application ID
+        let application_id = Uuid::new_v4();
         vec![SimAction::Banking(BankingAction::OriginateLoan {
             lender_id: bank_id,
             borrower_id,
@@ -162,7 +162,7 @@ impl BankingDomain {
             requested_amount: amount,
             purpose,
             proposed_collateral: collateral,
-            borrower_income: None, // Will be filled in by bank during underwriting
+            borrower_income: None,
             debt_to_income_ratio: None,
             application_date: chrono::Utc::now().date_naive(),
             status: ApplicationStatus::Pending,
@@ -183,7 +183,7 @@ impl BankingDomain {
         &self, lender_id: AgentId, borrower_id: AgentId, amount: f64, rate_bps: BasisPoints, state: &SimState,
     ) -> DomainResult {
         let current_date = state.current_date;
-        let maturity_date = current_date + chrono::Duration::days(1); // Overnight loan
+        let maturity_date = current_date + chrono::Duration::days(1);
 
         let loan_instrument = match Instrument::bond(
             InstrumentId(Uuid::new_v4()),
@@ -194,8 +194,8 @@ impl BankingDomain {
             maturity_date,
         )
         .coupon_bps(rate_bps)
-        .frequency(0) // Zero coupon for overnight
-        .rating(CreditRating::A)
+        .frequency(0)
+        .rating(CreditRating::Corporate(SpCreditRating::A))
         .build()
         {
             Ok(inst) => inst,
@@ -221,7 +221,7 @@ impl BankingDomain {
             payee: borrower_id,
             amount,
             context: TransactionContext::GenericTransfer { from: lender_id, to: borrower_id, amount },
-            priority: PaymentPriority::Urgent, // Interbank is high priority
+            priority: PaymentPriority::Urgent,
             earliest_release_tick: state.ticknum,
             deadline_tick: state.ticknum + 1,
         };
@@ -242,10 +242,7 @@ impl BankingDomain {
         DomainResult::success(effects)
     }
     fn execute_create_loan_application(&self, bank_id: AgentId, application: LoanApplication) -> DomainResult {
-        DomainResult::success(vec![StateEffect::Financial(FinancialEffect::RecordLoanApplication {
-            bank_id,
-            application,
-        })])
+        DomainResult::success(vec![StateEffect::Credit(CreditEffect::RecordLoanApplication { bank_id, application })])
     }
 
     fn execute_process_loan_application(
@@ -253,12 +250,11 @@ impl BankingDomain {
     ) -> DomainResult {
         match decision {
             LoanDecision::Approve { terms } => {
-                let borrower_id = AgentId::default(); // Would look up from application
+                let borrower_id = AgentId::default();
 
                 self.execute_loan_origination(bank_id, borrower_id, terms, application_id, state)
             }
-            LoanDecision::Reject { reason } => {
-                println!("❌ Loan application {} rejected: {}", application_id, reason);
+            LoanDecision::Reject { reason: _ } => {
                 DomainResult::empty()
             }
             LoanDecision::CounterOffer { alternative_terms } => {
@@ -274,65 +270,112 @@ impl BankingDomain {
         let issue_date = state.current_date;
         let maturity_date = issue_date + chrono::Duration::days((loan_terms.term_months * 30) as i64);
 
-        let loan_instrument = match Instrument::bond(
-            InstrumentId(Uuid::new_v4()),
-            borrower_id,         // Borrower is the issuer of the debt
-            BondType::Corporate, // Or Personal for consumer loans
-            Money::from_f64(loan_terms.principal).unwrap_or(Money::ZERO),
-            issue_date,
+        let principal = Money::from_f64(loan_terms.principal).unwrap_or(Money::ZERO);
+        let next_payment_date = match loan_terms.payment_frequency {
+            PaymentFrequency::Monthly => issue_date + chrono::Duration::days(30),
+            PaymentFrequency::Quarterly => issue_date + chrono::Duration::days(90),
+            PaymentFrequency::SemiAnnual => issue_date + chrono::Duration::days(180),
+            PaymentFrequency::Annual => issue_date + chrono::Duration::days(365),
+            PaymentFrequency::InterestOnly => issue_date + chrono::Duration::days(30),
+        };
+
+        let amortization = match loan_terms.payment_frequency {
+            PaymentFrequency::InterestOnly => Amortization::InterestOnly,
+            _ => Amortization::Annuity,
+        };
+        let borrower_type = if state.agents.firms.contains_key(&borrower_id) {
+            BorrowerType::Corporate
+        } else {
+            BorrowerType::Individual
+        };
+        let credit_rating = match borrower_type {
+            BorrowerType::Corporate => Some(CreditRating::Corporate(SpCreditRating::BBB)),
+            BorrowerType::Individual => Some(CreditRating::Consumer(ConsumerCreditRating::Subprime)),
+        };
+        let loan_details = LoanDetails {
+            loan_id: Uuid::new_v4(),
+            lender: lender_id,
+            borrower: borrower_id,
+            borrower_type,
+            loan_type: LoanType::TermLoan,
+            facility_id: None,
+
+            principal,
+            outstanding_principal: principal,
+            reference_rate: Some(RateIndex::Fixed), // fixed for now
+            spread_bps: loan_terms.annual_rate_bps, // interpret as all-in fixed spread
+            rate_floor_bps: None,
+            rate_cap_bps: None,
+
+            day_count: DayCount::ActAct,
+            compounding: Compounding::Simple,
+            payment_frequency: loan_terms.payment_frequency,
+
+            origination_date: issue_date,
             maturity_date,
-        )
-        .coupon_bps(loan_terms.annual_rate_bps)
-        .frequency(match loan_terms.payment_frequency {
-            PaymentFrequency::Monthly => 12,
-            PaymentFrequency::Quarterly => 4,
-            PaymentFrequency::SemiAnnual => 2,
-            PaymentFrequency::Annual => 1,
-            PaymentFrequency::InterestOnly => 0,
-        })
-        .rating(CreditRating::BBB) // Would be determined by underwriting
-        .build()
-        {
-            Ok(instrument) => instrument,
-            Err(e) => return DomainResult::failure(vec![format!("Failed to build loan: {}", e)]),
+            next_payment_date,
+            last_accrual_date: issue_date,
+
+            amortization,
+            prepayment_terms: PrepaymentTerms {
+                allowed: true,
+                penalty_type: PrepaymentPenalty::None,
+                lockout_period_months: None,
+            },
+
+            collateral: vec![],
+            covenants: vec![],
+            credit_rating,
+            impairment: ImpairmentState {
+                stage: ImpairmentStage::Stage1Performing,
+                provision_amount: Money::ZERO,
+                days_past_due: 0,
+                probability_of_default: 0.0,
+                loss_given_default: 0.0,
+                exposure_at_default: principal,
+            },
+
+            accrued_interest: Money::ZERO,
+            unamortized_fees: Money::ZERO,
+        };
+
+        let loan = Loan {
+            instrument_id: InstrumentId(Uuid::new_v4()),
+            details: loan_details,
+            status: LoanStatus::Current,
+            servicing_history: vec![],
         };
 
         let deposit_instrument = Instrument::cash(
             InstrumentId(Uuid::new_v4()),
-            lender_id, // Bank is the issuer of the deposit liability
+            lender_id, // bank issues the deposit liability
             CashType::DemandDeposit,
             Currency::USD,
             state.financial_system.central_bank.policy_rate_bps,
         )
         .build();
-        let active_loan = ActiveLoan {
-            instrument_id: loan_instrument.id,
-            origination_date: issue_date,
-            original_terms: loan_terms.clone(),
-            outstanding_principal: loan_terms.principal,
-            payment_history: vec![],
-            status: LoanStatus::Current,
-        };
 
-        let effects = vec![
-            StateEffect::Financial(FinancialEffect::CreateInstrument {
-                instrument: loan_instrument,
-                creditor: lender_id, // Bank owns the loan asset
-                debtor: borrower_id, // Borrower has the liability
-                quantity: 1.0,       // One loan contract
-            }),
+        let mut effects = vec![
+            StateEffect::Credit(CreditEffect::RegisterLoan { loan: loan.clone() }),
             StateEffect::Financial(FinancialEffect::CreateInstrument {
                 instrument: deposit_instrument,
-                creditor: borrower_id, // Borrower owns the deposit asset
-                debtor: lender_id,     // Bank has the deposit liability
-                quantity: loan_terms.principal,
-            }),
-            StateEffect::Financial(FinancialEffect::RecordActiveLoan { loan: active_loan }),
-            StateEffect::Financial(FinancialEffect::UpdateApplicationStatus {
-                application_id,
-                status: ApplicationStatus::Approved,
+                creditor: borrower_id, // borrower has the deposit asset
+                debtor: lender_id,     // bank has the deposit liability
+                quantity: principal.to_f64(),
             }),
         ];
+
+        effects.push(StateEffect::Financial(FinancialEffect::RecordTransaction(Transaction {
+            id: Uuid::new_v4(),
+            from_agent: lender_id,
+            to_agent: borrower_id,
+            amount: principal.to_f64(),
+            transaction_type: "LoanOrigination".to_string(),
+            timestamp: issue_date,
+            instrument_id: Some(loan.instrument_id),
+            ref_id: Some(application_id),
+        })));
+
 
         DomainResult::success(effects)
     }

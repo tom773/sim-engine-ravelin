@@ -30,7 +30,7 @@ impl Domain for ConsumptionDomain {
         "Consumption"
     }
 
-    fn resolve_intention(&self, intention: &SimIntention, _context: &ResolutionContext) -> Option<ResolutionResult> {
+    fn resolve_intention(&self, intention: &SimIntention, context: &ResolutionContext) -> Option<ResolutionResult> {
         let actions = match intention {
             SimIntention::Production(ProductionIntention::ApplyForJob { agent_id: _, market_id, application }) => {
                 vec![SimAction::Transaction(TransactionAction::PostJobApplication {
@@ -40,22 +40,30 @@ impl Domain for ConsumptionDomain {
             }
 
             SimIntention::Consumption(ConsumptionIntention::ConsumeGood { agent_id, good_id, quantity }) => {
+                let qty = quantity.round();
                 vec![SimAction::Consumption(ConsumptionAction::Consume {
+
                     agent_id: *agent_id,
                     good_id: *good_id,
-                    amount: *quantity,
+                    amount: qty,
                 })]
             }
 
             SimIntention::Consumption(ConsumptionIntention::SpendOnGood { agent_id, good_id, max_notional }) => {
-                // TODO Resolve this to use the basket of goods in the future
+                let px =
+                    context.state.financial_system.exchange.goods_market(good_id).and_then(|v| v.book.best_ask()).unwrap_or(Money::from(1));
+
+
+                let qty = (max_notional / px.to_f64()).max(0.0);
+                let start_bid = Money::from_f64(px.to_f64() * 1.01).unwrap_or_default(); // +1%
+
                 vec![SimAction::Transaction(TransactionAction::PostMarketOrder {
                     agent_id: *agent_id,
                     market_id: MarketId::Goods(*good_id),
                     side: Side::Bid,
-                    quantity: max_notional / 10.0,
-                    price: None,
-                    order_type: OrderType::Market,
+                    quantity: qty.round(),
+                    price: Some(start_bid),
+                    order_type: OrderType::Limit,
                 })]
             }
 
@@ -100,7 +108,6 @@ impl Domain for ConsumptionDomain {
 impl ConsumptionDomain {
     fn validate(&self, action: &ConsumptionAction, state: &SimState) -> Result<(), String> {
         match action {
-
             ConsumptionAction::Consume { agent_id, good_id, amount } => {
                 Validator::positive_amount(*amount)?;
                 Validator::agent_exists(*agent_id, state)?;

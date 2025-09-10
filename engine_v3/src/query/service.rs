@@ -3,9 +3,9 @@ use axum::response::Json;
 use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
 use sim_core::prelude::*;
-use std::{sync::{Arc, Mutex}};
-use uuid::Uuid;
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use uuid::Uuid;
 pub struct QueryService {
     engine: Arc<Mutex<SimulationEngine>>,
 }
@@ -75,10 +75,7 @@ impl QueryService {
             .all_agent_ids()
             .into_iter()
             .map(|id| {
-                let name = engine_lock
-                    .get_agent_info(&id)
-                    .1
-                    .unwrap_or_else(|| "N/A".to_string());
+                let name = engine_lock.get_agent_info(&id).1.unwrap_or_else(|| "N/A".to_string());
                 (id, name)
             })
             .collect();
@@ -93,6 +90,9 @@ impl QueryService {
         let macro_stats_dto = MacroStatsDto {
             nominal_gdp_proxy: macro_stats.nominal_gdp_proxy,
             consumer_spending_daily: macro_stats.consumer_spending_daily,
+            household_debt: macro_stats.household_debt,
+            corporate_debt: macro_stats.corporate_debt,
+            government_debt: macro_stats.government_debt,
             cpi: macro_stats.cpi,
             inflation_rate: macro_stats.inflation_rate,
             unemployment_rate: macro_stats.unemployment_rate,
@@ -101,6 +101,32 @@ impl QueryService {
             m2: macro_stats.m2,
             bank_reserves: macro_stats.bank_reserves,
         };
+        let am_cl = agents_map.clone();
+        let contracts: Vec<EmploymentRecordDto> = state
+            .agents
+            .firms
+            .iter()
+            .flat_map(|(fid, firm)| {
+                let agents_map = agents_map.clone();
+                firm.employees.values().clone().map(move |c| EmploymentRecordDto {
+                    firm_id: *fid,
+                    firm_name: agents_map.get(fid).cloned().unwrap_or_else(|| "Firm".into()),
+                    contract: c.clone(),
+                })
+            })
+            .collect();
+        let labour_stats = LabourMarketStatsDto {
+            employment: macro_stats.employment,
+            unemployment: macro_stats.unemployment,
+            labour_force: macro_stats.labour_force,
+            unemployment_rate: macro_stats.unemployment_rate, // already fraction
+            labor_force_participation: macro_stats.labor_force_participation, // remove *100.0
+            job_openings: macro_stats.job_openings as usize,
+            payroll_proxy: macro_stats.payroll_proxy as usize,
+            avg_wage_rate: macro_stats.avg_wage_rate,
+            contracts,
+        };
+
         let on_rates = OvernightRatesDto {
             effr: Some(state.financial_system.central_bank.policy_rate_bps + dec!(13.0)),
             sofr: Some(state.financial_system.central_bank.policy_rate_bps + dec!(17.0)),
@@ -121,7 +147,8 @@ impl QueryService {
             agent_counts,
             macro_stats: macro_stats_dto,
             monetary_stats: monetary_stats_dto,
-            maps: MapsDto { agents_map, instruments_map },
+            labor_force_stats: labour_stats,
+            maps: MapsDto { agents_map: am_cl.clone(), instruments_map },
         })
     }
 
@@ -206,7 +233,20 @@ impl QueryService {
 
             let (best_bid_yield, best_ask_yield, mid_yield, last_yield) =
                 if let Some(inst) = state.financial_system.instruments.get(inst_id) {
-                    if let InstrumentType::Bond(d) = &inst.instrument_type {
+                    // Handle new Debt structure
+                    let bond_details = match &inst.instrument_type {
+                        InstrumentType::Debt(debt_inst) => {
+                            match debt_inst {
+                                DebtInstrument::Bond(d) => Some(d),
+                                DebtInstrument::Loan(_) => None, // Loans might not have yield calculations
+                                DebtInstrument::CreditLine(_) => None,
+                                DebtInstrument::TradeCredit(_) => None,
+                            }
+                        }
+                        _ => None,
+                    };
+
+                    if let Some(d) = bond_details {
                         let calc_yield = |price_opt: Option<Money>| -> Option<Rate> {
                             price_opt.map(|price| {
                                 let ytm_years = years_to_maturity(state.current_date, d.maturity_date);
@@ -234,7 +274,7 @@ impl QueryService {
                     .financial_system
                     .instruments
                     .get(inst_id)
-                    .map_or("Unknown".to_string(), |i| i.type_as_string().to_string()),
+                    .map_or("Unknown".to_string(), |i| self.get_instrument_display_name(i)),
                 last_price: view.last.and_then(Rate::from_f64),
                 mid_price: market.book.mid_price().map(|m| m.0),
                 best_bid: market.book.best_bid().map(|m| m.0),
@@ -250,6 +290,7 @@ impl QueryService {
             });
         }
 
+        // Continue with goods and labour markets...
         for (good_id, market) in &state.financial_system.exchange.goods_markets {
             let market_id = MarketId::Goods(*good_id);
             let view = state.market_view(&market_id).unwrap_or_default();
@@ -307,6 +348,26 @@ impl QueryService {
         }
 
         Ok(summaries)
+    }
+
+    // Helper method to get proper display names for instruments
+    fn get_instrument_display_name(&self, instrument: &Instrument) -> String {
+        match &instrument.instrument_type {
+            InstrumentType::Debt(debt_inst) => match debt_inst {
+                DebtInstrument::Bond(bond) => {
+                    format!("{:?} Bond", bond.bond_type)
+                }
+                DebtInstrument::Loan(_) => "Loan".to_string(),
+                DebtInstrument::CreditLine(_) => "Credit Line".to_string(),
+                DebtInstrument::TradeCredit(_) => "Mortgage".to_string(),
+            },
+            InstrumentType::Cash(cash) => format!("{:?}", cash.cash_type).replace('_', " "),
+            InstrumentType::Equity(_) => "Equity".to_string(),
+            InstrumentType::RealAsset(_) => "Real Asset".to_string(),
+            InstrumentType::Repo(_) => "Repo".to_string(),
+            InstrumentType::Derivative(_) => "Derivative".to_string(),
+            InstrumentType::StructuredTranche(_) => "Structured Product".to_string(),
+        }
     }
 
     pub fn get_catalog(&self) -> QueryResult<CatalogDto> {
@@ -445,7 +506,7 @@ impl QueryService {
         Ok({
             CreditRegistryDto {
                 applications: reg.applications.clone(),
-                active_loans: reg.active_loans.clone(),
+                loans: reg.loans.clone(),
                 loans_by_borrower: reg.loans_by_borrower.clone(),
                 loans_by_lender: reg.loans_by_lender.clone(),
                 applications_by_bank: reg.applications_by_bank.clone(),

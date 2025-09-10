@@ -172,10 +172,19 @@ impl OrderBook {
         self.last_price.or_else(|| self.mid_price())
     }
 
-    pub fn submit_order(&mut self, order: Order, market_id: &MarketId) -> Vec<Trade> {
-        let mut trades = Vec::new();
-        self.match_order(order, &mut trades, market_id);
-        trades
+    pub fn submit_order(&mut self, order: Order, _market_id: &MarketId) -> Vec<Trade> {
+        match order.order_type {
+            OrderType::Limit => {
+                self.add_to_book(order);
+                Vec::new()
+            }
+            OrderType::Market => {
+
+                let mut trades = Vec::new();
+                self.match_order(order, &mut trades, _market_id);
+                trades
+            }
+        }
     }
 
     fn match_order(&mut self, mut incoming_order: Order, trades: &mut Vec<Trade>, market_id: &MarketId) {

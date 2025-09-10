@@ -20,6 +20,8 @@ pub struct CoreEconomicStats {
     pub cpi: f64,
     pub ppi: f64,
     pub unemployment_rate: f64,
+    pub payroll_proxy: f64,
+    pub avg_wage_rate: f64,
     pub labor_force_participation: f64,
     pub job_openings: f64,
     pub capacity_utilization: f64,
@@ -148,8 +150,10 @@ impl EconomicAnalytics for SimState {
             employment,
             unemployment: labour_force.saturating_sub(employment),
             labour_force,
-            unemployment_rate: core_stats.unemployment_rate / 100.0,
-            labor_force_participation: core_stats.labor_force_participation / 100.0,
+            unemployment_rate: core_stats.unemployment_rate, // no /100
+            labor_force_participation: core_stats.labor_force_participation,
+            payroll_proxy: core_stats.payroll_proxy,
+            avg_wage_rate: core_stats.avg_wage_rate,
             job_openings: core_stats.job_openings,
             household_debt: core_stats.household_debt,
             corporate_debt: core_stats.corporate_debt,
@@ -163,8 +167,6 @@ impl EconomicAnalytics for SimState {
             m2,
             velocity,
             velocity_note,
-            avg_wage_rate: 0.0,       // Placeholder
-            payroll_proxy: 0.0,       // Placeholder
             business_investment: 0.0, // Placeholder
             business_investment_note: "dummy: capital formation flows not implemented yet",
             government_spending: self.financial_system.government.spending_targets.purchases,
@@ -193,29 +195,53 @@ impl EconomicAnalytics for SimState {
 
         let ppi = 100.0; // Placeholder until goods catalog confirmed
 
+        let job_openings: u32 = self
+            .financial_system
+            .exchange
+            .labour_markets
+            .values()
+            .map(|lm| lm.job_offers.iter().map(|o| o.quantity).sum::<u32>())
+            .sum();
+
         let employed_count: usize = self.agents.firms.values().map(|f| f.employees.len()).sum();
+        let total_population: usize = self.agents.consumers.len();
+        let unemployed_count: usize = total_population.saturating_sub(employed_count);
+        let labor_force = (employed_count + unemployed_count) as f64;
 
-        let seeking_work_count: usize = 0;
+        let labor_force_participation =
+            if total_population > 0 { labor_force / (total_population as f64) } else { 0.0 };
 
-        let labor_force = (employed_count + seeking_work_count) as f64;
-        let total_population = self.agents.consumers.len() as f64;
-        let labor_force_participation = if total_population > 0.0 { labor_force / total_population } else { 0.0 };
-        let unemployment_rate =
-            if labor_force > 0.0 { (labor_force - employed_count as f64) / labor_force } else { 0.0 };
+        let unemployment_rate = if labor_force > 0.0 { (unemployed_count as f64) / labor_force } else { 0.0 };
 
-        let job_openings: u32 = 0;
+        let (payroll_proxy, avg_wage_rate) = {
+            let mut wage_sum = 0.0;
+            let mut hour_sum = 0.0;
+            for firm in self.agents.firms.values() {
+                for c in firm.employees.values() {
+                    wage_sum += c.wage_rate * c.hours;
+                    hour_sum += c.hours;
+                }
+            }
+            let avg = if hour_sum > 0.0 { wage_sum / hour_sum } else { 0.0 };
+            (wage_sum, avg)
+        };
 
         let household_debt: f64 = self.agents.consumers.keys().map(|id| fs.get_total_liabilities(id)).sum();
         let corporate_debt: f64 = self.agents.firms.keys().map(|id| fs.get_total_liabilities(id)).sum();
         let government_debt = fs.get_total_liabilities(&fs.government.id);
-
+        println!(
+            "Household debt: {}, Corporate debt: {}, Government debt: {}",
+            household_debt, corporate_debt, government_debt
+        );
         CoreEconomicStats {
             gdp,
             consumption: consumer_spending_daily,
             cpi,
             ppi,
-            unemployment_rate: unemployment_rate * 100.0,
-            labor_force_participation: labor_force_participation * 100.0,
+            unemployment_rate,
+            labor_force_participation,
+            payroll_proxy,
+            avg_wage_rate,
             job_openings: job_openings as f64,
             capacity_utilization: 0.0,  // Placeholder
             industrial_production: 0.0, // Placeholder

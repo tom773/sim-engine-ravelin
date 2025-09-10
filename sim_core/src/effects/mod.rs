@@ -4,7 +4,9 @@ pub mod financial;
 pub mod inventory;
 pub mod market_effects;
 pub mod rtgs;
+pub mod credit_effects;
 
+pub use credit_effects::*;
 pub use rtgs::*;
 pub use agent_effects::*;
 pub use application::*;
@@ -20,7 +22,8 @@ pub enum StateEffect {
     Inventory(InventoryEffect),
     Market(MarketEffect),
     Agent(AgentEffect),
-    Monetary(MonetaryEffect)
+    Monetary(MonetaryEffect),
+    Credit(CreditEffect),
 }
 
 impl StateEffect {
@@ -31,6 +34,7 @@ impl StateEffect {
             StateEffect::Market(effect) => format!("Market::{}", effect.name()),
             StateEffect::Agent(effect) => format!("Agent::{}", effect.name()),
             StateEffect::Monetary(effect) => format!("CentralBank::{}", effect.name()),
+            StateEffect::Credit(effect) => format!("Credit::{}", effect.name()),
         }
     }
 }

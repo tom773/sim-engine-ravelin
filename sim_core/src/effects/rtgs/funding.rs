@@ -1,6 +1,11 @@
 use crate::*;
 
 pub fn can_fund(state: &SimState, pi: &PaymentInstruction) -> Result<bool, EffectError> {
+   let cb = state.financial_system.central_bank.id;
+   let gov = state.financial_system.government.id;
+   if pi.payer == cb && pi.payee == gov {
+       return Ok(true); // seigniorage funding
+   }
     let (payer_account_id, _) = match state.financial_system.find_agent_liquid_account(&pi.payer) {
         Some(account) => account,
         None => return Ok(false),

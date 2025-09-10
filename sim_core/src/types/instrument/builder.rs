@@ -15,7 +15,6 @@ pub enum BuildError {
     ZeroCouponHasCoupon,
 }
 
-
 fn classify_market(bond_type: BondType, issue: NaiveDate, maturity: NaiveDate) -> InstrumentMarket {
     let days = (maturity - issue).num_days();
     let money = days <= 365;
@@ -27,7 +26,6 @@ fn classify_market(bond_type: BondType, issue: NaiveDate, maturity: NaiveDate) -
     }
 }
 
-
 pub struct CashBuilder {
     id: InstrumentId,
     market: Option<InstrumentMarket>,
@@ -36,7 +34,6 @@ pub struct CashBuilder {
 }
 
 impl Instrument {
-    // MODIFIED: Added issuer to the constructor
     pub fn cash(id: InstrumentId, issuer: AgentId, cash_type: CashType, currency: Currency, rate: BasisPoints) -> CashBuilder {
         CashBuilder {
             id,
@@ -60,7 +57,6 @@ impl CashBuilder {
         }
     }
 }
-
 
 pub struct BondBuilder {
     id: InstrumentId,
@@ -91,7 +87,7 @@ impl Instrument {
                 maturity_date,
                 frequency: 2,
                 day_count: DayCount::ActAct,
-                rating: CreditRating::BBB,
+                rating: CreditRating::Corporate(SpCreditRating::BBB),
                 last_accrual_date: Some(maturity_date-chrono::Duration::days(1)),
             },
             listability: Listability::Unlisted,
@@ -137,7 +133,7 @@ impl BondBuilder {
 
         Ok(Instrument {
             id: self.id,
-            instrument_type: InstrumentType::Bond(self.details),
+            instrument_type: InstrumentType::Debt(DebtInstrument::Bond(self.details)),
             instrument_market: self.market.unwrap_or_else(|| {
                 classify_market(d.bond_type, d.issue_date, d.maturity_date)
             }),
@@ -145,6 +141,7 @@ impl BondBuilder {
         })
     }
 }
+
 pub fn today() -> NaiveDate {
     chrono::Utc::now().date_naive()
 }
@@ -212,7 +209,7 @@ impl Instrument {
 
         Ok(Instrument {
             id,
-            instrument_type: InstrumentType::Bond(details),
+            instrument_type: InstrumentType::Debt(DebtInstrument::Bond(details)),
             instrument_market,
             listability: Listability::Listed(VenueType::CentralLimitOrderBook),
         })
@@ -238,6 +235,7 @@ impl Instrument {
             market,
         )
     }
+    
     pub fn gov_bond(
         tenor_years: f64,
         coupon_rate_bps_bps: BasisPoints,
@@ -261,7 +259,7 @@ impl Instrument {
                 frequency: NonZeroU32::new(2).unwrap(),
                 day_count: DayCount::ActAct,
             },
-            CreditRating::AAA,
+            CreditRating::Government(SpCreditRating::AAA),
             MarketChoice::Auto,
         )
     }
@@ -280,10 +278,11 @@ impl Instrument {
             issue,
             maturity,
             BondTerms::Zero,
-            CreditRating::AAA,
+            CreditRating::Government(SpCreditRating::AAA),
             MarketChoice::Auto,
         )
     }
+    
     pub fn corp_bond(issuer: AgentId, tenor_years: f64) -> Result<Self, BuildError> {
         let issue = today();
         let maturity = add_years(issue, years_from_f64(tenor_years).unwrap()).unwrap();
@@ -299,9 +298,41 @@ impl Instrument {
                 frequency: NonZeroU32::new(2).unwrap(),
                 day_count: DayCount::ActAct,
             },
-            CreditRating::BBB,
+            CreditRating::Corporate(SpCreditRating::BBB),
             MarketChoice::Auto,
         )
+    }
+}
+
+impl Instrument {
+    pub fn loan(
+        id: InstrumentId,
+        loan_details: LoanDetails,
+    ) -> Self {
+        let market = if loan_details.maturity_date.signed_duration_since(loan_details.origination_date).num_days() <= 365 {
+            InstrumentMarket::MoneyMarket(MoneyMarketSegment::CorporateShortTerm)
+        } else {
+            InstrumentMarket::CapitalMarket(CapitalMarketSegment::CorporateCredit)
+        };
+        
+        Instrument {
+            id,
+            instrument_type: InstrumentType::Debt(DebtInstrument::Loan(loan_details)),
+            instrument_market: market,
+            listability: Listability::Unlisted,
+        }
+    }
+    
+    pub fn credit_line(
+        id: InstrumentId,
+        credit_line_details: CreditLineDetails,
+    ) -> Self {
+        Instrument {
+            id,
+            instrument_type: InstrumentType::Debt(DebtInstrument::CreditLine(credit_line_details)),
+            instrument_market: InstrumentMarket::MoneyMarket(MoneyMarketSegment::CorporateShortTerm),
+            listability: Listability::Unlisted,
+        }
     }
 }
 

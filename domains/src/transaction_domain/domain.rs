@@ -2,7 +2,7 @@ use crate::{Any, Domain, DomainResult, ResolutionContext, ResolutionPhase, Resol
 use serde::{Deserialize, Serialize};
 use sim_core::*;
 use uuid::Uuid;
-
+use rust_decimal_macros::dec;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TransactionsDomain {}
 
@@ -36,24 +36,30 @@ impl Domain for TransactionsDomain {
                     from: *target,
                     to: *government_id,
                     amount: *amount,
-                    context: TransactionContext::TaxPayment {
-                        payer: *target,
-                        amount: *amount,
-                    },
+                    context: TransactionContext::TaxPayment { payer: *target, amount: *amount },
                 })]
             }
 
-            SimIntention::Banking(BankingIntention::MarketMakeTreasuries { agent_id, maturity_date, quantity, bid_yield_bps, ask_yield_bps }) => {
-                self.resolve_treasury_market_making(
-                    *agent_id,
-                    *maturity_date,
-                    *quantity,
-                    *bid_yield_bps,
-                    *ask_yield_bps,
-                    context,
-                )
-            }
-            SimIntention::Production(ProductionIntention::PostGoodToMarket { agent_id, good_id, quantity, ask_price }) => {
+            SimIntention::Banking(BankingIntention::MarketMakeTreasuries {
+                agent_id,
+                maturity_date,
+                quantity,
+                bid_yield_bps,
+                ask_yield_bps,
+            }) => self.resolve_treasury_market_making(
+                *agent_id,
+                *maturity_date,
+                *quantity,
+                *bid_yield_bps,
+                *ask_yield_bps,
+                context,
+            ),
+            SimIntention::Production(ProductionIntention::PostGoodToMarket {
+                agent_id,
+                good_id,
+                quantity,
+                ask_price,
+            }) => {
                 vec![SimAction::Transaction(TransactionAction::PostMarketOrder {
                     agent_id: *agent_id,
                     market_id: MarketId::Goods(*good_id),
@@ -87,6 +93,14 @@ impl Domain for TransactionsDomain {
                     },
                 })]
             }
+            SimIntention::Production(ProductionIntention::FireWorkers { agent_id , employee_ids }) => {
+                println!("Firing employees: {:?}", employee_ids);
+                let mut actions_loc = vec![];
+                employee_ids.iter().for_each(|eid| {
+                    actions_loc.push(SimAction::Production(ProductionAction::Fire { agent_id: *agent_id, employee_id: eid.clone() }));
+                });
+                return Some(ResolutionResult::success(actions_loc));
+            }
 
             _ => return None,
         };
@@ -96,17 +110,16 @@ impl Domain for TransactionsDomain {
 
     fn resolution_phase(&self, intention: &SimIntention) -> Option<ResolutionPhase> {
         match intention {
-            SimIntention::Transaction(TransactionIntention::PayWages { .. }) | 
-            SimIntention::Fiscal(FiscalIntention::CollectTaxes { .. }) => Some(ResolutionPhase::Independent),
-            
-            SimIntention::Banking(BankingIntention::MarketMakeTreasuries { .. }) | 
-            SimIntention::Production(ProductionIntention::PostGoodToMarket { .. }) => {
-                Some(ResolutionPhase::Market)
-            }
-            
-            SimIntention::Production(ProductionIntention::ApplyForJob { .. }) | 
-            SimIntention::Production(ProductionIntention::HireWorkers { .. }) => Some(ResolutionPhase::Independent),
-            
+            SimIntention::Transaction(TransactionIntention::PayWages { .. })
+            | SimIntention::Fiscal(FiscalIntention::CollectTaxes { .. }) => Some(ResolutionPhase::Independent),
+
+            SimIntention::Banking(BankingIntention::MarketMakeTreasuries { .. })
+            | SimIntention::Production(ProductionIntention::PostGoodToMarket { .. }) => Some(ResolutionPhase::Market),
+
+            SimIntention::Production(ProductionIntention::ApplyForJob { .. })
+            | SimIntention::Production(ProductionIntention::HireWorkers { .. })
+            | SimIntention::Production(ProductionIntention::FireWorkers { .. })=> Some(ResolutionPhase::Independent),
+
             _ => None,
         }
     }
@@ -136,26 +149,93 @@ impl Domain for TransactionsDomain {
     }
 
     fn settle_trade(&self, trade: &Trade, state: &SimState) -> DomainResult {
-        let (_, from_bank) = match state.financial_system.find_agent_liquid_account(&trade.buyer) {
-            Some((_, bank_id)) => ((), bank_id),
-            None => {
-                return DomainResult::failure(vec![format!("Could not find liquid account for buyer {}", trade.buyer)]);
-            }
-        };
-
-        let (_, to_bank) = match state.financial_system.find_agent_liquid_account(&trade.seller) {
-            Some((_, bank_id)) => ((), bank_id),
-            None => {
-                return DomainResult::failure(vec![format!(
-                    "Could not find liquid account for seller {}",
-                    trade.seller
-                )]);
-            }
-        };
-
         match &trade.market_id {
             MarketId::Financial(inst_id) => {
                 let mut effects = Vec::new();
+
+                if trade.buyer == state.financial_system.central_bank.id
+                    && trade.seller == state.financial_system.government.id
+                {
+                    match &trade.market_id {
+                        MarketId::Financial(inst_id) => {
+                            let mut effects = Vec::new();
+
+                            let instruction = SettlementInstruction {
+                                instruction_id: Uuid::new_v4(),
+                                trade_id: trade.trade_id,
+                                seller: trade.seller,
+                                buyer: trade.buyer,
+                                instrument_id: *inst_id,
+                                quantity: trade.quantity,
+                                cash_amount: (trade.price * trade.quantity).to_f64(),
+                                settlement_date: state.current_date,
+                                status: SettlementStatus::Pending,
+                            };
+                            effects.push(StateEffect::Financial(FinancialEffect::RecordSettlementInstruction(
+                                instruction,
+                            )));
+
+                            let payment_amount = (trade.price * trade.quantity).to_f64();
+
+                            if let Some((_tga_id, _)) = state.financial_system.find_government_tga_account() {
+
+                                let payment = PaymentInstruction {
+                                    id: Uuid::new_v4(),
+                                    from_bank: state.financial_system.central_bank.id, // CB as payer
+                                    to_bank: state.financial_system.central_bank.id,   // CB holds TGA
+                                    payer: state.financial_system.central_bank.id,
+                                    payee: state.financial_system.government.id,
+                                    amount: payment_amount,
+                                    context: TransactionContext::TradeSettlement { trade_id: trade.trade_id },
+                                    priority: PaymentPriority::Urgent,
+                                    earliest_release_tick: state.ticknum,
+                                    deadline_tick: state.ticknum + 1,
+                                };
+                                effects.push(StateEffect::Financial(FinancialEffect::QueuePayment(payment)));
+                            } else {
+                                let tga_instrument = Instrument::cash(
+                                    InstrumentId(Uuid::new_v4()),
+                                    state.financial_system.central_bank.id,
+                                    CashType::TreasuryGeneralAccount,
+                                    Currency::USD,
+                                    dec!(0),
+                                )
+                                .build();
+
+                                effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument {
+                                    instrument: tga_instrument,
+                                    creditor: state.financial_system.government.id,
+                                    debtor: state.financial_system.central_bank.id,
+                                    quantity: payment_amount,
+                                }));
+                            }
+
+                            return DomainResult::success(effects);
+                        }
+                        _ => return DomainResult::failure(vec!["Invalid market for CB backstop".to_string()]),
+                    }
+                }
+
+                let (_, from_bank) = match state.financial_system.find_agent_liquid_account(&trade.buyer) {
+                    Some((_, bank_id)) => ((), bank_id),
+                    None => {
+                        return DomainResult::failure(vec![format!(
+                            "Could not find liquid account for buyer {}",
+                            trade.buyer
+                        )]);
+                    }
+                };
+
+                let (_, to_bank) = match state.financial_system.find_agent_liquid_account(&trade.seller) {
+                    Some((_, bank_id)) => ((), bank_id),
+                    None => {
+                        return DomainResult::failure(vec![format!(
+                            "Could not find liquid account for seller {}",
+                            trade.seller
+                        )]);
+                    }
+                };
+
                 let instruction = SettlementInstruction {
                     instruction_id: Uuid::new_v4(),
                     trade_id: trade.trade_id,
@@ -167,12 +247,12 @@ impl Domain for TransactionsDomain {
                     settlement_date: state.current_date,
                     status: SettlementStatus::Pending,
                 };
-
                 effects.push(StateEffect::Financial(FinancialEffect::RecordSettlementInstruction(instruction)));
+
                 effects.push(StateEffect::Financial(FinancialEffect::QueuePayment(PaymentInstruction {
                     id: Uuid::new_v4(),
-                    from_bank, 
-                    to_bank, 
+                    from_bank,
+                    to_bank,
                     payer: trade.buyer,
                     payee: trade.seller,
                     amount: (trade.price * trade.quantity).to_f64(),
@@ -181,6 +261,7 @@ impl Domain for TransactionsDomain {
                     earliest_release_tick: state.ticknum,
                     deadline_tick: state.ticknum + 10,
                 })));
+
                 DomainResult::success(effects)
             }
             MarketId::Goods(good_id) => {
@@ -367,7 +448,7 @@ impl TransactionsDomain {
                         fs.instruments
                             .get(id)
                             .and_then(|inst| match &inst.instrument_type {
-                                InstrumentType::Bond(d) => Some(d.maturity_date == maturity_date),
+                                InstrumentType::Debt(DebtInstrument::Bond(d)) => Some(d.maturity_date == maturity_date),
                                 _ => None,
                             })
                             .unwrap_or(false)
@@ -380,7 +461,7 @@ impl TransactionsDomain {
         let mut actions = Vec::new();
         for inst_id in matching_bonds {
             if let Some(inst) = fs.instruments.get(&inst_id) {
-                if let InstrumentType::Bond(details) = &inst.instrument_type {
+                if let InstrumentType::Debt(DebtInstrument::Bond(details)) = &inst.instrument_type {
                     let ytm = years_to_maturity(current_date, maturity_date);
 
                     let bid_price = bond_price(

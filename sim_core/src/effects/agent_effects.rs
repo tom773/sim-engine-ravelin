@@ -3,15 +3,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum AgentEffect {
-    EstablishEmployment {
-        firm_id: AgentId,
-        consumer_id: AgentId,
-        contract: EmploymentContract,
-    },
-    TerminateEmployment {
-        firm_id: AgentId,
-        consumer_id: AgentId,
-    },
+    EstablishEmployment { firm_id: AgentId, consumer_id: AgentId, contract: EmploymentContract },
+    TerminateEmployment { firm_id: AgentId, consumer_id: AgentId },
     UpdateIncome { id: AgentId, new_income: f64 },
     RecordDividendIncome { recipient: AgentId, amount: f64 },
     UpdateRevenue { id: AgentId, revenue: f64 },
@@ -34,47 +27,42 @@ impl AgentEffect {
 impl StateEffectApplicator {
     pub fn apply_agent_effect(state: &mut SimState, effect: &AgentEffect) -> Result<(), EffectError> {
         match effect {
-            AgentEffect::UpdateRevenue { id: _, revenue: _ } => {
-                // TODO implement revenue tracking
+            AgentEffect::UpdateRevenue { id: _, revenue: _ } => Ok(()),
+            AgentEffect::Produce { firm: _, good_id: _, amount: _ } => Ok(()),
+            AgentEffect::EstablishEmployment { firm_id, consumer_id, contract } => {
+                let prev_firm_id = if let Some(consumer) = state.agents.consumers.get(consumer_id) {
+                    consumer.employed_by
+                } else {
+                    return Err(EffectError::AgentNotFound { id: *consumer_id });
+                };
+
+                if let Some(prev_id) = prev_firm_id {
+                    if prev_id != *firm_id {
+                        if let Some(prev_firm) = state.agents.firms.get_mut(&prev_id) {
+                            prev_firm.employees.remove(consumer_id);
+                        }
+                    }
+                }
+
+                let agents = &mut state.agents;
+                let firm = agents.firms.get_mut(firm_id).ok_or(EffectError::AgentNotFound { id: *firm_id })?;
+                let consumer =
+                    agents.consumers.get_mut(consumer_id).ok_or(EffectError::AgentNotFound { id: *consumer_id })?;
+
+                firm.employees.insert(*consumer_id, contract.clone());
+                consumer.employed_by = Some(*firm_id);
+                consumer.hours_worked = contract.hours;
+                consumer.income = contract.wage_rate * contract.hours;
+
                 Ok(())
             }
-            AgentEffect::Produce {
-                firm: _,
-                good_id: _,
-                amount: _,
-            } => Ok(()),
-            AgentEffect::EstablishEmployment {
-                firm_id,
-                consumer_id,
-                contract,
-            } => {
+            AgentEffect::TerminateEmployment { firm_id, consumer_id } => {
                 let firm = state.agents.firms.get_mut(firm_id);
                 let consumer = state.agents.consumers.get_mut(consumer_id);
 
                 match (firm, consumer) {
                     (Some(firm), Some(consumer)) => {
-                        firm.employees.insert(*consumer_id, contract.clone());
-                        consumer.employed_by = Some(*firm_id);
-                        consumer.hours_worked = contract.hours;
-                        consumer.income = contract.wage_rate * contract.hours;
-                        Ok(())
-                    }
-                    (None, _) => Err(EffectError::AgentNotFound { id: *firm_id }),
-                    (_, None) => Err(EffectError::AgentNotFound { id: *consumer_id }),
-                }
-            }
-            AgentEffect::TerminateEmployment {
-                firm_id,
-                consumer_id,
-            } => {
-                let firm = state.agents.firms.get_mut(firm_id);
-                let consumer = state.agents.consumers.get_mut(consumer_id);
-
-                match (firm, consumer) {
-                    (Some(firm), Some(consumer)) => {
-                        if firm.employees.contains_key(consumer_id)
-                            && consumer.employed_by == Some(*firm_id)
-                        {
+                        if firm.employees.contains_key(consumer_id) && consumer.employed_by == Some(*firm_id) {
                             firm.employees.remove(consumer_id);
                             consumer.employed_by = None;
                             consumer.income = 0.0;

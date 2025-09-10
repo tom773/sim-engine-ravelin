@@ -39,7 +39,7 @@ impl Instrument {
                 CashType::TimeDeposit => Listability::Listed(VenueType::PostedRates),
                 CashType::TreasuryGeneralAccount => Listability::Unlisted,
             },
-            InstrumentType::Bond(_) => Listability::Listed(VenueType::CentralLimitOrderBook),
+            InstrumentType::Debt(debt) => debt.listability(),
             InstrumentType::Equity(_) => Listability::Listed(VenueType::CentralLimitOrderBook),
             InstrumentType::RealAsset(_) => Listability::Unlisted,
             _ => Listability::Listed(VenueType::CentralLimitOrderBook),
@@ -53,10 +53,13 @@ impl Instrument {
         }
     }
 
-
     pub fn face_value(&self) -> Option<Money> {
         match &self.instrument_type {
-            InstrumentType::Bond(d) => Some(d.face_value),
+            InstrumentType::Debt(debt) => match debt {
+                DebtInstrument::Bond(d) => Some(d.face_value),
+                DebtInstrument::Loan(d) => Some(d.principal),
+                _ => None,
+            },
             InstrumentType::StructuredTranche(d) => Some(d.face_value),
             _ => None,
         }
@@ -70,6 +73,7 @@ impl Instrument {
     pub fn should_create_order_book(&self) -> bool {
         matches!(self.listability, Listability::Listed(VenueType::CentralLimitOrderBook))
     }
+    
     pub fn type_as_string(&self) -> &'static str {
         match &self.instrument_type {
             InstrumentType::Cash(details) => match details.cash_type {
@@ -81,10 +85,15 @@ impl Instrument {
                 CashType::VaultCash => "Vault Cash",
                 CashType::TreasuryGeneralAccount => "Treasury General Account",
             },
-            InstrumentType::Bond(details) => match details.bond_type {
-                BondType::Corporate => "Corporate Bond",
-                BondType::Government => "Government Bond",
-                BondType::InterbankLoan => "Interbank Loan",
+            InstrumentType::Debt(debt) => match debt {
+                DebtInstrument::Bond(details) => match details.bond_type {
+                    BondType::Corporate => "Corporate Bond",
+                    BondType::Government => "Government Bond",
+                    BondType::InterbankLoan => "Interbank Loan",
+                },
+                DebtInstrument::Loan(_) => "Loan",
+                DebtInstrument::CreditLine(_) => "Credit Facility",
+                DebtInstrument::TradeCredit(_) => "Trade Credit",
             },
             InstrumentType::RealAsset(details) => match details {
                 RealAssetType::Inventory { .. } => "Inventory",
@@ -101,20 +110,40 @@ impl Instrument {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum InstrumentType {
     Cash(CashDetails),
-    Bond(BondDetails),
+    Debt(DebtInstrument),
     RealAsset(RealAssetType),
     Equity(EquityDetails),
     Derivative(DerivativeDetails),
     StructuredTranche(StructuredTrancheDetails),
     Repo(RepoDetails),
 }
-
+impl InstrumentType {
+    pub fn as_bond(&self) -> Option<&BondDetails> {
+        match self {
+            InstrumentType::Debt(DebtInstrument::Bond(b)) => Some(b),
+            _ => None,
+        }
+    }
+    
+    pub fn as_loan(&self) -> Option<&LoanDetails> {
+        match self {
+            InstrumentType::Debt(DebtInstrument::Loan(l)) => Some(l),
+            _ => None,
+        }
+    }
+    
+    pub fn as_debt(&self) -> Option<&DebtInstrument> {
+        match self {
+            InstrumentType::Debt(d) => Some(d),
+            _ => None,
+        }
+    }
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CashDetails {
     pub issuer: AgentId,
     pub cash_type: CashType,
     pub currency: Currency,
-
     pub interest_bps: BasisPoints,
 }
 
@@ -182,25 +211,12 @@ pub enum CashFlow {
     Floating,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum CreditRating {
-    AAA,
-    AA,
-    A,
-    BBB,
-    BB,
-    B,
-    CCC,
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BondDetails {
     pub bond_type: BondType,
     pub issuer: AgentId,
     pub cash_flow: CashFlow,
-
     pub coupon_rate_bps: BasisPoints,
-
     pub face_value: Money,
     pub issue_date: NaiveDate,
     pub maturity_date: NaiveDate,
@@ -246,7 +262,6 @@ pub enum OptionStyle {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OptionDetails {
     pub style: OptionStyle,
-
     pub strike_price: Money,
     pub european: bool,
 }
@@ -258,12 +273,9 @@ pub struct FutureDetails {}
 pub struct StructuredTrancheDetails {
     pub issuer: AgentId,
     pub tranche_type: TrancheType,
-
     pub attachment_point: Rate,
     pub detachment_point: Rate,
-
     pub face_value: Money,
-
     pub coupon_rate_bps: BasisPoints,
     pub maturity_date: NaiveDate,
     pub rating: CreditRating,
@@ -282,13 +294,10 @@ pub struct RepoDetails {
     pub borrower: AgentId,
     pub collateral_id: InstrumentId,
     pub collateral_quantity: f64,
-
     pub loan_amount: Money,
-
     pub interest_bps: BasisPoints,
     pub start_date: NaiveDate,
     pub end_date: NaiveDate,
-
     pub haircut: Rate,
 }
 
@@ -302,7 +311,6 @@ pub enum RealAssetType {
         owner: AgentId,
         address: String,
         sq_ft: u32,
-
         market_value: Money,
     },
 }
@@ -311,6 +319,13 @@ pub enum RealAssetType {
 pub struct InventoryItem {
     pub quantity: f64,
     pub unit_cost: Money,
+    pub date_acquired: NaiveDate,
+}
+
+impl InventoryItem {
+    pub fn age(&self, as_of: NaiveDate) -> i64 {
+        (as_of - self.date_acquired).num_days()
+    }
 }
 
 impl BondDetails {

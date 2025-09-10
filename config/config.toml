@@ -1,147 +1,261 @@
-# --- Simulation v3 Configuration File ---
+name = "Complex Production Economy"
+description = "A multi-sector economy with agriculture, manufacturing, and services"
 
-name = "Basic Economy"
-description = "A simple setup with 2 banks, 3 firms, and 5 consumers for engine_v3."
-
-# General simulation settings
 [config]
-iterations = 100 # The simulation will run for 100 ticks (days)
+iterations = 365  # Run for a year
+seed = 42        # Reproducible runs
 
-# --- Goods & Production Recipes ---
-# Define the raw materials and finished goods available in the economy.
+# Raw
+[[goods]] 
+id="wheat" 
+name="Wheat" 
+unit="bushel" 
+category="RawMaterial"  
+cpi_weight=0.00
+
+[[goods]] 
+id="copper_ore" 
+name="Copper" 
+unit="ton" 
+category="RawMaterial"  
+cpi_weight=0.00
+
+[[goods]] 
+id="iron_ore" 
+name="Wheat" 
+unit="ton" 
+category="RawMaterial"  
+cpi_weight=0.00
+
+[[goods]] 
+id="oil" 
+name="Crude Oil" 
+unit="Barrel" 
+category="RawMaterial"  
+cpi_weight=0.00
+
+# Intermediate
+[[goods]]
+id="steel"
+name="Steel"
+unit="ton"
+category="IntermediateGood"
+cpi_weight=0.00
 
 [[goods]]
-id = "raw_material"
-name = "Raw Material"
-unit = "unit"
-category = "RawMaterial"
-cpi_weight = 0.0 # Raw materials don't directly contribute to CPI
+id="semiconductors"
+name="Semiconductors"
+unit="unit"
+category="IntermediateGood"
+cpi_weight=0.00
 
 [[goods]]
-id = "general_good"
-name = "General Purpose Good"
-unit = "item"
-category = "ConsumerGood"
-cpi_weight = 1.0 # This is the only consumer good, so it has 100% CPI weight
+id="plastic"
+name="Plastic"
+unit="ton"
+category="IntermediateGood"
+cpi_weight=0.00
 
-# Define how goods are produced.
+[[goods]]
+id="petroleum"
+name="Refined Petroleum"
+unit="barrel"
+category="IntermediateGood"
+cpi_weight=0.00
+
+# Consumer
+[[goods]] 
+id="bread" 
+name="Bread" 
+unit="loaf"   
+category="ConsumerGood" 
+cpi_weight=0.4
+
+[[goods]]
+id="electronics"
+name="Electronics"
+unit="unit"
+category="ConsumerGood"
+cpi_weight=0.25
+
+[[goods]]
+id="Diesel"
+name="Diesel"
+unit="gallon"
+category="ConsumerGood"
+cpi_weight=0.15
+
+[[goods]]
+id="car"
+name="Car"
+unit="vehicle"
+category="ConsumerGood"
+cpi_weight=0.1
+
+[[goods]]
+id="toys"
+name="Toys"
+unit="unit"
+category="ConsumerGood"
+cpi_weight=0.1
+
+
 [[recipes]]
-id = "basic_manufacturing_recipe"
-name = "Basic Manufacturing"
-inputs = [
-  { good_id = "raw_material", quantity = 2.0 }
-]
-outputs = [
-  { good_id = "general_good", quantity = 1.0 }
-]
+id = "wheat_farming"
+name = "Wheat Farming"
+inputs = []
+outputs = [{ good_id = "wheat", quantity = 5.0 }]
 labour_hours = 8.0
 
-# --- Banks ---
-# Define the banks in the economy. Their initial liabilities (deposits) will be
-# created automatically when firms and consumers are given deposit assets.
+[[recipes]]
+id = "bread_baking"
+name = "Bread Baking"
+inputs = [{ good_id = "wheat", quantity = 0.5 }]
+outputs = [{ good_id = "bread", quantity = 1.0 }]
+labour_hours = 0.5
 
+# --- Primary Extraction ---
+
+[[recipes]]
+id = "iron_mining"
+name = "Iron Ore Mining"
+inputs = []
+outputs = [{ good_id = "iron_ore", quantity = 2.0 }]
+labour_hours = 12.0
+
+[[recipes]]
+id = "copper_mining"
+name = "Copper Ore Mining"
+inputs = []
+outputs = [{ good_id = "copper_ore", quantity = 1.5 }]
+labour_hours = 10.0
+
+[[recipes]]
+id = "oil_drilling"
+name = "Crude Oil Drilling"
+inputs = []
+outputs = [{ good_id = "oil", quantity = 10.0 }]
+labour_hours = 20.0
+
+# --- Intermediate Good Production ---
+
+[[recipes]]
+id = "steel_smelting"
+name = "Steel Smelting"
+inputs = [{ good_id = "iron_ore", quantity = 1.2 }]
+outputs = [{ good_id = "steel", quantity = 1.0 }]
+labour_hours = 6.0
+
+[[recipes]]
+id = "oil_refining"
+name = "Oil Refining"
+inputs = [{ good_id = "oil", quantity = 1.0 }]
+outputs = [
+    { good_id = "petroleum", quantity = 0.4 },
+    { good_id = "plastic", quantity = 0.3 },
+    { good_id = "Diesel", quantity = 0.3 }
+]
+labour_hours = 4.0
+
+[[recipes]]
+id = "semiconductor_fabrication"
+name = "Semiconductor Fabrication"
+inputs = [
+    { good_id = "copper_ore", quantity = 0.05 },
+    { good_id = "plastic", quantity = 0.01 }
+]
+outputs = [{ good_id = "semiconductors", quantity = 100.0 }]
+labour_hours = 25.0
+
+# --- Consumer Good Production ---
+
+[[recipes]]
+id = "toy_manufacturing"
+name = "Toy Manufacturing"
+inputs = [{ good_id = "plastic", quantity = 0.1 }]
+outputs = [{ good_id = "toys", quantity = 5.0 }]
+labour_hours = 1.0
+
+[[recipes]]
+id = "electronics_assembly"
+name = "Electronics Assembly"
+inputs = [
+    { good_id = "semiconductors", quantity = 10.0 },
+    { good_id = "plastic", quantity = 0.5 },
+    { good_id = "steel", quantity = 0.2 }
+]
+outputs = [{ good_id = "electronics", quantity = 1.0 }]
+labour_hours = 8.0
+
+[[recipes]]
+id = "car_manufacturing"
+name = "Car Manufacturing"
+inputs = [
+    { good_id = "steel", quantity = 1.5 },
+    { good_id = "plastic", quantity = 0.3 },
+    { good_id = "electronics", quantity = 1.0 },
+    { good_id = "semiconductors", quantity = 50.0 }
+]
+outputs = [{ good_id = "car", quantity = 1.0 }]
+labour_hours = 150.0
+
+# --- Banks ---
 [[banks]]
 id = "bank_a"
-name = "Bank A"
-initial_assets = [
-  { type = "Reserves", amount = 1_000_000.0 },
-]
+name = "Community Savings Bank"
+initial_assets = [{ type = "Reserves", amount = 0.0 }]
 initial_liabilities = []
 
 [[banks]]
-id = "bank_b"
-name = "Bank B"
-initial_assets = [
-  { type = "Reserves", amount = 500_000.0 }
-]
+id="bank_b" 
+name="First National Bank"
+initial_assets = [{ type = "Reserves", amount = 0.0 }]
 initial_liabilities = []
 
-
-# --- Firms ---
-# Define the firms. We have two production firms and one investment firm.
-
+# --- Individual Firms ---
 [[firms]]
-id = "producer_1"
-name = "General Goods Inc."
-bank_id = "bank_a" # This firm banks with Bank A
-recipe_name = "Basic Manufacturing" # It knows how to produce goods
-initial_assets = [
-  { type = "Deposit", bank_id = "bank_a", amount = 100_000.0 },
-  { type = "Inventory", good_slug = "raw_material", quantity = 50.0, unit_cost = 10.0 }
-]
-decision_model = { type = "ProductionFirm" }
-
-[[firms]]
-id = "producer_2"
-name = "Reliable Wares Co."
+id = "capital_ventures"
+name = "Capital Ventures Investment Fund"
 bank_id = "bank_b"
-recipe_name = "Basic Manufacturing"
-initial_assets = [
-  { type = "Deposit", bank_id = "bank_b", amount = 75_000.0 },
-  { type = "Inventory", good_slug = "raw_material", quantity = 20.0, unit_cost = 10.0 }
-]
+initial_assets = [{ type = "Deposit", bank_id = "bank_b", amount = 500000.0 }]
+initial_liabilities = []
+decision_model = { type = "InvestmentFirm", min_liquidity = 100000.0, quote_qty = 10000.0 }
+
+# --- Individual Consumers (dummy to satisfy parser) ---
+[[consumers]]
+id = "dummy_consumer"
+bank_id = "bank_a"
+income = 1.0
+initial_assets = []
+initial_liabilities = []
+consumption_basket = { bread = 1.0 }
+
+# --- Firm Groups ---
+[[firm_groups]]
+id_prefix = "wheat_farm_"
+count = 1
+bank_mix = { bank_a = 0.3, bank_b = 0.7 }
+recipe_name = "wheat_farming"
+deposit = { type = "log_normal", mu = 10.5, sigma = 0.8 }
+inventory = { good_slug = "wheat", quantity = { type = "pareto", xm = 100.0, alpha = 1.5 }, unit_cost = 5.0 }
+desired_markup = { type = "normal", mean = 0.15, stdev = 0.05, clamp = { min = 0.05, max = 0.30 } }
 decision_model = { type = "ProductionFirm" }
 
-[[firms]]
-id = "investment_firm_1"
-name = "Capital Investments"
-bank_id = "bank_a"
-initial_assets = [
-  { type = "Deposit", bank_id = "bank_a", amount = 2_000_000.0 }
-]
-# This firm uses the InvestmentFirm decision model to trade financial assets
-decision_model = { type = "InvestmentFirm", min_liquidity = 50000.0, quote_qty = 10.0 }
-
+[[firm_groups]]
+id_prefix = "bakery_"
+count = 2
+bank_mix = { bank_a = 0.5, bank_b = 0.5 }
+recipe_name = "bread_baking"
+deposit = { type = "log_normal", mu = 9.5, sigma = 1.0 }
+inventory = { good_slug = "bread", quantity = { type = "pareto", xm = 100.0, alpha = 2.0 }, unit_cost = 6.0 }
+desired_markup = { type = "normal", mean = 0.30, stdev = 0.08, clamp = { min = 0.15, max = 0.50 } }
+decision_model = { type = "ProductionFirm" }
 
 # --- Consumers ---
-# Define the 5 consumers who will work, earn, and spend.
-
-[[consumers]]
-id = "consumer_1"
-bank_id = "bank_a"
-income = 50000.0 # Annual income
-initial_assets = [
-  { type = "Deposit", bank_id = "bank_a", amount = 5000.0 }
-]
-initial_liabilities = []
-consumption_basket = { general_good = 1.0 } # 100% of their budget goes to the only good
-
-[[consumers]]
-id = "consumer_2"
-bank_id = "bank_a"
-income = 65000.0
-initial_assets = [
-  { type = "Deposit", bank_id = "bank_a", amount = 8000.0 }
-]
-initial_liabilities = []
-consumption_basket = { general_good = 1.0 }
-
-[[consumers]]
-id = "consumer_3"
-bank_id = "bank_b"
-income = 80000.0
-initial_assets = [
-  { type = "Deposit", bank_id = "bank_b", amount = 12000.0 }
-]
-initial_liabilities = []
-consumption_basket = { general_good = 1.0 }
-
-[[consumers]]
-id = "consumer_4"
-bank_id = "bank_b"
-income = 45000.0
-initial_assets = [
-  { type = "Deposit", bank_id = "bank_b", amount = 2000.0 }
-]
-initial_liabilities = []
-consumption_basket = { general_good = 1.0 }
-
-[[consumers]]
-id = "consumer_5"
-bank_id = "bank_a"
-income = 120000.0
-initial_assets = [
-  { type = "Deposit", bank_id = "bank_a", amount = 25000.0 }
-]
-initial_liabilities = []
-consumption_basket = { general_good = 1.0 }
+[[consumer_groups]]
+id_prefix="HH" 
+count=10 
+bank_mix = { bank_a = 0.5, bank_b = 0.5 }
+income = { type = "normal", mean = 60_000.0, stdev = 10_000.0 }
+deposit = { type = "pct_of_income", pct = 0.10 }
+consumption_basket = { general_good = 0.1, bread = 0.9 }

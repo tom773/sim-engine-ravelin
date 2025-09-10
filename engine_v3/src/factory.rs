@@ -10,20 +10,22 @@ use uuid::Uuid;
 fn is_security(inst: &Instrument) -> bool {
     matches!(
         inst.instrument_type,
-        InstrumentType::Bond(_)
+        InstrumentType::Debt(DebtInstrument::Bond(_))
             | InstrumentType::Equity(_)
             | InstrumentType::StructuredTranche(_)
             | InstrumentType::Derivative(_)
     )
 }
-
+enum SeedMode {
+    RtgsFromTreasury,
+}
 pub struct AgentFactory<'a> {
     pub state: &'a mut SimState,
-    pub rng: &'a mut ThreadRng,
+    pub rng: &'a mut StdRng,
 }
 
 impl<'a> AgentFactory<'a> {
-    pub fn new(state: &'a mut SimState, rng: &'a mut ThreadRng) -> Self {
+    pub fn new(state: &'a mut SimState, rng: &'a mut StdRng) -> Self {
         Self { state, rng }
     }
 
@@ -38,12 +40,18 @@ impl<'a> AgentFactory<'a> {
         self.state.financial_system.instruments.insert(inst_id, instrument);
 
         if is_sec {
-            self.state.financial_system.clearing_house.csd
+            self.state
+                .financial_system
+                .clearing_house
+                .csd
                 .register_security(inst_id, &instrument_clone_for_csd, self.state.current_date)
                 .map_err(|e| e.to_string())?;
 
             if quantity > 0.0 {
-                self.state.financial_system.clearing_house.csd
+                self.state
+                    .financial_system
+                    .clearing_house
+                    .csd
                     .credit_securities(owner_id, inst_id, quantity)
                     .map_err(|e| e.to_string())?;
             }
@@ -56,7 +64,6 @@ impl<'a> AgentFactory<'a> {
                 cost_basis_per_unit: book_value_money,
             });
             liability_pos.quantity += quantity;
-
         } else {
             self.state.financial_system.create_or_consolidate_position(
                 &owner_id,
@@ -114,20 +121,6 @@ impl<'a> AgentFactory<'a> {
         }
         self.state.financial_system.balance_sheets.insert(firm.id, BalanceSheet::new(firm.id));
 
-        let inventory_instrument = Instrument::new(
-            InstrumentId(Uuid::new_v4()),
-            InstrumentType::RealAsset(RealAssetType::Inventory { owner: firm.id, goods: HashMap::new() }),
-            InstrumentMarket::CapitalMarket(CapitalMarketSegment::StructuredFinance),
-        );
-        self.create_and_register_instrument(
-            firm.id,
-            firm.id,
-            inventory_instrument,
-            1.0,
-            0.0,
-        )
-        .unwrap();
-
         for asset in &config.initial_assets {
             if !matches!(asset, AssetConfig::Inventory { .. }) {
                 self.create_asset_for_agent(firm.id, asset, cb_id, agent_ids).unwrap();
@@ -152,17 +145,7 @@ impl<'a> AgentFactory<'a> {
                 self.create_and_register_instrument(agent_id, cb_id, cash, *amount, 1.0)?;
             }
             AssetConfig::Deposit { bank_id, amount } => {
-                let bank_agent_id = *agent_ids.get(bank_id).ok_or_else(|| format!("Bank ID {} not found", bank_id))?;
-                let rate = self.state.financial_system.central_bank.policy_rate_bps;
-                let deposit = Instrument::cash(
-                    InstrumentId(Uuid::new_v4()),
-                    bank_agent_id,
-                    CashType::DemandDeposit,
-                    Currency::USD,
-                    rate,
-                )
-                .build();
-                self.create_and_register_instrument(agent_id, bank_agent_id, deposit, *amount, 1.0)?;
+                self.seed_deposit(agent_id, bank_id, *amount, agent_ids, SeedMode::RtgsFromTreasury)?;
             }
             AssetConfig::Reserves { amount } => {
                 let rate = self.state.financial_system.central_bank.policy_rate_bps;
@@ -203,8 +186,11 @@ impl<'a> AgentFactory<'a> {
                     .coupon_bps(coupon_bps)
                     .frequency(2)
                 };
-                let bond_instrument =
-                    bond_builder.rating(CreditRating::AAA).auto_market().build().map_err(|e| e.to_string())?;
+                let bond_instrument = bond_builder
+                    .rating(CreditRating::government_aaa())
+                    .auto_market()
+                    .build()
+                    .map_err(|e| e.to_string())?;
                 self.create_and_register_instrument(agent_id, gov_id, bond_instrument, *quantity as f64, 1000.0)?;
             }
             AssetConfig::Inventory { .. } => {}
@@ -246,7 +232,7 @@ impl<'a> AgentFactory<'a> {
                 )
                 .coupon_bps(Decimal::from_f64(*rate_bps).unwrap_or_default())
                 .frequency(12)
-                .rating(CreditRating::B)
+                .rating(CreditRating::Corporate(SpCreditRating::BBB))
                 .build()
                 .map_err(|e| format!("Failed to build loan instrument: {}", e))?;
                 self.create_and_register_instrument(creditor_agent_id, agent_id, loan_instrument, 1.0, *amount)?;
@@ -254,49 +240,134 @@ impl<'a> AgentFactory<'a> {
         }
         Ok(())
     }
+
     pub fn initialize_treasury_general_account(&mut self) -> Result<(), String> {
         let gov_id = self.state.financial_system.government.id;
         let cb_id = self.state.financial_system.central_bank.id;
+        let initial_balance = 200_000_000_000.0; // 200 Billion
 
         let tga = Instrument::cash(
             InstrumentId(Uuid::new_v4()),
-            cb_id,
+            cb_id, // Issued by CB
             CashType::TreasuryGeneralAccount,
             Currency::USD,
             dec!(0),
         )
         .build();
-
         self.state.financial_system.instruments.insert(tga.id, tga.clone());
 
-        let initial_balance = 1_000_000.0;
+        let bond_instrument = Instrument::bond(
+            InstrumentId(Uuid::new_v4()),
+            gov_id, // Issued by Government
+            BondType::Government,
+            Money::from_f64(initial_balance).unwrap(),
+            self.state.current_date,
+            self.state.current_date + Duration::days(365 * 30), // 30-year bond
+        )
+        .zero_coupon_rate_bps()
+        .build()
+        .map_err(|e| e.to_string())?;
+        let bond_id = bond_instrument.id;
+        self.state.financial_system.instruments.insert(bond_id, bond_instrument);
 
         let gov_bs =
             self.state.financial_system.balance_sheets.entry(gov_id).or_insert_with(|| BalanceSheet::new(gov_id));
-
         gov_bs.assets.insert(
             tga.id,
+            Position { quantity: initial_balance, book_value_per_unit: Money::ONE, ..Default::default() },
+        );
+        gov_bs.liabilities.insert(
+            bond_id,
             Position {
-                quantity: initial_balance,
-                book_value_per_unit: Money::from(1),
-                cost_basis_per_unit: Money::from(1),
+                quantity: 1.0,
+                book_value_per_unit: Money::from_f64(initial_balance).unwrap(),
+                ..Default::default()
             },
         );
 
         let cb_bs = self.state.financial_system.balance_sheets.entry(cb_id).or_insert_with(|| BalanceSheet::new(cb_id));
-
+        cb_bs.assets.insert(
+            bond_id,
+            Position {
+                quantity: 1.0,
+                book_value_per_unit: Money::from_f64(initial_balance).unwrap(),
+                ..Default::default()
+            },
+        );
         cb_bs.liabilities.insert(
             tga.id,
-            Position {
-                quantity: initial_balance,
-                book_value_per_unit: Money::from(1),
-                cost_basis_per_unit: Money::from(1),
-            },
+            Position { quantity: initial_balance, book_value_per_unit: Money::ONE, ..Default::default() },
         );
 
         self.state.financial_system.clearing_house.csd.initialize_government_account(gov_id);
-
         Ok(())
+    }
+    fn seed_deposit(
+        &mut self, beneficiary_id: AgentId, bank_ref_id: &str, amount: f64, agent_ids: &HashMap<String, AgentId>,
+        mode: SeedMode,
+    ) -> Result<(), String> {
+        match mode {
+            SeedMode::RtgsFromTreasury => {
+                let bank_id = *agent_ids
+                    .get(bank_ref_id)
+                    .ok_or_else(|| format!("Bank ID '{}' not found in agent map", bank_ref_id))?;
+                let cb_id = self.state.financial_system.central_bank.id;
+                let gov_id = self.state.financial_system.government.id;
+
+                let rate = self.state.financial_system.central_bank.policy_rate_bps;
+                let deposit_instrument = Instrument::cash(
+                    InstrumentId(Uuid::new_v4()),
+                    bank_id,
+                    CashType::DemandDeposit,
+                    Currency::USD,
+                    rate,
+                )
+                .build();
+                let deposit_inst_id = deposit_instrument.id;
+                self.state.financial_system.instruments.insert(deposit_inst_id, deposit_instrument);
+
+                let reserves_inst_id = self
+                    .state
+                    .financial_system
+                    .find_bank_reserves_account(&bank_id)
+                    .ok_or_else(|| format!("Bank {} has no reserves account initialized", bank_id))?;
+                let tga_inst_id = self
+                    .state
+                    .financial_system
+                    .find_government_tga_account()
+                    .map(|(id, _)| id)
+                    .ok_or_else(|| "Government TGA account not found. It must be initialized first.".to_string())?;
+
+                let beneficiary_bs = self.state.financial_system.balance_sheets.get_mut(&beneficiary_id).unwrap();
+                beneficiary_bs.assets.insert(
+                    deposit_inst_id,
+                    Position { quantity: amount, book_value_per_unit: Money::ONE, ..Default::default() },
+                );
+
+                let bank_bs = self.state.financial_system.balance_sheets.get_mut(&bank_id).unwrap();
+                bank_bs.liabilities.insert(
+                    deposit_inst_id,
+                    Position { quantity: amount, book_value_per_unit: Money::ONE, ..Default::default() },
+                );
+                let reserves_pos = bank_bs.assets.entry(reserves_inst_id).or_insert_with(Default::default);
+                reserves_pos.quantity += amount;
+
+                let gov_bs = self.state.financial_system.balance_sheets.get_mut(&gov_id).unwrap();
+                let tga_pos = gov_bs.assets.get_mut(&tga_inst_id).ok_or("TGA position not found in Gov BS")?;
+                tga_pos.quantity -= amount;
+
+                let cb_bs = self.state.financial_system.balance_sheets.get_mut(&cb_id).unwrap();
+                let tga_liab_pos = cb_bs.liabilities.get_mut(&tga_inst_id).ok_or("TGA position not found in CB BS")?;
+                tga_liab_pos.quantity -= amount;
+                let reserves_liab_pos = cb_bs
+                    .liabilities
+                    .get_mut(&reserves_inst_id)
+                    .ok_or_else(|| format!("Reserves for bank {} not found in CB BS", bank_id))?;
+                reserves_liab_pos.quantity += amount;
+
+                Ok(())
+            }
+        }
     }
 }
 

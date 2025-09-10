@@ -3,7 +3,7 @@ use crate::scheduler::*;
 use chrono::{Datelike, NaiveDate};
 use domains::prelude::*;
 use rand::RngCore;
-use rand::prelude::{SliceRandom, ThreadRng};
+use rand::prelude::{ThreadRng};
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -73,7 +73,25 @@ impl SimulationEngine {
 
         (execution_result, std::mem::take(&mut self.event_log))
     }
+    pub fn run_day(&mut self, rng: &mut dyn rand::RngCore) -> (Vec<TickExecutionResult>, Vec<SimEvent>) {
+        self.event_log.clear();
+        let mut results = Vec::with_capacity(3);
+        let mut day_events = Vec::new();
 
+        for session in Session::ALL {
+            self.state.current_session = session;
+            let scheduler = std::mem::take(&mut self.scheduler);
+            let result = scheduler.execute_tick(self, rng);
+            self.scheduler = scheduler;
+            self.scheduler_metrics.record_tick(&result);
+            results.push(result);
+            day_events.extend(self.event_log.drain(..));
+        }
+
+        // increment daily tick once per calendar day
+        self.state.ticknum += 1;
+        (results, day_events)
+    }
     pub fn gather_intentions(&self, rng: &mut dyn RngCore) -> Vec<SimIntention> {
         let mut all_intentions = Vec::new();
         for agent_id in self.state.agents.all_agent_ids() {
@@ -204,32 +222,58 @@ impl SimulationEngine {
     }
 
     pub fn match_labour_markets(&mut self, rng: &mut dyn RngCore) -> Vec<StateEffect> {
+        use rand::seq::SliceRandom;
         let mut effects = Vec::new();
-        for market in self.state.financial_system.exchange.labour_markets.values_mut() {
+
+        for (_id, market) in self.state.financial_system.exchange.labour_markets.iter_mut() {
+            // 1) purge stale applications: keep only unemployed
+            market.job_applications.retain(|app| {
+                self.state.agents.consumers.get(&app.consumer_id).map_or(false, |c| c.employed_by.is_none())
+            });
+
+            // 2) randomize offers (existing behavior)
             market.job_offers.shuffle(rng);
+
+            // 3) match only unemployed applicants
             for offer in &mut market.job_offers {
-                if offer.quantity == 0 {
-                    continue;
-                }
-                if let Some(app_idx) =
-                    market.job_applications.iter().position(|app| app.reservation_wage <= offer.wage_rate)
-                {
-                    let app = market.job_applications.remove(app_idx);
+                while offer.quantity > 0 {
+                    // find the first unemployed applicant willing to accept offer.wage_rate
+                    let idx = market.job_applications.iter().position(|app| {
+                        app.reservation_wage <= offer.wage_rate
+                            && self
+                                .state
+                                .agents
+                                .consumers
+                                .get(&app.consumer_id)
+                                .map_or(false, |c| c.employed_by.is_none())
+                    });
+                    let Some(app_idx) = idx else { break };
+
+                    let app = market.job_applications.swap_remove(app_idx);
+
                     let contract = EmploymentContract {
                         employee_id: app.consumer_id,
                         wage_rate: offer.wage_rate,
-                        hours: offer.hours_required,
+                        hours: offer.hours_required.min(offer.hours_required),
                         start_date: self.state.current_date,
+                        next_pay_date: self.state.current_date + chrono::Duration::days(14),
+                        pay_interval_days: 14,
                     };
+
                     effects.push(StateEffect::Agent(AgentEffect::EstablishEmployment {
                         firm_id: offer.firm_id,
                         consumer_id: app.consumer_id,
                         contract,
                     }));
+
                     offer.quantity -= 1;
                 }
             }
+
+            // 4) Remove dead offers
+            market.job_offers.retain(|o| o.quantity > 0);
         }
+
         effects
     }
 

@@ -12,6 +12,3 @@ pub use rtgs_types::*;
 
 pub mod csd;
 pub use csd::*;
-
-pub mod credit;
-pub use credit::*;

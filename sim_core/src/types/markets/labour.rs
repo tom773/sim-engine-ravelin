@@ -24,3 +24,4 @@ pub struct LabourMarket {
     pub job_offers: Vec<JobOffer>,
     pub job_applications: Vec<JobApplication>,
 }
+

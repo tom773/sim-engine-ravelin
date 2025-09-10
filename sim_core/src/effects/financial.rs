@@ -5,15 +5,15 @@ use std::collections::hash_map::Entry;
 use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-
 pub enum FinancialEffect {
-    CreateInstrument { instrument: Instrument, creditor: AgentId, debtor: AgentId, quantity: f64 },
+    CreateInstrument { 
+        instrument: Instrument, 
+        creditor: AgentId, 
+        debtor: AgentId, 
+        quantity: f64 
+    },
     RecordTransaction(Transaction),
     RecordSettlementInstruction(SettlementInstruction),
-    RecordLoanApplication { bank_id: AgentId, application: LoanApplication },
-    UpdateApplicationStatus { application_id: Uuid, status: ApplicationStatus },
-    RecordActiveLoan { loan: ActiveLoan },
-    RecordLoanPayment { loan_id: InstrumentId, payment: PaymentRecord },
     QueuePayment(PaymentInstruction),
     DvPFinalize { trade_id: Uuid },
     DvPCancel { trade_id: Uuid },
@@ -31,10 +31,6 @@ impl FinancialEffect {
             FinancialEffect::CreateInstrument { .. } => "CreateInstrument",
             FinancialEffect::RecordTransaction(_) => "RecordTransaction",
             FinancialEffect::RecordSettlementInstruction(_) => "RecordSettlementInstruction",
-            FinancialEffect::RecordLoanApplication { .. } => "RecordLoanApplication",
-            FinancialEffect::UpdateApplicationStatus { .. } => "UpdateApplicationStatus",
-            FinancialEffect::RecordActiveLoan { .. } => "RecordActiveLoan",
-            FinancialEffect::RecordLoanPayment { .. } => "RecordLoanPayment",
             FinancialEffect::DvPFinalize { .. } => "DvPFinalize",
             FinancialEffect::DvPCancel { .. } => "DvPCancel",
             FinancialEffect::QueuePayment(_) => "QueuePayment",
@@ -45,7 +41,7 @@ impl FinancialEffect {
 fn is_security(inst: &Instrument) -> bool {
     matches!(
         inst.instrument_type,
-        InstrumentType::Bond(_)
+        InstrumentType::Debt(DebtInstrument::Bond(_))  // Only bonds are securities in debt
             | InstrumentType::Equity(_)
             | InstrumentType::StructuredTranche(_)
             | InstrumentType::Derivative(_)
@@ -109,10 +105,12 @@ impl StateEffectApplicator {
 
                 Ok(())
             }
+            
             FinancialEffect::RecordTransaction(tx) => {
                 state.history.transactions.push(tx.clone());
                 Ok(())
             }
+            
             FinancialEffect::RecordSettlementInstruction(instruction) => {
                 let government_id = state.financial_system.government.id;
                 let instrument_name = state
@@ -131,56 +129,12 @@ impl StateEffectApplicator {
                     .map_err(|e| EffectError::FinancialSystemError(e.to_string()))?;
                 Ok(())
             }
+            
             FinancialEffect::QueuePayment(pi) => {
                 state.financial_system.rtgs.pending.push(pi.clone());
                 Ok(())
             }
-            FinancialEffect::RecordLoanApplication { bank_id, application } => {
-                let registry = &mut state.financial_system.credit_registry;
-                let app_id = application.application_id;
-
-                registry.applications.insert(app_id, application.clone());
-
-                registry.applications_by_bank.entry(*bank_id).or_default().push(app_id);
-
-                registry.loans_by_borrower.entry(application.borrower_id).or_default();
-
-                Ok(())
-            }
-            FinancialEffect::UpdateApplicationStatus { application_id, status } => {
-                if let Some(app) = state.financial_system.credit_registry.applications.get_mut(application_id) {
-                    app.status = status.clone();
-                }
-                Ok(())
-            }
-
-            FinancialEffect::RecordActiveLoan { loan } => {
-                let registry = &mut state.financial_system.credit_registry;
-
-                registry.active_loans.insert(loan.instrument_id.clone(), loan.clone());
-
-                Ok(())
-            }
-
-            FinancialEffect::RecordLoanPayment { loan_id, payment } => {
-                if let Some(loan) = state.financial_system.credit_registry.active_loans.get_mut(loan_id) {
-                    loan.payment_history.push(payment.clone());
-                    loan.outstanding_principal -= payment.principal_paid;
-
-                    if payment.payment_date > payment.due_date {
-                        let days_late = (payment.payment_date - payment.due_date).num_days();
-                        loan.status = match days_late {
-                            1..=30 => LoanStatus::Deliquent30,
-                            31..=60 => LoanStatus::Deliquent60,
-                            61..=90 => LoanStatus::Deliquent90,
-                            _ => LoanStatus::Defaulted,
-                        };
-                    } else {
-                        loan.status = LoanStatus::Current;
-                    }
-                }
-                Ok(())
-            }
+            
             FinancialEffect::DvPCancel { trade_id } => {
                 match state.financial_system.clearing_house.csd.cancel_security_reservation(trade_id) {
                     Ok(_) => Ok(()),
@@ -190,6 +144,7 @@ impl StateEffectApplicator {
                     }
                 }
             }
+            
             FinancialEffect::DvPFinalize { trade_id } => {
                 match state.financial_system.clearing_house.csd.finalize_book_entry_transfer(trade_id) {
                     Ok(_) => Ok(()),
@@ -201,9 +156,14 @@ impl StateEffectApplicator {
             }
         }
     }
+    
     pub fn apply_cash_position_adjustment(
-        state: &mut SimState, agent_id: AgentId, instrument_id: InstrumentId, quantity_change: f64,
-        side: &PositionSide, book_value: Option<f64>,
+        state: &mut SimState, 
+        agent_id: AgentId, 
+        instrument_id: InstrumentId, 
+        quantity_change: f64,
+        side: &PositionSide, 
+        book_value: Option<f64>,
     ) -> Result<(), EffectError> {
         let instrument = state
             .financial_system
@@ -214,8 +174,18 @@ impl StateEffectApplicator {
         match &instrument.instrument_type {
             InstrumentType::Cash(_) => {}
             InstrumentType::RealAsset(_) => {}
-            InstrumentType::Bond(_)
-            | InstrumentType::Equity(_)
+            InstrumentType::Debt(debt) => match debt {
+                DebtInstrument::Bond(_) => {
+                    return Err(EffectError::FinancialSystemError(format!(
+                        "Bond {} cannot be adjusted via balance sheet - must use CSD",
+                        instrument_id
+                    )));
+                }
+                DebtInstrument::Loan(_) | 
+                DebtInstrument::CreditLine(_) | 
+                DebtInstrument::TradeCredit(_) => {}
+            },
+            InstrumentType::Equity(_)
             | InstrumentType::StructuredTranche(_)
             | InstrumentType::Derivative(_) => {
                 return Err(EffectError::FinancialSystemError(format!(

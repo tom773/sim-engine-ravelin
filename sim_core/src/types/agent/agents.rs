@@ -1,6 +1,6 @@
+use super::*;
 use crate::prelude::*;
 use crate::types::money::Money;
-use super::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -27,11 +27,7 @@ pub struct ConsumerExpectations {
 
 impl Default for ConsumerExpectations {
     fn default() -> Self {
-        Self {
-            expected_inflation: 0.02,
-            expected_wage_growth: 0.03,
-            expected_job_finding_rate: 0.8,
-        }
+        Self { expected_inflation: 0.02, expected_wage_growth: 0.03, expected_job_finding_rate: 0.8 }
     }
 }
 
@@ -54,6 +50,8 @@ pub struct EmploymentContract {
     pub wage_rate: f64,
     pub hours: f64,
     pub start_date: chrono::NaiveDate,
+    pub next_pay_date: chrono::NaiveDate, // NEW
+    pub pay_interval_days: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -80,17 +78,11 @@ pub struct Government {
 
 impl Bank {
     pub fn new(name: String, lending_spread_bps: BasisPoints, deposit_spread_bps: BasisPoints) -> Self {
-        Self { 
-            id: AgentId(uuid::Uuid::new_v4()), 
-            name, 
-            lending_spread_bps,
-            deposit_spread_bps,
-        }
+        Self { id: AgentId(uuid::Uuid::new_v4()), name, lending_spread_bps, deposit_spread_bps }
     }
 }
 
 impl Consumer {
-
     pub fn new(age: u32, bank_id: AgentId, personality: PersonalityArchetype) -> Self {
         Self {
             id: AgentId(uuid::Uuid::new_v4()),
@@ -117,7 +109,6 @@ impl Consumer {
 }
 
 impl Firm {
-
     pub fn new(bank_id: AgentId, name: String, recipe: Option<RecipeId>, wage_rate: f64) -> Self {
         Self {
             id: AgentId(uuid::Uuid::new_v4()),
@@ -138,13 +129,8 @@ impl Firm {
         let gross_profit = revenues - costs;
         let tax_liability = gross_profit * 0.21;
         let net_profit = gross_profit - tax_liability;
-        
-        FirmProfits {
-            gross: gross_profit,
-            tax: tax_liability,
-            net: net_profit,
-            retained_earnings_ratio: 0.6,
-        }
+
+        FirmProfits { gross: gross_profit, tax: tax_liability, net: net_profit, retained_earnings_ratio: 0.6 }
     }
     pub fn add_employee(&mut self, contract: EmploymentContract) {
         self.employees.insert(contract.employee_id, contract);
@@ -174,13 +160,7 @@ pub enum PersonalityArchetype {
 
 impl Government {
     pub fn new(tax_rates: TaxRates, spending_targets: SpendingTargets, fiscal_policy: FiscalPolicy) -> Self {
-        Self {
-            id: AgentId(uuid::Uuid::new_v4()),
-            tax_rates,
-            spending_targets,
-            debt_ceiling: None,
-            fiscal_policy,
-        }
+        Self { id: AgentId(uuid::Uuid::new_v4()), tax_rates, spending_targets, debt_ceiling: None, fiscal_policy }
     }
     pub fn get_id(&self) -> &AgentId {
         &self.id

@@ -33,7 +33,7 @@ impl Domain for FiscalDomain {
                 )
                 .coupon_bps(*coupon_rate)
                 .frequency(2)
-                .rating(CreditRating::AAA)
+                .rating(CreditRating::Government(SpCreditRating::AAA))
                 .auto_market()
                 .build()
                 {
@@ -92,7 +92,7 @@ impl Domain for FiscalDomain {
                 )
                 .coupon_bps(*coupon_rate)
                 .frequency(2)
-                .rating(CreditRating::AAA)
+                .rating(CreditRating::Government(SpCreditRating::AAA))
                 .auto_market()
                 .build()
                 {

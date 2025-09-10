@@ -288,3 +288,18 @@ impl Tenor {
         else { Tenor::T30Y }
     }
 }
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Session { AM, PM, EOD }
+
+impl Session {
+    pub const ALL: [Session; 3] = [Session::AM, Session::PM, Session::EOD];
+    #[inline] pub fn idx(self) -> u8 { match self { Session::AM => 0, Session::PM => 1, Session::EOD => 2 } }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct Slot(pub u64);
+
+impl Slot {
+    #[inline] pub fn of(tick: u32, session: Session) -> Self { Slot(tick as u64 * 3 + session.idx() as u64) }
+}

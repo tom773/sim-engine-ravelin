@@ -97,7 +97,7 @@ impl ListingRegistry {
 
 pub fn listing_key_from_instrument(inst: &Instrument) -> ListingKey {
     match &inst.instrument_type {
-        InstrumentType::Bond(b) => match b.bond_type {
+        InstrumentType::Debt(DebtInstrument::Bond(b)) => match b.bond_type {
             BondType::Government => {
                 let years = ((b.maturity_date - b.issue_date).num_days() as f64 / 365.0).round() as u16;
                 ListingKey::GovBond { tenor_years: years.max(1) }
@@ -126,6 +126,7 @@ pub fn listing_key_from_instrument(inst: &Instrument) -> ListingKey {
         InstrumentType::StructuredTranche(s) => {
             ListingKey::StructuredTranche { rating: s.rating, tranche_type: s.tranche_type }
         }
+        InstrumentType::Debt(_) => ListingKey::CashON, // Other debt types are unlisted
     }
 }
 
@@ -247,7 +248,7 @@ impl Exchange {
 
     fn update_index_only(&mut self, inst_id: InstrumentId, inst: &Instrument) {
         match &inst.instrument_type {
-            InstrumentType::Bond(b) => {
+            InstrumentType::Debt(DebtInstrument::Bond(b)) => {
                 self.index.by_issuer.entry(b.issuer).or_default().push(inst_id);
                 self.index.by_bond_type.entry(b.bond_type).or_default().push(inst_id);
                 let years = ((b.maturity_date - b.issue_date).num_days() as f64 / 365.0).max(0.0);
@@ -262,6 +263,12 @@ impl Exchange {
             }
             InstrumentType::StructuredTranche(s) => {
                 self.index.by_rating_and_tenor.entry((s.rating, TenorBucket::GT10)).or_default().push(inst_id);
+            }
+            InstrumentType::Debt(DebtInstrument::Loan(l)) => {
+                self.index.by_issuer.entry(l.lender).or_default().push(inst_id);
+            }
+            InstrumentType::Debt(DebtInstrument::CreditLine(c)) => {
+                self.index.by_issuer.entry(c.lender).or_default().push(inst_id);
             }
             _ => {}
         }
@@ -334,8 +341,8 @@ impl Exchange {
                 return trades;
             }
             let government_id = if let Some(instrument) = instruments.get(&auction.instrument_id) {
-                if let InstrumentType::Bond(details) = &instrument.instrument_type {
-                    details.issuer
+                if let InstrumentType::Debt(details) = &instrument.instrument_type {
+                    details.issuer()
                 } else {
                     auction.status = AuctionStatus::Closed;
                     return trades;
@@ -401,18 +408,14 @@ impl Exchange {
                     .ok_or_else(|| format!("Market not found for instrument {}", inst_id))?;
                 Ok(market.book.submit_order(order, market_id))
             }
-            _ => {
-                match market_id {
-                    MarketId::Goods(id) => {
-                        let market = self
-                            .goods_markets
-                            .get_mut(id)
-                            .ok_or_else(|| format!("Goods market not found for {}", id))?;
-                        Ok(market.book.submit_order(order, market_id))
-                    }
-                    _ => Ok(vec![]),
+            _ => match market_id {
+                MarketId::Goods(id) => {
+                    let market =
+                        self.goods_markets.get_mut(id).ok_or_else(|| format!("Goods market not found for {}", id))?;
+                    Ok(market.book.submit_order(order, market_id))
                 }
-            }
+                _ => Ok(vec![]),
+            },
         }
     }
 }

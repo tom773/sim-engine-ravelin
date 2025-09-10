@@ -50,6 +50,12 @@ fn get_market_price(inst: &Instrument, exchange: &Exchange) -> Option<Money> {
             RealAssetType::Property { market_value, .. } => Some(*market_value),
         },
         InstrumentType::Cash(_) => Some(Money::from(1 as i64)),
+        InstrumentType::Debt(debt) => match debt {
+            DebtInstrument::Loan(l) => Some(l.outstanding_principal),
+            DebtInstrument::CreditLine(c) => Some(c.drawn_amount),
+            DebtInstrument::TradeCredit(t) => Some(t.amount),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -123,12 +129,11 @@ impl BalanceSheet {
                         _ => 0.2, // Regular deposits have some risk
                     },
                     InstrumentType::RealAsset(_) => 1.0, // Full risk weight
-                    _ => continue, // Securities handled below
+                    _ => continue,                       // Securities handled below
                 };
-                
-                let market_value = get_market_price(inst, &system.exchange)
-                    .unwrap_or(pos.book_value_per_unit)
-                    .to_f64() * pos.quantity;
+
+                let market_value =
+                    get_market_price(inst, &system.exchange).unwrap_or(pos.book_value_per_unit).to_f64() * pos.quantity;
                 rwa += market_value * risk_weight;
             }
         }
@@ -137,33 +142,50 @@ impl BalanceSheet {
         for (id, qty) in positions {
             if let Some(inst) = system.instruments.get(&id) {
                 let risk_weight = match &inst.instrument_type {
-                    InstrumentType::Bond(b) => match b.bond_type {
+                    InstrumentType::Cash(c) => match c.cash_type {
+                        CashType::CentralBankReserves => 0.0,
+                        CashType::TreasuryGeneralAccount => 0.0,
+                        _ => 0.2,
+                    },
+                    InstrumentType::Debt(DebtInstrument::Bond(b)) => match b.bond_type {
                         BondType::Government => 0.0,
-                        BondType::Corporate => {
-                            match b.rating {
-                                CreditRating::AAA | CreditRating::AA => 0.2,
-                                CreditRating::A => 0.5,
-                                CreditRating::BBB => 1.0,
-                                _ => 1.5,
-                            }
+                        BondType::Corporate => match b.rating {
+                            CreditRating::Corporate(SpCreditRating::AAA)
+                            | CreditRating::Corporate(SpCreditRating::AA) => 0.2,
+                            CreditRating::Corporate(SpCreditRating::A) => 0.5,
+                            CreditRating::Corporate(SpCreditRating::BBB) => 1.0,
+                            _ => 1.5,
                         },
                         BondType::InterbankLoan => 0.2,
                     },
-                    InstrumentType::Equity(_) => 1.0,
-                    InstrumentType::StructuredTranche(t) => {
-                        match t.rating {
-                            CreditRating::AAA => 0.2,
-                            CreditRating::AA => 0.5,
-                            CreditRating::A => 1.0,
-                            _ => 2.0,
-                        }
+                    InstrumentType::Debt(DebtInstrument::Loan(l)) => match l.credit_rating {
+                        Some(CreditRating::Corporate(SpCreditRating::AAA))
+                        | Some(CreditRating::Corporate(SpCreditRating::AA)) => 0.5,
+                        Some(CreditRating::Corporate(SpCreditRating::A))
+                        | Some(CreditRating::Corporate(SpCreditRating::BBB)) => 1.0,
+                        Some(CreditRating::Consumer(ConsumerCreditRating::Prime)) => 0.75,
+                        Some(CreditRating::Consumer(ConsumerCreditRating::NearPrime)) => 1.0,
+                        Some(CreditRating::Consumer(ConsumerCreditRating::Subprime)) => 1.5,
+                        Some(CreditRating::Consumer(ConsumerCreditRating::DeepSubprime)) => 2.0,
+                        _ => 1.5,
                     },
+                    InstrumentType::StructuredTranche(t) => match t.rating {
+                        CreditRating::Corporate(SpCreditRating::AAA)
+                        | CreditRating::Government(SpCreditRating::AAA) => 0.2,
+                        CreditRating::Corporate(SpCreditRating::AA) | CreditRating::Government(SpCreditRating::AA) => {
+                            0.5
+                        }
+                        CreditRating::Corporate(SpCreditRating::A) | CreditRating::Government(SpCreditRating::A) => 1.0,
+                        _ => 2.0,
+                    },
+                    InstrumentType::RealAsset(_) => 1.0,
                     _ => 1.0,
                 };
 
                 let market_value = get_market_price(inst, &system.exchange)
                     .unwrap_or_else(|| inst.face_value().unwrap_or(Money::from(1000)))
-                    .to_f64() * qty;
+                    .to_f64()
+                    * qty;
                 rwa += market_value * risk_weight;
             }
         }

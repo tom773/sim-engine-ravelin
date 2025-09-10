@@ -1,4 +1,3 @@
-use chrono::Datelike;
 use rand::prelude::*;
 use rust_decimal::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -14,11 +13,7 @@ pub struct ProductionFirmDecisionModel {
 
 impl Default for ProductionFirmDecisionModel {
     fn default() -> Self {
-        Self {
-            target_markup: 1.25,
-            base_wage: 25.0,
-            target_employees: 3,
-        }
+        Self { target_markup: 1.25, base_wage: 25.0, target_employees: 3 }
     }
 }
 
@@ -27,12 +22,7 @@ impl DecisionModel for ProductionFirmDecisionModel {
     fn name(&self) -> &str {
         "Production Firm"
     }
-    fn decide(
-        &self,
-        agent: &dyn Any,
-        state: &SimState,
-        _rng: &mut dyn RngCore,
-    ) -> Vec<SimIntention> {
+    fn decide(&self, agent: &dyn Any, state: &SimState, rng: &mut dyn RngCore) -> Vec<SimIntention> {
         let firm = match agent.downcast_ref::<Firm>() {
             Some(f) => f,
             None => return vec![],
@@ -41,11 +31,12 @@ impl DecisionModel for ProductionFirmDecisionModel {
         let mut intentions = Vec::new();
 
         self.handle_hiring(firm, state, &mut intentions);
+        self.handle_separations(firm, state, &mut intentions, rng);
         self.handle_production(firm, state, &mut intentions);
         self.handle_wages(firm, state, &mut intentions);
         self.handle_sales(firm, state, &mut intentions);
         self.handle_input_purchases(firm, state, &mut intentions);
-
+        self.consider_financing(firm, state, &mut intentions);
         intentions
     }
 }
@@ -79,11 +70,10 @@ impl ProductionFirmDecisionModel {
             if let Some(recipe) = fs.goods.recipes.get(&recipe_id) {
                 let inventory = fs.get_agent_inventory(&firm.id);
 
-                let can_produce = recipe.inputs.iter().all(|input| {
-                    inventory
-                        .get(&input.good_id)
-                        .map_or(false, |item| item.quantity >= input.quantity)
-                });
+                let can_produce = recipe
+                    .inputs
+                    .iter()
+                    .all(|input| inventory.get(&input.good_id).map_or(false, |item| item.quantity >= input.quantity));
 
                 if can_produce {
                     intentions.push(SimIntention::Production(ProductionIntention::Produce {
@@ -97,20 +87,65 @@ impl ProductionFirmDecisionModel {
     }
 
     fn handle_wages(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
-        if state.current_date.day() == 3 || state.current_date.day() == 17 {
-            for (employee_id, contract) in &firm.employees {
-                let fortnightly_wage = (contract.wage_rate * contract.hours) * 2.0;
-                if fortnightly_wage > 0.0 {
+        for (emp_id, c) in &firm.employees {
+            if state.current_date >= c.next_pay_date {
+                let amount = c.wage_rate * c.hours * (c.pay_interval_days as f64 / 7.0);
+                if amount > 0.0 {
                     intentions.push(SimIntention::Transaction(TransactionIntention::PayWages {
                         employer: firm.id,
-                        employee: *employee_id,
-                        amount: fortnightly_wage,
+                        employee: *emp_id,
+                        amount,
                     }));
                 }
             }
         }
     }
+    fn consider_financing(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
+        let fs = &state.financial_system;
 
+        let liquid = fs.get_liquid_assets(&firm.id);
+
+        let wage_bill = firm.employees.values().map(|c| c.wage_rate * c.hours).sum::<f64>() * 2.0;
+
+        let input_budget = if let Some(recipe_id) = firm.recipe {
+            if let Some(recipe) = fs.goods.recipes.get(&recipe_id) {
+                recipe
+                    .inputs
+                    .iter()
+                    .map(|inp| {
+                        let price = state
+                            .market_view(&MarketId::Goods(inp.good_id))
+                            .and_then(|v| v.last_or_mid())
+                            .map(|m| m.to_f64())
+                            .unwrap_or(Some(0.0));
+                        price.unwrap() * inp.quantity
+                    })
+                    .sum::<f64>()
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
+
+        let planned_need = wage_bill + input_budget;
+        if planned_need <= 1.0 {
+            return;
+        }
+
+        if liquid + 0.01 < planned_need {
+            let shortfall = planned_need - liquid;
+            let requested = (shortfall * 1.10).max(1_000.0);
+
+            intentions.push(SimIntention::Banking(BankingIntention::RequestLoan {
+                agent_id: firm.id,
+                bank_id: firm.bank_id,
+                amount: requested,
+                purpose: LoanPurpose::WorkingCapital,
+                collateral: None,
+            }));
+        }
+    }
     fn handle_sales(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
         let fs = &state.financial_system;
         let inventory = fs.get_agent_inventory(&firm.id);
@@ -127,13 +162,24 @@ impl ProductionFirmDecisionModel {
             }
         }
     }
-
-    fn handle_input_purchases(
-        &self,
-        firm: &Firm,
-        state: &SimState,
-        intentions: &mut Vec<SimIntention>,
-    ) {
+    fn handle_separations(&self, firm: &Firm, _state: &SimState, intentions: &mut Vec<SimIntention>, rng: &mut dyn RngCore) {
+        let quit_rate = 0.005;
+        let mut emp_to_fire = vec![];
+        for emp in firm.get_employees() {
+            let p = rng.random::<f64>();
+            if p < quit_rate {
+                emp_to_fire.push(emp);
+            }
+        }
+        if emp_to_fire.is_empty() {
+            return;
+        }
+        intentions.push(SimIntention::Production(ProductionIntention::FireWorkers {
+            agent_id: firm.id,
+            employee_ids: emp_to_fire.clone(),
+        }));
+    }
+    fn handle_input_purchases(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
         let fs = &state.financial_system;
 
         if let Some(recipe_id) = firm.recipe {
@@ -141,9 +187,7 @@ impl ProductionFirmDecisionModel {
                 let inventory = fs.get_agent_inventory(&firm.id);
 
                 for input in &recipe.inputs {
-                    let current_qty = inventory
-                        .get(&input.good_id)
-                        .map_or(0.0, |item| item.quantity);
+                    let current_qty = inventory.get(&input.good_id).map_or(0.0, |item| item.quantity);
 
                     let target_qty = input.quantity * 2.0;
                     if current_qty < target_qty {
@@ -172,10 +216,7 @@ pub struct InvestmentFirmDecisionModel {
 
 impl Default for InvestmentFirmDecisionModel {
     fn default() -> Self {
-        Self {
-            min_liquidity: 20_000.0,
-            quote_qty: 5.0,
-        }
+        Self { min_liquidity: 20_000.0, quote_qty: 5.0 }
     }
 }
 
@@ -185,12 +226,7 @@ impl DecisionModel for InvestmentFirmDecisionModel {
         "Investment Firm"
     }
 
-    fn decide(
-        &self,
-        agent: &dyn std::any::Any,
-        state: &SimState,
-        rng: &mut dyn RngCore,
-    ) -> Vec<SimIntention> {
+    fn decide(&self, agent: &dyn std::any::Any, state: &SimState, rng: &mut dyn RngCore) -> Vec<SimIntention> {
         let firm = match agent.downcast_ref::<Firm>() {
             Some(f) => f,
             None => return vec![],
@@ -212,11 +248,7 @@ impl DecisionModel for InvestmentFirmDecisionModel {
 
 impl InvestmentFirmDecisionModel {
     fn handle_market_making_treasury(
-        &self,
-        state: &SimState,
-        firm: &Firm,
-        intentions: &mut Vec<SimIntention>,
-        rng: &mut dyn RngCore,
+        &self, state: &SimState, firm: &Firm, intentions: &mut Vec<SimIntention>, rng: &mut dyn RngCore,
     ) {
         let fs = &state.financial_system;
         let current_date = state.current_date;
@@ -224,7 +256,10 @@ impl InvestmentFirmDecisionModel {
         if let Some(treasury_ids) = fs.exchange.index.by_bond_type.get(&BondType::Government) {
             for inst_id in treasury_ids {
                 if let Some(instrument) = fs.instruments.get(inst_id) {
-                    if let InstrumentType::Bond(details) = &instrument.instrument_type {
+                    if !instrument.should_create_order_book() {
+                        continue;
+                    }
+                    if let InstrumentType::Debt(DebtInstrument::Bond(details)) = &instrument.instrument_type {
                         if details.maturity_date <= current_date {
                             continue;
                         }
@@ -248,11 +283,7 @@ impl InvestmentFirmDecisionModel {
         }
     }
     fn handle_debt_auctions(
-        &self,
-        state: &SimState,
-        firm: &Firm,
-        liquid_assets: f64,
-        intentions: &mut Vec<SimIntention>,
+        &self, state: &SimState, firm: &Firm, liquid_assets: f64, intentions: &mut Vec<SimIntention>,
         rng: &mut dyn RngCore,
     ) {
         let fs = &state.financial_system;
@@ -268,7 +299,7 @@ impl InvestmentFirmDecisionModel {
             }
 
             if let Some(instrument) = fs.instruments.get(&auction.instrument_id) {
-                if let InstrumentType::Bond(details) = &instrument.instrument_type {
+                if let InstrumentType::Debt(DebtInstrument::Bond(details)) = &instrument.instrument_type {
                     let ytm = pricing::years_to_maturity(state.current_date, details.maturity_date);
                     let (bid_yield_bps, _ask_yield_bps) = self.calculate_yield_quotes(ytm, fs, rng);
 
@@ -305,10 +336,7 @@ impl InvestmentFirmDecisionModel {
 
     #[inline]
     fn calculate_yield_quotes(
-        &self,
-        ytm: f64,
-        fs: &FinancialSystem,
-        rng: &mut dyn RngCore,
+        &self, ytm: f64, fs: &FinancialSystem, rng: &mut dyn RngCore,
     ) -> (BasisPoints, BasisPoints) {
         let policy_bps = fs.central_bank.policy_rate_bps;
 
@@ -327,8 +355,7 @@ impl InvestmentFirmDecisionModel {
         };
 
         let spread_bps = rng.random_range(10.0..25.0);
-        let mid = policy_bps
-            + Decimal::from_f64(term_premium * rng.random_range(0.9..1.1)).unwrap_or_default();
+        let mid = policy_bps + Decimal::from_f64(term_premium * rng.random_range(0.9..1.1)).unwrap_or_default();
         let bid = mid + Decimal::from_f64(spread_bps / 2.0).unwrap_or_default();
         let ask = mid - Decimal::from_f64(spread_bps / 2.0).unwrap_or_default();
         (bid, ask)

@@ -86,6 +86,7 @@ impl DomainRegistry {
             SimAction::Production(_) => "Production".to_string(),
             SimAction::Transaction(_) => "Transactions".to_string(),
             SimAction::Monetary(_) => "Monetary".to_string(),
+            SimAction::Credit(_) => "Credit".to_string(),
         }
     }
 }

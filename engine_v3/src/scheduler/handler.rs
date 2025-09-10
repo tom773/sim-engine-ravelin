@@ -2,10 +2,10 @@ use super::{StepContext, StepHandler, StepResult};
 use crate::executor::SimulationEngine;
 use domains::{ResolutionContext, ResolutionPhase};
 use rand::prelude::*;
+use rust_decimal_macros::dec;
 use sim_core::*;
 use std::time::Instant;
 use tracing::instrument;
-use uuid::Uuid;
 
 fn execute_step<F>(step_fn: F) -> StepResult
 where
@@ -21,10 +21,19 @@ where
 pub struct UpkeepHandler;
 
 impl StepHandler for UpkeepHandler {
-    fn execute(&self, engine: &mut SimulationEngine, _context: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
+    fn execute(&self, engine: &mut SimulationEngine, _ctx: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
         execute_step(|| {
-            engine.state.advance_time();
-            Ok(serde_json::json!({"current_date": engine.state.current_date, "tick_number": engine.state.ticknum}))
+            if engine.state.current_session == Session::AM {
+                engine.state.advance_time();
+            }
+            if let Err(e) = engine.state.financial_system.validate_accounting_identity() {
+                return Err(format!("Accounting validation failed on tick {}: {}", engine.state.ticknum, e));
+            }
+            Ok(serde_json::json!({
+                "current_date": engine.state.current_date,
+                "tick_number": engine.state.ticknum,
+                "session": format!("{:?}", engine.state.current_session),
+            }))
         })
     }
 }
@@ -182,9 +191,12 @@ impl StepHandler for ApplyPaymentQueuingHandler {
     fn execute(&self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
         execute_step(|| {
             let count = engine.consume_effects(context, |effect| {
-                matches!(effect, StateEffect::Financial(
-                    FinancialEffect::QueuePayment(_) | FinancialEffect::RecordSettlementInstruction(_)
-                ))
+                matches!(
+                    effect,
+                    StateEffect::Financial(
+                        FinancialEffect::QueuePayment(_) | FinancialEffect::RecordSettlementInstruction(_)
+                    )| StateEffect::Inventory(_)    
+                )
             })?;
             Ok(serde_json::json!({ "payments_and_settlements_queued": count }))
         })
@@ -200,8 +212,8 @@ impl StepHandler for RunRTGSHandler {
         execute_step(|| {
             let initial_pending = engine.state.financial_system.rtgs.pending.len();
 
-            let finalization_effects = run_rtgs(&mut engine.state)
-                .map_err(|e| format!("RTGS execution failed: {:?}", e))?;
+            let finalization_effects =
+                run_rtgs(&mut engine.state).map_err(|e| format!("RTGS execution failed: {:?}", e))?;
 
             let mut all_effects: Vec<StateEffect> = context.get("all_effects").unwrap_or_default();
             all_effects.extend(finalization_effects);
@@ -302,39 +314,87 @@ impl StepHandler for UpdateHistoryHandler {
 #[derive(Debug)]
 pub struct DebtAuctionsHandler;
 impl StepHandler for DebtAuctionsHandler {
-    #[instrument(skip(self, engine, context, _rng))]
     fn execute(&self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
         execute_step(|| {
-            let mut auction_trades = Vec::new();
-
-            let open_auction_ids: Vec<Uuid> = engine
+            let open_ids: Vec<_> = engine
                 .state
                 .financial_system
                 .exchange
                 .open_auctions
                 .iter()
-                .filter(|(_, auction)| auction.status == AuctionStatus::Open)
+                .filter(|(_, a)| a.status == AuctionStatus::Open)
                 .map(|(id, _)| *id)
                 .collect();
 
-            for auction_id in &open_auction_ids {
-                let trades = engine
+            let mut auction_trades: Vec<Trade> = Vec::new();
+
+            for auction_id in open_ids {
+                let (inst_id, quantity_offered) = {
+                    let a = &engine.state.financial_system.exchange.open_auctions[&auction_id];
+                    (a.instrument_id, a.quantity_offered as f64)
+                };
+
+                let mut trades = engine
                     .state
                     .financial_system
                     .exchange
-                    .conduct_dutch_auction(auction_id, &engine.state.financial_system.instruments);
+                    .conduct_dutch_auction(&auction_id, &engine.state.financial_system.instruments);
+
+                let sold_qty: f64 =
+                    trades.iter().filter(|t| t.market_id == MarketId::Financial(inst_id)).map(|t| t.quantity).sum();
+
+                let leftover = (quantity_offered - sold_qty).max(0.0);
+
+                if leftover > 0.0 {
+                    let fs = &engine.state.financial_system;
+                    let cb_id = fs.central_bank.id;
+                    let gov_id = fs.government.id;
+
+                    let fallback_price = if let Some(inst) = fs.instruments.get(&inst_id) {
+                        if let InstrumentType::Debt(DebtInstrument::Bond(d)) = &inst.instrument_type {
+                            let ytm = pricing::years_to_maturity(engine.state.current_date, d.maturity_date);
+                            let y_backstop = (fs.central_bank.policy_rate_bps - dec!(50)).max(dec!(0));
+                            pricing::bond_price(
+                                d.face_value,
+                                bps_to_decimal(d.coupon_rate_bps),
+                                bps_to_decimal(y_backstop),
+                                ytm,
+                                d.frequency as usize,
+                            )
+                        } else {
+                            Money::from(1000u64)
+                        }
+                    } else {
+                        Money::from(1000u64)
+                    };
+
+                    let backstop_price = trades
+                        .iter()
+                        .rev()
+                        .find(|t| t.market_id == MarketId::Financial(inst_id))
+                        .map(|t| t.price)
+                        .unwrap_or(fallback_price);
+
+                    trades.push(Trade {
+                        trade_id: uuid::Uuid::new_v4(),
+                        market_id: MarketId::Financial(inst_id),
+                        buyer: cb_id,
+                        seller: gov_id,
+                        price: backstop_price,
+                        quantity: leftover,
+                    });
+                }
+
                 auction_trades.extend(trades);
             }
 
             if !auction_trades.is_empty() {
                 let mut all_trades = context.get_trades().unwrap_or_default();
-                all_trades.extend(auction_trades.clone());
+                all_trades.extend(auction_trades);
                 context.store("trades", &all_trades)?;
             }
 
-            Ok(
-                serde_json::json!({ "debt_auctions_conducted": open_auction_ids.len(), "auction_trades_generated": auction_trades.len() }),
-            )
+            Ok(serde_json::json!({ "auctions_processed": true }))
         })
     }
 }

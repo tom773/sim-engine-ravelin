@@ -41,11 +41,6 @@ impl BasicBankDecisionModel {
                     continue;
                 }
 
-                println!(
-                    "🏦 Bank {} is reviewing loan application {} from {}",
-                    bank.id, application.application_id, application.borrower_id
-                );
-
                 let decision = if let Some(borrower) = state.agents.consumers.get(&application.borrower_id) {
                     let debt_to_income = if borrower.income > 0.0 {
                         state.financial_system.get_total_liabilities(&borrower.id) / borrower.income
@@ -162,7 +157,7 @@ impl BasicBankDecisionModel {
                 continue;
             }
             if let Some(instrument) = fs.instruments.get(&auction.instrument_id) {
-                if let InstrumentType::Bond(details) = &instrument.instrument_type {
+                if let InstrumentType::Debt(DebtInstrument::Bond(details)) = &instrument.instrument_type {
                     let ytm = pricing::years_to_maturity(state.current_date, details.maturity_date);
                     let (bid_yield_bps, _ask_yield_bps) = self.calculate_yield_quotes(ytm, fs, rng);
 
@@ -206,7 +201,10 @@ impl BasicBankDecisionModel {
         if let Some(treasury_ids) = fs.exchange.index.by_bond_type.get(&BondType::Government) {
             for inst_id in treasury_ids {
                 if let Some(instrument) = fs.instruments.get(inst_id) {
-                    if let InstrumentType::Bond(details) = &instrument.instrument_type {
+                    if !instrument.should_create_order_book() {
+                        continue;
+                    }
+                    if let InstrumentType::Debt(DebtInstrument::Bond(details)) = &instrument.instrument_type {
                         if details.maturity_date <= current_date {
                             continue;
                         }

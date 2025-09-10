@@ -47,7 +47,6 @@ impl DecisionModel for SimpleConsumerDecisionModel {
         self.make_purchases(consumer, budget, &mut intentions);
         self.apply_for_loan(consumer, &state.financial_system, &mut intentions);
         if save_amount > 1.0 {}
-
         intentions
     }
 }
@@ -176,7 +175,6 @@ impl DecisionModel for CESConsumerDecisionModel {
         }
 
         self.handle_savings(consumer, save_amount, &mut intentions);
-
         intentions
     }
 }
@@ -222,7 +220,7 @@ impl CESConsumerDecisionModel {
                 }
             }
         }
-
+        
         market_data
     }
 

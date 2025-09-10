@@ -55,6 +55,10 @@ pub enum ProductionIntention {
         count: u32,
         wage_rate: f64,
     },
+    FireWorkers {
+        agent_id: AgentId,
+        employee_ids: Vec<AgentId>,
+    },
 }
 
 impl ProductionIntention {
@@ -65,6 +69,7 @@ impl ProductionIntention {
             ProductionIntention::Produce { .. } => "Produce",
             ProductionIntention::ApplyForJob { .. } => "ApplyForJob",
             ProductionIntention::HireWorkers { .. } => "HireWorkers",
+            ProductionIntention::FireWorkers { .. } => "FireWorkers",
         }
     }
 
@@ -75,6 +80,7 @@ impl ProductionIntention {
             ProductionIntention::Produce { agent_id, .. } => *agent_id,
             ProductionIntention::ApplyForJob { agent_id, .. } => *agent_id,
             ProductionIntention::HireWorkers { agent_id, .. } => *agent_id,
+            ProductionIntention::FireWorkers { agent_id, .. } => *agent_id,
         }
     }
 }
