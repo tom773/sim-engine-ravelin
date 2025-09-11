@@ -100,11 +100,11 @@ pub fn listing_key_from_instrument(inst: &Instrument) -> ListingKey {
     match &inst.instrument_type {
         InstrumentType::Debt(DebtInstrument::Bond(b)) => match b.bond_type {
             BondType::Government => {
-                let years = ((b.maturity_date - b.issue_date).num_days() as f64 / 365.0).round() as u16;
+                let years = b.original_tenor_years().round() as u16;
                 ListingKey::GovBond { tenor_years: years.max(1) }
             }
             BondType::Corporate => {
-                let years = ((b.maturity_date - b.issue_date).num_days() as f64 / 365.0).max(0.0);
+                let years = b.original_tenor_years();
                 ListingKey::CorpBond { rating: b.rating, tenor_bucket: TenorBucket::from_years(years) }
             }
             BondType::InterbankLoan => ListingKey::CashON,
@@ -167,15 +167,12 @@ impl<P: Product<Quote = Money, Lot = f64>> MarketGeneric<P> {
         MarketSnapshot {
             best_bid,
             best_ask,
-            mid_price: mid,
             last_price: self.book.representative_price(),
             spread: self.book.spread(),
-            volume_24h: 0.0,
             depth: self.book.depth_summary(),
-            best_bid_yield: y_bid,
-            best_ask_yield: y_ask,
-            mid_yield: y_mid,
-            last_yield: None,
+            yield_ask: y_ask,
+            yield_bid: y_bid,
+            yield_mid: y_mid,
         }
     }
 
@@ -259,13 +256,20 @@ impl Exchange {
             let pricer: Arc<dyn Pricer<FinancialProduct>> = match &inst.instrument_type {
                 InstrumentType::Debt(DebtInstrument::Bond(b)) if b.bond_type == BondType::Government => {
                     let feeds = self.pricing_feeds.clone().expect("attach_pricing_feeds before listing");
-                    let spec = BondSpec {
-                        face: b.face_value,
-                        coupon_bps: b.coupon_rate_bps,
-                        freq_per_year: b.frequency,
-                        issue: b.issue_date,
-                        maturity: b.maturity_date,
+                    let spec = BondDetails {
+                        issue_date: b.issue_date,
+                        issuer: b.issuer,
+                        maturity_date: b.maturity_date,
+                        coupon_rate_bps: b.coupon_rate_bps,
+                        frequency: b.frequency,
+                        day_count: b.day_count,
+                        face_value: b.face_value,
+                        bond_type: b.bond_type,
+                        rating: b.rating,
+                        cash_flow: b.cash_flow,
+                        last_accrual_date: b.last_accrual_date,
                     };
+
                     let method = TermStructureMethod::Bootstrapped;
                     Arc::new(GovTermStructurePricer::new(spec, method, feeds))
                 }

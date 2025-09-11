@@ -1,4 +1,6 @@
 use crate::{Any, Domain, DomainResult, ResolutionContext, ResolutionPhase, ResolutionResult, inventory};
+use chrono::NaiveDate;
+use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use sim_core::*;
@@ -32,7 +34,7 @@ impl Domain for TransactionsDomain {
                     },
                 })]
             }
-            
+
             SimIntention::Fiscal(FiscalIntention::CollectTaxes { government_id, target, amount }) => {
                 vec![SimAction::Transaction(TransactionAction::InitiatePayment {
                     from: *target,
@@ -41,22 +43,22 @@ impl Domain for TransactionsDomain {
                     context: TransactionContext::TaxPayment { payer: *target, amount: *amount },
                 })]
             }
-            
+
             SimIntention::Banking(BankingIntention::MarketMakeTreasuries {
                 agent_id,
                 maturity_date,
-                quantity,
                 bid_yield_bps,
                 ask_yield_bps,
+                quantity,
             }) => self.resolve_treasury_market_making(
                 *agent_id,
                 *maturity_date,
-                *quantity,
                 *bid_yield_bps,
                 *ask_yield_bps,
-                context,
+                *quantity,
+                context.state,
             ),
-            
+
             SimIntention::Production(ProductionIntention::PostGoodToMarket {
                 agent_id,
                 good_id,
@@ -72,7 +74,7 @@ impl Domain for TransactionsDomain {
                     order_type: OrderType::Limit,
                 })]
             }
-            
+
             SimIntention::Production(ProductionIntention::PurchaseInputs {
                 agent_id,
                 good_id,
@@ -88,45 +90,70 @@ impl Domain for TransactionsDomain {
                     order_type: OrderType::Limit,
                 })]
             }
-            
-            SimIntention::Consumption(ConsumptionIntention::SpendOnGood { 
-                agent_id, 
-                good_id, 
-                max_notional 
-            }) => {
-                let px = context.state
+
+            SimIntention::Consumption(ConsumptionIntention::SpendOnGood { agent_id, good_id, max_notional }) => {
+                let consumer = context
+                    .state
+                    .agents
+                    .consumers
+                    .get(agent_id)
+                    .ok_or_else(|| ResolutionResult::failure(vec!["Consumer not found".to_string()]))
+                    .unwrap();
+
+                let goods_config = &context.state.config.goods;
+
+                let anchor = context
+                    .state
                     .financial_system
                     .exchange
-                    .goods_market(good_id)
-                    .and_then(|v| v.book.best_ask())
-                    .unwrap_or(Money::from(1));
-                let qty = (max_notional / px.to_f64()).max(0.0);
-                let start_bid = Money::from_f64(px.to_f64() * 1.01).unwrap_or_default();
-                
+                    .fair_price_for_good(good_id)
+                    .map(|m| m.to_f64())
+                    .or_else(|| context.state.market_view(&MarketId::Goods(*good_id)).and_then(|v| v.last_or_mid()))
+                    .unwrap_or(1.0);
+
+                let mut limit_price = consumer
+                    .adaptive
+                    .reservation
+                    .get(good_id)
+                    .copied()
+                    .unwrap_or(anchor * (1.0 + goods_config.reservation_nudge_up));
+
+                let cap = anchor * goods_config.reservation_cap_mult;
+                limit_price = limit_price.min(cap).max(0.01);
+
+                let quantity_to_buy = if limit_price > 1e-9 {
+                    (*max_notional / limit_price).floor().max(1.0)
+                } else {
+                    1.0
+                };
+
                 vec![SimAction::Transaction(TransactionAction::PostMarketOrder {
                     agent_id: *agent_id,
                     market_id: MarketId::Goods(*good_id),
                     side: Side::Bid,
-                    quantity: qty.round(),
-                    price: Some(start_bid),
+                    quantity: quantity_to_buy,
+                    price: Some(Money::from_f64(limit_price).unwrap_or_default()),
                     order_type: OrderType::Limit,
                 })]
             }
-            
+
             SimIntention::Production(ProductionIntention::ApplyForJob { agent_id: _, market_id, application }) => {
                 vec![SimAction::Transaction(TransactionAction::PostJobApplication {
                     market_id: *market_id,
                     application: application.clone(),
                 })]
             }
-            
-            SimIntention::Production(ProductionIntention::HireWorkers { agent_id, count, wage_rate }) => {
+
+            SimIntention::Production(ProductionIntention::HireWorkers {
+                agent_id,
+                count,
+                wage_rate,
+                max_wage,
+            }) => {
                 let Some(market_id) = context.state.financial_system.find_general_labour_market() else {
-                    return Some(ResolutionResult::failure(vec![
-                        "No general labour market found".to_string()
-                    ]));
+                    return Some(ResolutionResult::failure(vec!["No general labour market found".to_string()]));
                 };
-                
+
                 vec![SimAction::Transaction(TransactionAction::PostJobOffer {
                     market_id,
                     offer: JobOffer {
@@ -134,14 +161,15 @@ impl Domain for TransactionsDomain {
                         firm_id: *agent_id,
                         quantity: *count,
                         wage_rate: *wage_rate,
+                        value_per_hour: *max_wage,
                         hours_required: 40.0,
                     },
                 })]
             }
-            
+
             _ => return None,
         };
-        
+
         Some(ResolutionResult::success(actions))
     }
 
@@ -149,15 +177,15 @@ impl Domain for TransactionsDomain {
         match intention {
             SimIntention::Transaction(TransactionIntention::PayWages { .. })
             | SimIntention::Fiscal(FiscalIntention::CollectTaxes { .. }) => Some(ResolutionPhase::Independent),
-            
+
             SimIntention::Banking(BankingIntention::MarketMakeTreasuries { .. })
             | SimIntention::Production(ProductionIntention::PostGoodToMarket { .. })
             | SimIntention::Production(ProductionIntention::PurchaseInputs { .. })
             | SimIntention::Consumption(ConsumptionIntention::SpendOnGood { .. }) => Some(ResolutionPhase::Market),
-            
+
             SimIntention::Production(ProductionIntention::ApplyForJob { .. })
             | SimIntention::Production(ProductionIntention::HireWorkers { .. }) => Some(ResolutionPhase::Independent),
-            
+
             _ => None,
         }
     }
@@ -182,9 +210,7 @@ impl Domain for TransactionsDomain {
             TransactionAction::PostJobApplication { market_id, application } => {
                 self.execute_job_application(*market_id, application.clone())
             }
-            TransactionAction::PostJobOffer { market_id, offer } => {
-                self.execute_job_offer(*market_id, offer.clone())
-            }
+            TransactionAction::PostJobOffer { market_id, offer } => self.execute_job_offer(*market_id, offer.clone()),
         }
     }
 
@@ -192,7 +218,7 @@ impl Domain for TransactionsDomain {
         match &trade.market_id {
             MarketId::Financial(inst_id) => {
                 let mut effects = Vec::new();
-                
+
                 if trade.buyer == state.financial_system.central_bank.id
                     && trade.seller == state.financial_system.government.id
                 {
@@ -207,9 +233,7 @@ impl Domain for TransactionsDomain {
                         settlement_date: state.current_date,
                         status: SettlementStatus::Pending,
                     };
-                    effects.push(StateEffect::Financial(FinancialEffect::RecordSettlementInstruction(
-                        instruction,
-                    )));
+                    effects.push(StateEffect::Financial(FinancialEffect::RecordSettlementInstruction(instruction)));
 
                     let payment_amount = (trade.price * trade.quantity).to_f64();
                     if let Some((_tga_id, _)) = state.financial_system.find_government_tga_account() {
@@ -293,7 +317,7 @@ impl Domain for TransactionsDomain {
 
                 DomainResult::success(effects)
             }
-            
+
             MarketId::Goods(good_id) => {
                 let mut effects = vec![];
                 let revenue = (trade.price * trade.quantity).to_f64();
@@ -349,7 +373,7 @@ impl Domain for TransactionsDomain {
                 effects.push(StateEffect::Financial(FinancialEffect::QueuePayment(payment)));
                 DomainResult::success(effects)
             }
-            
+
             MarketId::Labour(_) => DomainResult::empty(),
         }
     }
@@ -465,17 +489,14 @@ impl TransactionsDomain {
     }
 
     fn resolve_treasury_market_making(
-        &self, agent_id: AgentId, maturity_date: chrono::NaiveDate, quantity: f64, bid_yield_bps: BasisPoints,
-        ask_yield_bps: BasisPoints, context: &ResolutionContext,
+        &self, agent_id: AgentId, maturity_date: NaiveDate, bid_yield_bps: BasisPoints, ask_yield_bps: BasisPoints,
+        quantity: f64, state: &SimState,
     ) -> Vec<SimAction> {
-        let fs = &context.state.financial_system;
-        let current_date = context.state.current_date;
+        let fs = &state.financial_system;
+        let mut actions = vec![];
+        let _current_date = state.current_date;
 
-        if maturity_date <= current_date {
-            return vec![];
-        }
-
-        let matching_bonds: Vec<InstrumentId> = fs
+        let on_the_run_ids: Vec<InstrumentId> = fs
             .exchange
             .index
             .by_bond_type
@@ -496,49 +517,46 @@ impl TransactionsDomain {
             })
             .unwrap_or_default();
 
-        let mut actions = Vec::new();
-        for inst_id in matching_bonds {
+        for inst_id in on_the_run_ids {
             if let Some(inst) = fs.instruments.get(&inst_id) {
-                if let InstrumentType::Debt(DebtInstrument::Bond(details)) = &inst.instrument_type {
-                    let ytm = years_to_maturity(current_date, maturity_date);
-
-                    let bid_price = bond_price(
-                        details.face_value,
-                        bps_to_decimal(details.coupon_rate_bps),
-                        bps_to_decimal(bid_yield_bps),
-                        ytm,
-                        details.frequency as usize,
+                if let Some(details) = inst.instrument_type.as_bond() {
+                    let pricer = GovTermStructurePricer::new(
+                        details.clone(),
+                        TermStructureMethod::default(),
+                        fs.pricing_feeds.clone(),
                     );
 
-                    let ask_price = bond_price(
-                        details.face_value,
-                        bps_to_decimal(details.coupon_rate_bps),
-                        bps_to_decimal(ask_yield_bps),
-                        ytm,
-                        details.frequency as usize,
-                    );
+                    let bid_price = pricer
+                        .price_from_yield(&inst_id, bid_yield_bps.to_f64().unwrap_or_default())
+                        .unwrap_or(Money::ZERO);
 
-                    actions.push(SimAction::Transaction(TransactionAction::PostMarketOrder {
-                        agent_id,
-                        market_id: MarketId::Financial(inst_id),
-                        side: Side::Bid,
-                        quantity,
-                        price: Some(bid_price),
-                        order_type: OrderType::Limit,
-                    }));
+                    let ask_price = pricer
+                        .price_from_yield(&inst_id, ask_yield_bps.to_f64().unwrap_or_default())
+                        .unwrap_or(Money::ZERO);
 
-                    actions.push(SimAction::Transaction(TransactionAction::PostMarketOrder {
-                        agent_id,
-                        market_id: MarketId::Financial(inst_id),
-                        side: Side::Ask,
-                        quantity,
-                        price: Some(ask_price),
-                        order_type: OrderType::Limit,
-                    }));
+                    if bid_price > Money::ZERO {
+                        actions.push(SimAction::Transaction(TransactionAction::PostMarketOrder {
+                            agent_id,
+                            market_id: MarketId::Financial(inst_id),
+                            side: Side::Bid,
+                            quantity,
+                            price: Some(bid_price),
+                            order_type: OrderType::Limit,
+                        }));
+                    }
+                    if ask_price > Money::ZERO {
+                        actions.push(SimAction::Transaction(TransactionAction::PostMarketOrder {
+                            agent_id,
+                            market_id: MarketId::Financial(inst_id),
+                            side: Side::Ask,
+                            quantity,
+                            price: Some(ask_price),
+                            order_type: OrderType::Limit,
+                        }));
+                    }
                 }
             }
         }
-
         actions
     }
 }

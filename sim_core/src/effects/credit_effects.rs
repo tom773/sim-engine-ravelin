@@ -90,11 +90,10 @@ impl StateEffectApplicator {
             }
 
             CreditEffect::RegisterLoan { loan } => {
-                state
-                    .financial_system
-                    .credit_registry
-                    .register_loan(loan.clone())
-                    .map_err(EffectError::FinancialSystemError)?;
+                let fs = &mut state.financial_system;
+                let cr = &mut fs.credit_registry;
+
+                cr.register_loan(loan.clone()).map_err(EffectError::FinancialSystemError)?;
 
                 let inst = Instrument {
                     id: loan.instrument_id,
@@ -102,15 +101,12 @@ impl StateEffectApplicator {
                     instrument_market: InstrumentMarket::MoneyMarket(MoneyMarketSegment::CorporateShortTerm),
                     listability: Listability::Unlisted,
                 };
+                fs.instruments.insert(loan.instrument_id, inst);
 
-                state.financial_system.instruments.insert(loan.instrument_id, inst);
-
-                let lender_bs = state
-                    .financial_system
+                let lender_bs = fs
                     .balance_sheets
                     .entry(loan.details.lender)
                     .or_insert_with(|| BalanceSheet::new(loan.details.lender));
-                // TODO Book value should be principal, quantity 1
                 lender_bs.assets.insert(
                     loan.instrument_id,
                     Position {
@@ -120,12 +116,10 @@ impl StateEffectApplicator {
                     },
                 );
 
-                let borrower_bs = state
-                    .financial_system
+                let borrower_bs = fs
                     .balance_sheets
                     .entry(loan.details.borrower)
                     .or_insert_with(|| BalanceSheet::new(loan.details.borrower));
-
                 borrower_bs.liabilities.insert(
                     loan.instrument_id,
                     Position {
@@ -134,6 +128,19 @@ impl StateEffectApplicator {
                         cost_basis_per_unit: Money::ONE,
                     },
                 );
+
+                let borrower = loan.details.borrower;
+                if let Some(app_ids) = cr.applications_by_borrower.remove(&borrower) {
+                    for app_id in app_ids {
+                        cr.applications.remove(&app_id);
+
+                        for ids in cr.applications_by_bank.values_mut() {
+                            if let Some(pos) = ids.iter().position(|id| *id == app_id) {
+                                ids.swap_remove(pos);
+                            }
+                        }
+                    }
+                }
 
                 Ok(())
             }
@@ -265,10 +272,15 @@ impl StateEffectApplicator {
                 let borrower_id = application.borrower_id;
                 state.financial_system.credit_registry.applications.insert(app_id, application.clone());
                 state.financial_system.credit_registry.applications_by_bank.entry(*bank_id).or_default().push(app_id);
-                state.financial_system.credit_registry.applications_by_borrower.entry(borrower_id).or_default().push(app_id);
+                state
+                    .financial_system
+                    .credit_registry
+                    .applications_by_borrower
+                    .entry(borrower_id)
+                    .or_default()
+                    .push(app_id);
                 Ok(())
             }
         }
     }
-
 }

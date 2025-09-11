@@ -31,6 +31,12 @@ impl Default for ConsumerExpectations {
     }
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ConsumerAdaptive {
+    #[serde(default)]
+    pub reservation: HashMap<GoodId, f64>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Consumer {
     pub id: AgentId,
@@ -42,6 +48,8 @@ pub struct Consumer {
     pub expectations: ConsumerExpectations,
     pub employed_by: Option<AgentId>,
     pub hours_worked: f64,
+    #[serde(default)]
+    pub adaptive: ConsumerAdaptive,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -50,8 +58,24 @@ pub struct EmploymentContract {
     pub wage_rate: f64,
     pub hours: f64,
     pub start_date: chrono::NaiveDate,
-    pub next_pay_date: chrono::NaiveDate, // NEW
+    pub next_pay_date: chrono::NaiveDate,
     pub pay_interval_days: u32,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct FirmPerGoodMetrics {
+    #[serde(default)]
+    pub sell_through_ema: f64,
+    #[serde(default)]
+    pub sales_ema: f64,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct FirmBehaviourState {
+    #[serde(default)]
+    pub doc_target_days: f64,
+    #[serde(default)]
+    pub per_good: HashMap<GoodId, FirmPerGoodMetrics>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -65,6 +89,8 @@ pub struct Firm {
     pub recipe: Option<RecipeId>,
     pub capital_stock: f64,
     pub desired_markup: f64,
+    #[serde(default)]
+    pub behaviour: FirmBehaviourState,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -95,6 +121,7 @@ impl Consumer {
             expectations: ConsumerExpectations::default(),
             employed_by: None,
             hours_worked: 0.0,
+            adaptive: ConsumerAdaptive::default(),
         }
     }
     pub fn update_employment(&mut self, firm_id: Option<AgentId>, hours_worked: f64) {
@@ -120,6 +147,7 @@ impl Firm {
             recipe,
             capital_stock: 10000.0,
             desired_markup: 0.20,
+            behaviour: FirmBehaviourState::default(),
         }
     }
     pub fn get_employees(&self) -> Vec<AgentId> {

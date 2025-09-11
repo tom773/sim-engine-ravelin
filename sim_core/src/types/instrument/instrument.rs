@@ -330,13 +330,11 @@ impl InventoryItem {
 
 impl BondDetails {
     pub fn original_tenor_years(&self) -> f64 {
-        let days = (self.maturity_date - self.issue_date).num_days();
-        days as f64 / 365.25
+        self.day_count.year_fraction(self.issue_date, self.maturity_date)
     }
 
     pub fn remaining_tenor_years(&self, as_of: NaiveDate) -> f64 {
-        let days = (self.maturity_date - as_of).num_days();
-        (days as f64 / 365.25).max(0.0)
+        self.day_count.year_fraction(as_of, self.maturity_date).max(0.0)
     }
 
     pub fn tenor_bucket(&self) -> TenorBucket {

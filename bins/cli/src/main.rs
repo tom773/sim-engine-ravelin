@@ -14,7 +14,7 @@ use rand::rngs::StdRng;
 use serde::{Deserialize, Serialize};
 use sim_core::*;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use uuid::Uuid;
 
@@ -47,7 +47,7 @@ async fn main() {
 
     let bus = EventsBus::new(500); // keep last 500 ticks
     {
-        let mut eng = engine.lock().unwrap();
+        let mut eng = engine.write();
         let mut rng = StdRng::from_os_rng();
         let tick = eng.state.ticknum;
         let date = eng.state.current_date;
@@ -109,7 +109,7 @@ async fn get_simulation_status(State(state): State<Arc<AppState>>) -> impl IntoR
 }
 
 async fn tick_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let mut eng = state.engine.lock().unwrap();
+    let mut eng = state.engine.write();
 
     if eng.state.ticknum >= eng.state.config.iterations {
         return (

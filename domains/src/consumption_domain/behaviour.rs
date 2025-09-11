@@ -45,6 +45,7 @@ impl DecisionModel for SimpleConsumerDecisionModel {
         let save_amount = total_resources - budget;
 
         self.make_purchases(consumer, budget, &mut intentions);
+        self.consume_stuff(consumer, fs, &mut intentions);
         self.apply_for_loan(consumer, &state.financial_system, &mut intentions);
         if save_amount > 1.0 {}
         intentions
@@ -79,28 +80,37 @@ impl SimpleConsumerDecisionModel {
             }));
         }
     }
-    fn apply_for_loan(
-        &self,
-        consumer: &Consumer,
-        fs: &FinancialSystem,
-        intentions: &mut Vec<SimIntention>,
-    ) {
-        if let Some(_apps) = fs.credit_registry.applications.get(&consumer.id.0) {
-            return;
+    fn apply_for_loan(&self, consumer: &Consumer, fs: &FinancialSystem, intentions: &mut Vec<SimIntention>) {
+        if let Some(ids) = fs.credit_registry.applications_by_borrower.get(&consumer.id) {
+            let has_open = ids.iter().any(|id| {
+                fs.credit_registry
+                    .applications
+                    .get(id)
+                    .map(|a| matches!(a.status, ApplicationStatus::Pending | ApplicationStatus::UnderReview))
+                    .unwrap_or(false)
+            });
+            if has_open {
+                return; // already applied; wait for decision
+            }
         }
+
+        if let Some(existing) = fs.credit_registry.loans_by_borrower.get(&consumer.id) {
+            if !existing.is_empty() {
+                return;
+            }
+        }
+
         let liquid_assets = fs.get_liquid_assets(&consumer.id);
-        if liquid_assets < 10_000.0 && consumer.income > 1000.0 {
+        if liquid_assets < 10_000.0 && consumer.income > 1_000.0 {
             let existing_debt = fs.get_total_liabilities(&consumer.id);
             if existing_debt > consumer.income * 0.5 {
-                return; 
+                return;
             }
-
-            let desired_amount = 5_000.0;
 
             intentions.push(SimIntention::Banking(BankingIntention::RequestLoan {
                 agent_id: consumer.id,
                 bank_id: consumer.bank_id,
-                amount: desired_amount,
+                amount: 5_000.0,
                 purpose: LoanPurpose::PersonalConsumption,
                 collateral: None,
             }));
@@ -119,6 +129,20 @@ impl SimpleConsumerDecisionModel {
             }
         }
     }
+    fn consume_stuff(&self, consumer: &Consumer, fs: &FinancialSystem, intentions: &mut Vec<SimIntention>) {
+        let inv = fs.get_agent_inventory(&consumer.id);
+        for (good_id, &desired_qty) in &self.consumption_basket {
+            let available_qty = inv.get(good_id).cloned().unwrap_or_default();
+            if available_qty.quantity >= desired_qty && desired_qty > 0.0 {
+                intentions.push(SimIntention::Consumption(ConsumptionIntention::ConsumeGood {
+                    agent_id: consumer.id,
+                    good_id: *good_id,
+                    quantity: desired_qty,
+                }));
+            }
+        }
+    }
+
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -220,7 +244,7 @@ impl CESConsumerDecisionModel {
                 }
             }
         }
-        
+
         market_data
     }
 

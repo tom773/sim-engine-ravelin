@@ -75,19 +75,19 @@ pub struct MarketSummaryDto {
     pub best_bid: Option<Rate>,
     pub best_ask: Option<Rate>,
     pub spread: Option<Rate>,
-    pub volume_24h: f64,
-    pub turnover_24h: f64,
+    pub volume: f64,
+    pub turnover: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub depth: Option<OrderBookDepthDto>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub best_bid_yield: Option<Rate>,
+    pub yield_bid: Option<Rate>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub best_ask_yield: Option<Rate>,
+    pub yield_ask: Option<Rate>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub mid_yield: Option<Rate>,
+    pub yield_mid: Option<Rate>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_yield: Option<Rate>,
+    pub yield_last: Option<Rate>,
 }
 
 
@@ -262,6 +262,7 @@ pub struct RtgsStateDto {
 pub struct FinancialInfrastructureDto {
     pub csd: CsdStateDto,
     pub rtgs: RtgsStateDto,
+    pub cred_reg: CreditRegistryDto,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -296,4 +297,15 @@ pub struct LabourMarketStatsDto {
     pub labor_force_participation: f64,
     pub job_openings: usize,
     pub contracts: Vec<EmploymentRecordDto>
+}
+
+impl From<MarketDepthSummary> for OrderBookDepthDto {
+    fn from(summary: MarketDepthSummary) -> Self {
+        Self {
+            bid_levels: summary.bid_levels.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+            ask_levels: summary.ask_levels.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+            bid_size_at_best: summary.bid_size_at_best,
+            ask_size_at_best: summary.ask_size_at_best,
+        }
+    }
 }

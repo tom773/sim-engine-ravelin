@@ -2,7 +2,6 @@ use crate::{Any, Domain, DomainResult, ResolutionContext, ResolutionPhase, Resol
 use serde::{Deserialize, Serialize};
 use sim_core::*;
 use std::collections::HashMap;
-use uuid::Uuid;
 use tracing::{debug, info, trace, warn};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -66,7 +65,6 @@ impl Domain for ProductionDomain {
         }
 
         match production_action {
-            ProductionAction::Hire { agent_id, count } => self.execute_hire(*agent_id, *count, state),
             ProductionAction::Produce { agent_id, recipe_id, batches } => {
                 self.execute_produce(*agent_id, recipe_id.clone(), *batches, state)
             }
@@ -83,15 +81,6 @@ impl ProductionDomain {
     fn validate(&self, action: &ProductionAction, state: &SimState) -> Result<(), String> {
         let fs = &state.financial_system;
         match action {
-            ProductionAction::Hire { agent_id, count } => {
-                if *count == 0 {
-                    warn!(target: "sim.prod", firm_id=?agent_id, "validate_hire_zero");
-                    Err("Cannot hire zero workers".to_string())
-                } else {
-                    trace!(target: "sim.prod", firm_id=?agent_id, count, "validate_hire_ok");
-                    Validator::firm_exists(*agent_id, state)
-                }
-            }
             ProductionAction::Produce { agent_id, recipe_id, batches } => {
                 trace!(target: "sim.prod", firm_id=?agent_id, ?recipe_id, batches, "validate_produce_start");
 
@@ -203,29 +192,6 @@ impl ProductionDomain {
             warn!(target: "sim.prod", firm_id=?agent_id, firm_name, ?recipe_id, "execute_produce_recipe_missing");
             DomainResult::failure(vec!["Recipe not found".to_string()])
         }
-    }
-
-    fn execute_hire(&self, agent_id: AgentId, count: u32, state: &SimState) -> DomainResult {
-        let market_id = match state.financial_system.find_general_labour_market() {
-            Some(id) => id,
-            None => return DomainResult::failure(vec!["No labour market found.".to_string()]),
-        };
-
-        let firm = state.agents.firms.get(&agent_id).unwrap(); // Safe due to validation
-        let wage_rate = firm.wage_rate;
-
-        let effects = vec![StateEffect::Market(MarketEffect::UpdateLabourMarket {
-            market_id,
-            update: LabourMarketUpdate::AddOffer(JobOffer {
-                offer_id: Uuid::new_v4(),
-                firm_id: agent_id,
-                quantity: count,
-                wage_rate,
-                hours_required: 40.0,
-            }),
-        })];
-
-        DomainResult::success(effects)
     }
 
     fn execute_fire(&self, firm_id: AgentId, employee_id: AgentId) -> DomainResult {

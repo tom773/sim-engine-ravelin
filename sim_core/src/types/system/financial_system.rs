@@ -1,14 +1,14 @@
 use crate::prelude::*;
 use crate::types::money::Money;
+use ordered_float::NotNan;
 use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
-use std::collections::HashMap;
-use uuid::Uuid;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-use ordered_float::NotNan;
+use uuid::Uuid;
 
 pub fn is_security(inst: &Instrument) -> bool {
     matches!(
@@ -66,7 +66,16 @@ pub struct PricingFeeds {
     pub goods: Arc<RwLock<GoodsMetrics>>,
     pub current_date: Arc<RwLock<chrono::NaiveDate>>,
 }
-
+impl PricingFeeds {
+    pub fn with_date(&self, date: chrono::NaiveDate) -> Self {
+        PricingFeeds {
+            policy_rate_bps: self.policy_rate_bps.clone(),
+            yield_curve: self.yield_curve.clone(),
+            goods: self.goods.clone(),
+            current_date: std::sync::Arc::new(std::sync::RwLock::new(date)),
+        }
+    }
+}
 impl Default for FinancialSystem {
     fn default() -> Self {
         let government = Government {
@@ -128,7 +137,7 @@ impl FinancialSystem {
         {
             let item = goods.entry(*good_id).or_default();
 
-            let new_qty = item.quantity.round() + qty.round();
+            let new_qty = item.quantity + qty;
             item.unit_cost =
                 if new_qty > 0.0 { (item.unit_cost * item.quantity + unit_cost * qty) / new_qty } else { Money::ZERO };
             item.quantity = new_qty;

@@ -71,6 +71,7 @@ impl SimulationEngine {
         let execution_result = scheduler.execute_tick(self, rng);
         self.scheduler = scheduler;
         self.scheduler_metrics.record_tick(&execution_result);
+        self.update_agent_memory();
         if execution_result.success {
             self.state.ticknum += 1;
         }
@@ -171,6 +172,119 @@ impl SimulationEngine {
         (action_records, adjusted_indices, effects)
     }
 
+    pub fn update_agent_memory(&mut self) {
+        let Some(last_tick) = self.state.history.tick_records.back() else { return };
+        let goods_config = &self.state.config.goods;
+
+        let mut posted_buys: HashMap<(AgentId, GoodId), f64> = HashMap::new();
+        let mut posted_sells: HashMap<(AgentId, GoodId), f64> = HashMap::new();
+
+        for record in &last_tick.actions {
+            if let SimAction::Transaction(TransactionAction::PostMarketOrder {
+                agent_id,
+                market_id,
+                side,
+                quantity,
+                ..
+            }) = &record.action
+            {
+                if let MarketId::Goods(gid) = market_id {
+                    match side {
+                        Side::Bid => *posted_buys.entry((*agent_id, *gid)).or_default() += *quantity,
+                        Side::Ask => *posted_sells.entry((*agent_id, *gid)).or_default() += *quantity,
+                    }
+                }
+            }
+        }
+
+        let mut bought: HashMap<(AgentId, GoodId), f64> = HashMap::new();
+        let mut sold: HashMap<(AgentId, GoodId), f64> = HashMap::new();
+
+        for trade in &last_tick.trades {
+            if let MarketId::Goods(gid) = trade.market_id {
+                *bought.entry((trade.buyer, gid)).or_default() += trade.quantity;
+                *sold.entry((trade.seller, gid)).or_default() += trade.quantity;
+            }
+        }
+
+        let mut consumer_updates = Vec::new();
+        for (agent_id, gid) in posted_buys.keys().map(|(agent, good)| (*agent, *good)) {
+            if self.state.agents.consumers.contains_key(&agent_id) {
+                let filled_qty = bought.get(&(agent_id, gid)).copied().unwrap_or(0.0);
+                let anchor = self
+                    .state
+                    .financial_system
+                    .exchange
+                    .fair_price_for_good(&gid)
+                    .map(|m| m.to_f64())
+                    .or_else(|| self.state.market_view(&MarketId::Goods(gid)).and_then(|v| v.last_or_mid()))
+                    .unwrap_or(1.0);
+                consumer_updates.push((agent_id, gid, filled_qty, anchor));
+            }
+        }
+
+        for (id, consumer) in self.state.agents.consumers.iter_mut() {
+            for &(_, gid, filled_qty, anchor) in consumer_updates.iter().filter(|(agent_id, _, _, _)| agent_id == id) {
+                let reservation = consumer
+                    .adaptive
+                    .reservation
+                    .entry(gid)
+                    .or_insert(anchor * (1.0 + goods_config.reservation_nudge_up));
+                let cap = anchor * goods_config.reservation_cap_mult;
+
+                if filled_qty <= 1e-9 {
+                    *reservation = (*reservation * (1.0 + goods_config.reservation_nudge_up)).min(cap);
+                } else {
+                    *reservation = 0.5 * *reservation + 0.5 * (anchor * (1.0 - goods_config.reservation_nudge_down));
+                }
+            }
+        }
+
+        let alpha = goods_config.sell_through_alpha;
+        for (id, firm) in self.state.agents.firms.iter_mut() {
+            for ((agent, gid), posted_qty) in posted_sells.iter().filter(|((agent, _), _)| agent == id) {
+                let sold_qty = sold.get(&(*agent, *gid)).unwrap_or(&0.0);
+                let sell_through = if *posted_qty > 1e-9 { (sold_qty / *posted_qty).min(1.5) } else { 0.0 };
+
+                let metrics = firm.behaviour.per_good.entry(*gid).or_default();
+                metrics.sell_through_ema = alpha * sell_through + (1.0 - alpha) * metrics.sell_through_ema;
+                metrics.sales_ema = alpha * sold_qty + (1.0 - alpha) * metrics.sales_ema;
+            }
+        }
+    }
+    pub fn log_orderbook_for_good(&self, good_name: &str) {
+        let good_id = self
+            .state
+            .financial_system
+            .goods
+            .goods
+            .iter()
+            .find(|(_, g)| g.name.to_lowercase().contains(&good_name.to_lowercase()))
+            .map(|(id, _)| *id);
+
+        let Some(gid) = good_id else {
+            tracing::warn!(good = good_name, "Good not found in registry");
+            return;
+        };
+
+        let Some(market) = self.state.financial_system.exchange.goods_markets.get(&gid) else {
+            tracing::warn!(good = good_name, ?gid, "No market found for good");
+            return;
+        };
+
+        let book = &market.book;
+
+        tracing::info!(
+            "Order Book for {} - Best Bid: {:?} | Best Ask: {:?} | Bid Lvls: {:?} | Ask Lvls: {:?}", 
+            good_name, book.depth_summary().best_ask, book.depth_summary().best_bid, book.depth_summary().ask_levels, book.depth_summary().bid_levels
+        );
+    }
+
+    pub fn log_orderbooks(&self, goods: &[&str]) {
+        for good in goods {
+            self.log_orderbook_for_good(good);
+        }
+    }
     pub fn clear_all_markets(&mut self) -> (Vec<Trade>, HashMap<MarketId, MarketView>) {
         let mut all_trades = Vec::new();
 
@@ -192,7 +306,12 @@ impl SimulationEngine {
                     .exchange
                     .goods_markets
                     .get_mut(id)
-                    .map(|m| m.clear_and_match(market_id))
+                    .map(|m| {
+                        let trades = m.clear_and_match(market_id);
+                        m.book.bids.clear();
+                        m.book.asks.clear();
+                        trades
+                    })
                     .unwrap_or_default(),
                 MarketId::Financial(id) => self
                     .state
@@ -233,6 +352,7 @@ impl SimulationEngine {
     pub fn match_labour_markets(&mut self, rng: &mut dyn RngCore) -> Vec<StateEffect> {
         use rand::seq::SliceRandom;
         let mut effects = Vec::new();
+        let beta = 0.5;
 
         for (_id, market) in self.state.financial_system.exchange.labour_markets.iter_mut() {
             market.job_applications.retain(|app| {
@@ -240,47 +360,61 @@ impl SimulationEngine {
             });
 
             market.job_offers.shuffle(rng);
+            market.job_applications.shuffle(rng);
+
+            let mut matched_app_indices = std::collections::HashSet::new();
 
             for offer in &mut market.job_offers {
-                while offer.quantity > 0 {
-                    let idx = market.job_applications.iter().position(|app| {
-                        app.reservation_wage <= offer.wage_rate
-                            && self
-                                .state
-                                .agents
-                                .consumers
-                                .get(&app.consumer_id)
-                                .map_or(false, |c| c.employed_by.is_none())
-                    });
-                    let Some(app_idx) = idx else { break };
+                if offer.quantity == 0 {
+                    continue;
+                }
 
-                    let app = market.job_applications.swap_remove(app_idx);
-                    let wage = match market.wage_rule {
-                        WageRule::Posted => offer.wage_rate,
-                        WageRule::Nash { beta } => (1.0 - beta) * offer.wage_rate + beta * app.reservation_wage,
+                for (app_idx, app) in market.job_applications.iter().enumerate() {
+                    if matched_app_indices.contains(&app_idx) {
+                        continue;
                     }
-                    .max(app.reservation_wage);
-                    let contract = EmploymentContract {
-                        employee_id: app.consumer_id,
-                        wage_rate: wage,
-                        hours: offer.hours_required.min(offer.hours_required),
-                        start_date: self.state.current_date,
-                        next_pay_date: self.state.current_date + chrono::Duration::days(14),
-                        pay_interval_days: 14,
-                    };
 
-                    effects.push(StateEffect::Agent(AgentEffect::EstablishEmployment {
-                        firm_id: offer.firm_id,
-                        consumer_id: app.consumer_id,
-                        contract,
-                    }));
+                    let vj = offer.value_per_hour;
+                    let ri = app.reservation_wage;
 
-                    offer.quantity -= 1;
+                    let nash_wage = (1.0 - beta) * ri + beta * vj;
+
+                    if nash_wage >= ri && nash_wage <= vj {
+                        let contract = EmploymentContract {
+                            employee_id: app.consumer_id,
+                            wage_rate: nash_wage,
+                            hours: offer.hours_required,
+                            start_date: self.state.current_date,
+                            next_pay_date: self.state.current_date + chrono::Duration::days(7),
+                            pay_interval_days: 7,
+                        };
+
+                        effects.push(StateEffect::Agent(AgentEffect::EstablishEmployment {
+                            firm_id: offer.firm_id,
+                            consumer_id: app.consumer_id,
+                            contract,
+                        }));
+
+                        offer.quantity -= 1;
+                        matched_app_indices.insert(app_idx);
+
+                        if offer.quantity == 0 {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            let mut i = 0;
+            while i < market.job_applications.len() {
+                if matched_app_indices.contains(&i) {
+                    market.job_applications.swap_remove(i);
+                } else {
+                    i += 1;
                 }
             }
             market.job_offers.retain(|o| o.quantity > 0);
         }
-
         effects
     }
 
@@ -315,16 +449,19 @@ impl SimulationEngine {
             };
 
             let prices = market_trades.iter().map(|t| t.price);
+            let qty_today: f64 = market_trades.iter().map(|t| t.quantity).sum();
+            let trn_today: f64 = market_trades.iter().map(|t| t.price.to_f64() * t.quantity).sum();
+
             let tick = MarketTick {
                 date: current_date,
                 open: market_trades.first().map(|t| t.price.to_f64()),
                 high: prices.clone().max().map(|m| m.to_f64()),
                 low: prices.min().map(|m| m.to_f64()),
                 close,
-                volume: snapshot.volume,
-                turnover: snapshot.turnover,
-                last_price: snapshot.last,
-                last_qty: None,
+                volume: qty_today,
+                turnover: trn_today,
+                last_price: close,
+                last_qty: market_trades.last().map(|t| t.quantity),
                 best_bid,
                 best_ask,
                 spread: best_bid.zip(best_ask).map(|(b, a)| (a - b).max(0.0)),
@@ -403,15 +540,8 @@ impl SimulationEngine {
                         if let InstrumentType::Debt(DebtInstrument::Bond(b)) = &inst.instrument_type {
                             if let Some(mid) = market.book.mid_price() {
                                 let tenor = b.remaining_tenor_years(self.state.current_date);
-                                let spec = BondSpec {
-                                    face: b.face_value,
-                                    coupon_bps: b.coupon_rate_bps,
-                                    freq_per_year: b.frequency,
-                                    issue: b.issue_date,
-                                    maturity: b.maturity_date,
-                                };
                                 let tmp = GovTermStructurePricer::new(
-                                    spec,
+                                    b.clone(),
                                     TermStructureMethod::Bootstrapped,
                                     fs.pricing_feeds.clone(),
                                 );

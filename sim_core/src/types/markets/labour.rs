@@ -7,6 +7,7 @@ pub struct JobOffer {
     pub offer_id: Uuid,
     pub firm_id: AgentId,
     pub wage_rate: f64,
+    pub value_per_hour: f64,
     pub hours_required: f64,
     pub quantity: u32,
 }

@@ -7,7 +7,7 @@ use ordered_float::NotNan;
 use rust_decimal::prelude::*;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
-
+use rust_decimal_macros::dec;
 #[derive(Clone, Debug)]
 pub enum TermStructureMethod {
     Bootstrapped,
@@ -16,52 +16,47 @@ pub enum TermStructureMethod {
         slope_bps_per_year: f64, // simple linear term premium by tenor
     },
 }
-
-#[derive(Clone, Debug)]
-pub struct BondSpec {
-    pub face: Money,
-    pub coupon_bps: BasisPoints, // coupon annualized in bps
-    pub freq_per_year: u32,      // coupon frequency
-    pub issue: NaiveDate,
-    pub maturity: NaiveDate,
+impl Default for TermStructureMethod {
+    fn default() -> Self {
+        TermStructureMethod::Bootstrapped
+    }
 }
-
 #[derive(Clone, Debug)]
 pub struct GovTermStructurePricer {
-    spec: BondSpec,
+    spec: BondDetails,
     method: TermStructureMethod,
     feeds: PricingFeeds,
 }
 
 impl GovTermStructurePricer {
-    pub fn new(spec: BondSpec, method: TermStructureMethod, feeds: PricingFeeds) -> Self {
+    pub fn new(spec: BondDetails, method: TermStructureMethod, feeds: PricingFeeds) -> Self {
         Self { spec, method, feeds }
     }
-    fn tenor_years(&self, as_of: NaiveDate) -> f64 {
-        let days = (self.spec.maturity - as_of).num_days() as f64;
-        (days / 365.25).max(0.0)
-    }
     fn coupon_rate(&self) -> Decimal {
-        let coupon_rate = self.spec.coupon_bps.to_f64().unwrap_or(0.0);
-        if coupon_rate < 0.0 {
-            Decimal::ZERO
-        } else {
-            Decimal::from_f64(coupon_rate / 10_000.0).unwrap_or(Decimal::ZERO)
-        }
+        let coupon_rate = self.spec.coupon_rate_bps.to_f64().unwrap_or(0.0);
+        Decimal::from_f64(coupon_rate / 10_000.0).unwrap_or(Decimal::ZERO)
     }
+
     fn price_from_yield_inner(&self, y_annual: f64, as_of: NaiveDate) -> Option<Money> {
-        let freq = self.spec.freq_per_year.max(1) as i32;
-        let n = (self.tenor_years(as_of) * self.spec.freq_per_year as f64).ceil().max(0.0) as i32;
+        let freq = self.spec.frequency.max(1) as i32; // CHANGED from freq_per_year
+        let n = (self.spec.remaining_tenor_years(as_of) * self.spec.frequency as f64) // CHANGED from tenor_years and frequency
+            .ceil()
+            .max(0.0) as i32;
         let y = Decimal::from_f64(y_annual).unwrap_or(Decimal::ZERO) / Decimal::from(freq);
-        let df = Decimal::ONE + y;
-        let c = self.spec.face * (self.coupon_rate() / Decimal::from(self.spec.freq_per_year));
-        let mut pv = Decimal::ZERO;
+        if y <= dec!(-1.0) {
+            return None;
+        }
+
+        let c = self.spec.face_value * (self.coupon_rate() / Decimal::from(self.spec.frequency)); // CHANGED from face and frequency
+        let mut pv = dec!(0.0);
+        let df = dec!(1.0) + y;
         for t in 1..=n {
             pv += c.0 / df.powi(t.into());
         }
-        pv += self.spec.face.0 / df.powi(n.into());
+        pv += self.spec.face_value.0 / df.powi(n.into()); // CHANGED from face
         Some(Money(pv))
     }
+
     fn ytm_from_price_inner(&self, price: Money, as_of: NaiveDate) -> Option<f64> {
         let mut lo = 0.0f64;
         let mut hi = 0.50f64;
@@ -83,7 +78,7 @@ impl GovTermStructurePricer {
     }
 
     fn curve_yield(&self, as_of: NaiveDate) -> Option<f64> {
-        let tenor = self.tenor_years(as_of).max(0.0);
+        let tenor = self.spec.remaining_tenor_years(as_of).max(0.0);
         match &self.method {
             TermStructureMethod::Bootstrapped => {
                 if let Some(y) = self.feeds.yield_curve.read().ok().and_then(|yc| interp_linear(&yc.points, tenor)) {

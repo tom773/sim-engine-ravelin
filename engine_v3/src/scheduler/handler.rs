@@ -2,11 +2,13 @@ use super::{StepContext, StepHandler, StepResult};
 use crate::executor::SimulationEngine;
 use domains::{ResolutionContext, ResolutionPhase};
 use rand::prelude::*;
+use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
 use sim_core::*;
 use std::time::Instant;
 use tracing::instrument;
 use uuid::Uuid;
+
 fn execute_step<F>(step_fn: F) -> StepResult
 where
     F: FnOnce() -> Result<serde_json::Value, String>,
@@ -27,7 +29,6 @@ impl StepHandler for UpkeepHandler {
             if engine.state.current_session == Session::AM {
                 engine.state.advance_time();
             }
-            tracing::event!(tracing::Level::INFO, "{:#?}", engine.state.financial_system.pricing_feeds);
             if let Err(e) = engine.state.financial_system.validate_accounting_identity() {
                 return Err(format!("Accounting validation failed on tick {}: {}", engine.state.ticknum, e));
             }
@@ -150,7 +151,7 @@ impl StepHandler for SettleTradesHandler {
 
             let mut all_effects = context.get_all_effects().unwrap_or_default();
             let effect_count = settlement_effects.len();
-            all_effects.extend(settlement_effects); // Still add to context for logging/history
+            all_effects.extend(settlement_effects);
             context.store("all_effects", &all_effects)?;
 
             Ok(serde_json::json!({
@@ -212,7 +213,7 @@ impl StepHandler for CreditReconciliationHandler {
                         sp.dpd_days = 0;
                     } else if missed {
                         sp.status = PaymentStatus::Missed;
-                        sp.dpd_days += 1; // daily ticks; change to +30 if monthly ticks
+                        sp.dpd_days += 1;
                     }
                 }
 
@@ -234,7 +235,6 @@ impl StepHandler for CreditReconciliationHandler {
                 }
             }
 
-            // Enforce any liens *after* we release the mutable borrow of payment_schedules
             for loan_id in loans_to_enforce {
                 if let Some(liens) = fs.credit_registry.liens_by_loan.get(&loan_id) {
                     for lien_id in liens {
@@ -267,7 +267,6 @@ impl StepHandler for CreditServicingHandler {
             for (inst_id, inst) in fs.instruments.clone() {
                 if let InstrumentType::Debt(DebtInstrument::Loan(details)) = &inst.instrument_type {
                     let servicer = LoanServicer::new(state.current_date);
-                    // accrual computes with a clone to avoid mutating borrowed details here
                     let mut tmp = details.clone();
                     let interest = servicer.accrue_interest(&mut tmp);
                     if interest > Money::ZERO {
@@ -277,7 +276,6 @@ impl StepHandler for CreditServicingHandler {
                             accrual_date: state.current_date,
                         }));
                     }
-                    // Precompute routing before borrowing the schedule
                     let payer = details.borrower;
                     let payee = details.lender;
                     let (from_bank, to_bank) = {
@@ -434,6 +432,7 @@ impl StepHandler for ApplyAllEffectsHandler {
             engine.state.apply_effects(&all_effects).map_err(|e| e.to_string())?;
 
             context.store("all_effects", &all_effects)?;
+            engine.log_orderbooks(&["bread", "wheat"]);
             Ok(serde_json::json!({"total_effects_applied": all_effects.len()}))
         })
     }
@@ -458,6 +457,7 @@ impl StepHandler for UpdateHistoryHandler {
                 trades,
                 events: engine.event_log.clone(),
             };
+            
 
             engine.state.history.add_tick_record(tick_record);
             Ok(serde_json::Value::Null)
@@ -469,7 +469,7 @@ pub struct DebtAuctionsHandler;
 impl StepHandler for DebtAuctionsHandler {
     fn execute(&self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
         execute_step(|| {
-            let open_ids: Vec<_> = engine
+            let open_auctions: Vec<_> = engine
                 .state
                 .financial_system
                 .exchange
@@ -479,13 +479,22 @@ impl StepHandler for DebtAuctionsHandler {
                 .map(|(id, _)| *id)
                 .collect();
 
-            let mut auction_trades: Vec<Trade> = Vec::new();
+            if open_auctions.is_empty() {
+                return Ok(serde_json::json!({ "auctions_processed": false }));
+            }
 
-            for auction_id in open_ids {
-                let (inst_id, quantity_offered) = {
-                    let a = &engine.state.financial_system.exchange.open_auctions[&auction_id];
-                    (a.instrument_id, a.quantity_offered as f64)
-                };
+            let mut auction_trades = vec![];
+            for auction_id in open_auctions {
+                let auction = engine
+                    .state
+                    .financial_system
+                    .exchange
+                    .open_auctions
+                    .get(&auction_id)
+                    .ok_or_else(|| format!("Auction {} not found", auction_id))?;
+
+                let inst_id = auction.instrument_id;
+                let quantity_offered = auction.quantity_offered;
 
                 let mut trades = engine
                     .state
@@ -493,35 +502,34 @@ impl StepHandler for DebtAuctionsHandler {
                     .exchange
                     .conduct_dutch_auction(&auction_id, &engine.state.financial_system.instruments);
 
-                let sold_qty: f64 =
-                    trades.iter().filter(|t| t.market_id == MarketId::Financial(inst_id)).map(|t| t.quantity).sum();
+                let sold_qty: u32 = trades
+                    .iter()
+                    .filter(|t| t.market_id == MarketId::Financial(inst_id))
+                    .map(|t| t.quantity as u32)
+                    .sum();
 
-                let leftover = (quantity_offered - sold_qty).max(0.0);
-
-                if leftover > 0.0 {
-                    let fs = &engine.state.financial_system;
-                    let cb_id = fs.central_bank.id;
-                    let gov_id = fs.government.id;
-
-                    let fallback_price = if let Some(inst) = fs.instruments.get(&inst_id) {
-                        if let InstrumentType::Debt(DebtInstrument::Bond(d)) = &inst.instrument_type {
-                            let ytm = pricing::years_to_maturity(engine.state.current_date, d.maturity_date);
-                            let y_backstop = (fs.central_bank.policy_rate_bps - dec!(50)).max(dec!(0));
-                            pricing::bond_price(
-                                d.face_value,
-                                bps_to_decimal(d.coupon_rate_bps),
-                                bps_to_decimal(y_backstop),
-                                ytm,
-                                d.frequency as usize,
-                            )
+                let leftover = (quantity_offered - sold_qty).max(0);
+                if leftover > 0 {
+                    let fallback_price = if let Some(inst) = engine.state.financial_system.instruments.get(&inst_id) {
+                        if let Some(d) = inst.instrument_type.as_bond() {
+                            let y_backstop =
+                                (engine.state.financial_system.central_bank.policy_rate_bps - dec!(50)).max(dec!(0));
+                            let pricer = GovTermStructurePricer::new(
+                                d.clone(),
+                                TermStructureMethod::default(),
+                                engine.state.financial_system.pricing_feeds.clone(),
+                            );
+                            pricer
+                                .price_from_yield(&inst_id, y_backstop.to_f64().unwrap_or_default())
+                                .unwrap_or(Money::from(1000))
                         } else {
-                            Money::from(1000u64)
+                            Money::from(1000)
                         }
                     } else {
-                        Money::from(1000u64)
+                        Money::from(1000)
                     };
 
-                    let backstop_price = trades
+                    let last_price = trades
                         .iter()
                         .rev()
                         .find(|t| t.market_id == MarketId::Financial(inst_id))
@@ -529,15 +537,14 @@ impl StepHandler for DebtAuctionsHandler {
                         .unwrap_or(fallback_price);
 
                     trades.push(Trade {
-                        trade_id: uuid::Uuid::new_v4(),
+                        trade_id: Uuid::new_v4(),
                         market_id: MarketId::Financial(inst_id),
-                        buyer: cb_id,
-                        seller: gov_id,
-                        price: backstop_price,
-                        quantity: leftover,
+                        buyer: engine.state.financial_system.central_bank.id,
+                        seller: engine.state.financial_system.government.id,
+                        quantity: leftover as f64,
+                        price: last_price,
                     });
                 }
-
                 auction_trades.extend(trades);
             }
 

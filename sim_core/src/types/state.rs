@@ -131,11 +131,13 @@ impl AgentRegistry {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SimConfig {
     pub iterations: u32,
+    #[serde(default)]
+    pub goods: GoodsMarketConfig,
 }
 
 impl Default for SimConfig {
     fn default() -> Self {
-        Self { iterations: 100 }
+        Self { iterations: 100, goods: GoodsMarketConfig::default()}
     }
 }
 
@@ -269,4 +271,68 @@ pub struct OvernightRates {
     pub iorb: f64,
     pub discount_rate: f64,
     pub overnight_rrp: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub enum GoodsMarketMode {
+    #[default]
+    MicrostructureAdaptive,
+    WalrasLite,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GoodsMarketConfig {
+    #[serde(default)]
+    pub mode: GoodsMarketMode,
+    #[serde(default = "default_reservation_nudge_up")]
+    pub reservation_nudge_up: f64,
+    #[serde(default = "default_reservation_nudge_down")]
+    pub reservation_nudge_down: f64,
+    #[serde(default = "default_reservation_cap_mult")]
+    pub reservation_cap_mult: f64,
+    #[serde(default = "default_doc_target_days")]
+    pub doc_target_days: f64,
+    #[serde(default = "default_sell_through_alpha")]
+    pub sell_through_alpha: f64,
+    #[serde(default = "default_demand_elasticity")]
+    pub demand_elasticity: f64,
+    #[serde(default = "default_supply_slope")]
+    pub supply_slope: f64,
+}
+
+fn default_reservation_nudge_up() -> f64 {
+    0.02
+}
+fn default_reservation_nudge_down() -> f64 {
+    0.01
+}
+fn default_reservation_cap_mult() -> f64 {
+    2.0
+}
+fn default_doc_target_days() -> f64 {
+    7.0
+}
+fn default_sell_through_alpha() -> f64 {
+    0.25
+}
+fn default_demand_elasticity() -> f64 {
+    1.25
+}
+fn default_supply_slope() -> f64 {
+    0.50
+}
+
+impl Default for GoodsMarketConfig {
+    fn default() -> Self {
+        Self {
+            mode: GoodsMarketMode::default(),
+            reservation_nudge_up: default_reservation_nudge_up(),
+            reservation_nudge_down: default_reservation_nudge_down(),
+            reservation_cap_mult: default_reservation_cap_mult(),
+            doc_target_days: default_doc_target_days(),
+            sell_through_alpha: default_sell_through_alpha(),
+            demand_elasticity: default_demand_elasticity(),
+            supply_slope: default_supply_slope(),
+        }
+    }
 }

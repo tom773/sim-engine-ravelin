@@ -6,12 +6,7 @@ use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum FinancialEffect {
-    CreateInstrument { 
-        instrument: Instrument, 
-        creditor: AgentId, 
-        debtor: AgentId, 
-        quantity: f64 
-    },
+    CreateInstrument { instrument: Instrument, creditor: AgentId, debtor: AgentId, quantity: f64 },
     RecordTransaction(Transaction),
     RecordSettlementInstruction(SettlementInstruction),
     QueuePayment(PaymentInstruction),
@@ -105,12 +100,12 @@ impl StateEffectApplicator {
 
                 Ok(())
             }
-            
+
             FinancialEffect::RecordTransaction(tx) => {
                 state.history.transactions.push(tx.clone());
                 Ok(())
             }
-            
+
             FinancialEffect::RecordSettlementInstruction(instruction) => {
                 let government_id = state.financial_system.government.id;
                 let instrument_name = state
@@ -129,12 +124,15 @@ impl StateEffectApplicator {
                     .map_err(|e| EffectError::FinancialSystemError(e.to_string()))?;
                 Ok(())
             }
-            
+
             FinancialEffect::QueuePayment(pi) => {
                 state.financial_system.rtgs.pending.push(pi.clone());
+                if let Some(payee) = state.agents.consumers.get(&pi.payee) {
+                    tracing::info!("Queued payment of {} from {} to consumer {}", pi.amount, pi.payer, payee.id);
+                }
                 Ok(())
             }
-            
+
             FinancialEffect::DvPCancel { trade_id } => {
                 match state.financial_system.clearing_house.csd.cancel_security_reservation(trade_id) {
                     Ok(_) => Ok(()),
@@ -144,7 +142,7 @@ impl StateEffectApplicator {
                     }
                 }
             }
-            
+
             FinancialEffect::DvPFinalize { trade_id } => {
                 match state.financial_system.clearing_house.csd.finalize_book_entry_transfer(trade_id) {
                     Ok(_) => Ok(()),
@@ -156,14 +154,10 @@ impl StateEffectApplicator {
             }
         }
     }
-    
+
     pub fn apply_cash_position_adjustment(
-        state: &mut SimState, 
-        agent_id: AgentId, 
-        instrument_id: InstrumentId, 
-        quantity_change: f64,
-        side: &PositionSide, 
-        book_value: Option<f64>,
+        state: &mut SimState, agent_id: AgentId, instrument_id: InstrumentId, quantity_change: f64,
+        side: &PositionSide, book_value: Option<f64>,
     ) -> Result<(), EffectError> {
         let instrument = state
             .financial_system
@@ -181,13 +175,9 @@ impl StateEffectApplicator {
                         instrument_id
                     )));
                 }
-                DebtInstrument::Loan(_) | 
-                DebtInstrument::CreditLine(_) | 
-                DebtInstrument::TradeCredit(_) => {}
+                DebtInstrument::Loan(_) | DebtInstrument::CreditLine(_) | DebtInstrument::TradeCredit(_) => {}
             },
-            InstrumentType::Equity(_)
-            | InstrumentType::StructuredTranche(_)
-            | InstrumentType::Derivative(_) => {
+            InstrumentType::Equity(_) | InstrumentType::StructuredTranche(_) | InstrumentType::Derivative(_) => {
                 return Err(EffectError::FinancialSystemError(format!(
                     "Security {} cannot be adjusted via balance sheet - must use CSD",
                     instrument_id

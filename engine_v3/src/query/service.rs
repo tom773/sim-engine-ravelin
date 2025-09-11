@@ -1,32 +1,31 @@
 use crate::*;
 use axum::response::Json;
+use parking_lot::{RwLock, RwLockReadGuard};
 use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
 use sim_core::prelude::*;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use uuid::Uuid;
 
 pub struct QueryService {
-    engine: Arc<Mutex<SimulationEngine>>,
+    engine: Arc<RwLock<SimulationEngine>>,
 }
 
 type QueryResult<T> = Result<T, (axum::http::StatusCode, String)>;
 
 impl QueryService {
-    pub fn new(engine: Arc<Mutex<SimulationEngine>>) -> Self {
+    pub fn new(engine: Arc<RwLock<SimulationEngine>>) -> Self {
         Self { engine }
     }
 
-    fn get_engine_lock(&self) -> Result<std::sync::MutexGuard<'_, SimulationEngine>, (axum::http::StatusCode, String)> {
-        self.engine.lock().map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+    fn get_engine_lock(&self) -> Result<RwLockReadGuard<'_, SimulationEngine>, (axum::http::StatusCode, String)> {
+        Ok(self.engine.read())
     }
 
     pub fn get_market_overview(&self) -> QueryResult<MarketOverviewDto> {
         let engine = self.get_engine_lock()?;
-        Ok(MarketOverviewDto { 
-            instrument_registry: engine.state.financial_system.instruments.clone() 
-        })
+        Ok(MarketOverviewDto { instrument_registry: engine.state.financial_system.instruments.clone() })
     }
 
     fn populate_balance_sheet(&self, agent_id: &AgentId, state: &SimState) -> PopulatedBalanceSheetDto {
@@ -127,8 +126,8 @@ impl QueryService {
             employment: macro_stats.employment,
             unemployment: macro_stats.unemployment,
             labour_force: macro_stats.labour_force,
-            unemployment_rate: macro_stats.unemployment_rate, // already fraction
-            labor_force_participation: macro_stats.labor_force_participation, // remove *100.0
+            unemployment_rate: macro_stats.unemployment_rate,
+            labor_force_participation: macro_stats.labor_force_participation,
             job_openings: macro_stats.job_openings as usize,
             payroll_proxy: macro_stats.payroll_proxy as usize,
             avg_wage_rate: macro_stats.avg_wage_rate,
@@ -178,7 +177,6 @@ impl QueryService {
                 balance_sheet: populated_bs,
             });
         };
-
         if filter_lower.as_deref() == Some("bank") || filter_lower.is_none() {
             for id in state.agents.banks.keys() {
                 add_summary_for_agent(id);
@@ -228,46 +226,15 @@ impl QueryService {
     pub fn get_markets_summary(&self) -> QueryResult<Vec<MarketSummaryDto>> {
         let engine = self.get_engine_lock()?;
         let state = &engine.state;
-        let mut summaries = Vec::new();
+        let mut summaries = vec![];
 
         for (inst_id, market) in &state.financial_system.exchange.markets {
             let market_id = MarketId::Financial(*inst_id);
+            let market_snapshot = market.snapshot();
+
+            let yield_last = market.book.last_price.and_then(|price| market.pricer.yield_from_price(inst_id, price));
+
             let view = state.market_view(&market_id).unwrap_or_default();
-
-            let (best_bid_yield, best_ask_yield, mid_yield, last_yield) =
-                if let Some(inst) = state.financial_system.instruments.get(inst_id) {
-                    let bond_details = match &inst.instrument_type {
-                        InstrumentType::Debt(debt_inst) => {
-                            match debt_inst {
-                                DebtInstrument::Bond(d) => Some(d),
-                                DebtInstrument::Loan(_) => None, // Loans might not have yield calculations
-                                DebtInstrument::CreditLine(_) => None,
-                                DebtInstrument::TradeCredit(_) => None,
-                            }
-                        }
-                        _ => None,
-                    };
-
-                    if let Some(d) = bond_details {
-                        let calc_yield = |price_opt: Option<Money>| -> Option<Rate> {
-                            price_opt.map(|price| {
-                                let ytm_years = years_to_maturity(state.current_date, d.maturity_date);
-                                ytm_bond(price, d.face_value, d.coupon_rate_bps, ytm_years, d.frequency as usize)
-                            })
-                        };
-
-                        (
-                            calc_yield(market.book.best_bid()),
-                            calc_yield(market.book.best_ask()),
-                            calc_yield(market.book.mid_price()),
-                            calc_yield(market.book.last_price),
-                        )
-                    } else {
-                        (None, None, None, None)
-                    }
-                } else {
-                    (None, None, None, None)
-                };
 
             summaries.push(MarketSummaryDto {
                 market_id: market_id.to_string(),
@@ -276,19 +243,19 @@ impl QueryService {
                     .financial_system
                     .instruments
                     .get(inst_id)
-                    .map_or("Unknown".to_string(), |i| self.get_instrument_display_name(i)),
+                    .map_or("Unknown".to_string(), |i| i.type_as_string().to_string()),
                 last_price: view.last.and_then(Rate::from_f64),
                 mid_price: market.book.mid_price().map(|m| m.0),
                 best_bid: market.book.best_bid().map(|m| m.0),
                 best_ask: market.book.best_ask().map(|m| m.0),
                 spread: market.book.spread().map(|m| m.0),
-                volume_24h: view.volume,
-                turnover_24h: view.turnover,
-                depth: None,
-                best_bid_yield,
-                best_ask_yield,
-                mid_yield,
-                last_yield,
+                volume: view.volume,
+                turnover: view.turnover,
+                depth: Some(market.book.depth_summary().into()),
+                yield_bid: market_snapshot.yield_bid.and_then(Rate::from_f64),
+                yield_ask: market_snapshot.yield_ask.and_then(Rate::from_f64),
+                yield_mid: market_snapshot.yield_mid.and_then(Rate::from_f64),
+                yield_last: yield_last.and_then(Rate::from_f64),
             });
         }
 
@@ -298,9 +265,9 @@ impl QueryService {
             let depth_summary = market.book.depth_summary();
 
             let bid_levels =
-                depth_summary.bid_levels.into_iter().map(|(k, v)| (k.into_inner().to_string(), v)).collect();
+                depth_summary.bid_levels.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
             let ask_levels =
-                depth_summary.ask_levels.into_iter().map(|(k, v)| (k.into_inner().to_string(), v)).collect();
+                depth_summary.ask_levels.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
 
             let depth_dto = OrderBookDepthDto {
                 bid_levels,
@@ -318,13 +285,13 @@ impl QueryService {
                 best_bid: depth_summary.best_bid.map(|m| m.0),
                 best_ask: depth_summary.best_ask.map(|m| m.0),
                 spread: market.book.spread().map(|m| m.0),
-                volume_24h: view.volume,
-                turnover_24h: view.turnover,
+                volume: view.volume,
+                turnover: view.turnover,
                 depth: Some(depth_dto),
-                best_bid_yield: None,
-                best_ask_yield: None,
-                mid_yield: None,
-                last_yield: None,
+                yield_bid: None,
+                yield_ask: None,
+                yield_mid: None,
+                yield_last: None,
             });
         }
 
@@ -338,36 +305,17 @@ impl QueryService {
                 best_bid: None,
                 best_ask: None,
                 spread: None,
-                volume_24h: 0.0,
-                turnover_24h: 0.0,
+                volume: 0.0,
+                turnover: 0.0,
                 depth: None,
-                best_bid_yield: None,
-                best_ask_yield: None,
-                mid_yield: None,
-                last_yield: None,
+                yield_bid: None,
+                yield_ask: None,
+                yield_mid: None,
+                yield_last: None,
             });
         }
 
         Ok(summaries)
-    }
-
-    fn get_instrument_display_name(&self, instrument: &Instrument) -> String {
-        match &instrument.instrument_type {
-            InstrumentType::Debt(debt_inst) => match debt_inst {
-                DebtInstrument::Bond(bond) => {
-                    format!("{:?} Bond", bond.bond_type)
-                }
-                DebtInstrument::Loan(_) => "Loan".to_string(),
-                DebtInstrument::CreditLine(_) => "Credit Line".to_string(),
-                DebtInstrument::TradeCredit(_) => "Mortgage".to_string(),
-            },
-            InstrumentType::Cash(cash) => format!("{:?}", cash.cash_type).replace('_', " "),
-            InstrumentType::Equity(_) => "Equity".to_string(),
-            InstrumentType::RealAsset(_) => "Real Asset".to_string(),
-            InstrumentType::Repo(_) => "Repo".to_string(),
-            InstrumentType::Derivative(_) => "Derivative".to_string(),
-            InstrumentType::StructuredTranche(_) => "Structured Product".to_string(),
-        }
     }
 
     pub fn get_catalog(&self) -> QueryResult<CatalogDto> {
@@ -497,7 +445,15 @@ impl QueryService {
             rejected_payments: state.financial_system.rtgs.rejected.clone(),
         };
 
-        Ok(FinancialInfrastructureDto { csd: csd_dto, rtgs: rtgs_dto })
+        let cred_dto = CreditRegistryDto {
+            applications: state.financial_system.credit_registry.applications.clone(),
+            loans: state.financial_system.credit_registry.loans.clone(),
+            loans_by_borrower: state.financial_system.credit_registry.loans_by_borrower.clone(),
+            loans_by_lender: state.financial_system.credit_registry.loans_by_lender.clone(),
+            applications_by_bank: state.financial_system.credit_registry.applications_by_bank.clone(),
+            credit_histories: state.financial_system.credit_registry.credit_histories.clone(),
+        };
+        Ok(FinancialInfrastructureDto { csd: csd_dto, rtgs: rtgs_dto, cred_reg: cred_dto })
     }
     pub fn get_credit_registry(&self) -> QueryResult<CreditRegistryDto> {
         let engine_lock = self.get_engine_lock()?;
