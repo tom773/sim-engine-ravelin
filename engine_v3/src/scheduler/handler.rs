@@ -58,33 +58,6 @@ impl StepHandler for GatherIntentionsHandler {
     }
 }
 #[derive(Debug)]
-pub struct ApplyInstrumentCreationHandler;
-
-impl StepHandler for ApplyInstrumentCreationHandler {
-    #[instrument(skip(self, engine, context, _rng))]
-    fn execute(&self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
-        execute_step(|| {
-            let all_effects = context.get_all_effects().unwrap_or_default();
-
-            let instrument_effects: Vec<StateEffect> = all_effects
-                .into_iter()
-                .filter(|e| matches!(e, StateEffect::Financial(FinancialEffect::CreateInstrument { .. })))
-                .collect();
-
-            if instrument_effects.is_empty() {
-                return Ok(serde_json::json!({ "instruments_created": 0 }));
-            }
-
-            let count = instrument_effects.len();
-
-            engine.state.apply_effects(&instrument_effects).map_err(|e| e.to_string())?;
-
-            Ok(serde_json::json!({ "instruments_created": count }))
-        })
-    }
-}
-
-#[derive(Debug)]
 pub struct PhaseResolutionHandler {
     pub phase: ResolutionPhase,
 }

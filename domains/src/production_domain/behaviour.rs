@@ -275,9 +275,9 @@ impl ProductionFirmDecisionModel {
             let ref_structural = state.financial_system.exchange.fair_price_for_good(&good_id).map(|m| m.to_f64());
             let px_hint = state.market_view(&MarketId::Goods(good_id)).and_then(|v| v.last_or_mid());
             let anchor = if let Some(px_hint) = px_hint.or(ref_structural) {
-                0.7 * unit_cost * (1.0 + markup) + 0.3 * px_hint
+                0.7 * unit_cost * markup + 0.3 * px_hint
             } else {
-                unit_cost * (1.0 + markup)
+                unit_cost * markup
             };
 
             let ask_price = anchor.max(0.0);

@@ -6,6 +6,7 @@ use sim_core::prelude::*;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
+
 pub struct QueryService {
     engine: Arc<Mutex<SimulationEngine>>,
 }
@@ -19,6 +20,13 @@ impl QueryService {
 
     fn get_engine_lock(&self) -> Result<std::sync::MutexGuard<'_, SimulationEngine>, (axum::http::StatusCode, String)> {
         self.engine.lock().map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+    }
+
+    pub fn get_market_overview(&self) -> QueryResult<MarketOverviewDto> {
+        let engine = self.get_engine_lock()?;
+        Ok(MarketOverviewDto { 
+            instrument_registry: engine.state.financial_system.instruments.clone() 
+        })
     }
 
     fn populate_balance_sheet(&self, agent_id: &AgentId, state: &SimState) -> PopulatedBalanceSheetDto {
@@ -216,11 +224,6 @@ impl QueryService {
             balance_sheet: populated_bs,
         })
     }
-    pub fn get_market_overiew(&self) -> QueryResult<MarketOverviewDto> {
-        let engine = self.get_engine_lock()?;
-        let state = &engine.state;
-        Ok(MarketOverviewDto { instrument_registry: state.financial_system.instruments.clone() })
-    }
 
     pub fn get_markets_summary(&self) -> QueryResult<Vec<MarketSummaryDto>> {
         let engine = self.get_engine_lock()?;
@@ -233,7 +236,6 @@ impl QueryService {
 
             let (best_bid_yield, best_ask_yield, mid_yield, last_yield) =
                 if let Some(inst) = state.financial_system.instruments.get(inst_id) {
-                    // Handle new Debt structure
                     let bond_details = match &inst.instrument_type {
                         InstrumentType::Debt(debt_inst) => {
                             match debt_inst {
@@ -290,7 +292,6 @@ impl QueryService {
             });
         }
 
-        // Continue with goods and labour markets...
         for (good_id, market) in &state.financial_system.exchange.goods_markets {
             let market_id = MarketId::Goods(*good_id);
             let view = state.market_view(&market_id).unwrap_or_default();
@@ -350,7 +351,6 @@ impl QueryService {
         Ok(summaries)
     }
 
-    // Helper method to get proper display names for instruments
     fn get_instrument_display_name(&self, instrument: &Instrument) -> String {
         match &instrument.instrument_type {
             InstrumentType::Debt(debt_inst) => match debt_inst {

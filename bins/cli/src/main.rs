@@ -21,7 +21,7 @@ use uuid::Uuid;
 mod bus;
 use bus::*;
 struct AppState {
-    engine: Arc<Mutex<SimulationEngine>>,
+    engine: Arc<parking_lot::RwLock<SimulationEngine>>,
     bus: EventsBus,
 }
 
@@ -43,7 +43,7 @@ async fn main() {
     tracing_subscriber::fmt::init();
     let scenario = Scenario::from_toml_str(include_str!("../../../config/config.toml"))
         .expect("Failed to load scenario");
-    let engine = Arc::new(Mutex::new(scenario.initialize_engine()));
+    let engine = Arc::new(parking_lot::RwLock::new(scenario.initialize_engine()));
 
     let bus = EventsBus::new(500); // keep last 500 ticks
     {
@@ -93,7 +93,7 @@ fn api_v1_router() -> Router<Arc<AppState>> {
         .route("/markets/infrastructure", get(get_infra))
         .route("/markets/{market_id}", get(get_market_detail))
         .route("/markets/{market_id}/history", get(get_market_history))
-        .route("/markets/overview", get(get_market_overiew))
+        .route("/markets/overview", get(get_market_overview))
         .route("/markets/credit/registry", get(get_credit_registry))
         .route("/exchange", get(get_exchange))
         .route("/history/ticks", get(list_ticks))
@@ -179,9 +179,9 @@ async fn get_market_catalog(State(state): State<Arc<AppState>>) -> impl IntoResp
         Err((status, msg)) => (status, msg).into_response(),
     }
 }
-async fn get_market_overiew(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+async fn get_market_overview(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let query_service = QueryService::new(state.engine.clone());
-    match query_service.get_market_overiew() {
+    match query_service.get_market_overview() {
         Ok(data) => (StatusCode::OK, Json(data)).into_response(),
         Err((status, msg)) => (status, msg).into_response(),
     }

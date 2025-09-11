@@ -1,7 +1,8 @@
+// monetary_domain/domain.rs
 use crate::{Any, Domain, DomainResult, ResolutionContext, ResolutionPhase, ResolutionResult, inventory};
+use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use sim_core::*;
-use rust_decimal_macros::dec;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MonetaryDomain {}
@@ -27,18 +28,17 @@ impl Domain for MonetaryDomain {
                 })]
             }
             SimIntention::Monetary(MonetaryIntention::SetPolicyRate { cb_id, new_rate_bps }) => {
-                vec![SimAction::Monetary(MonetaryAction::SetPolicyRate {
-                    cb_id: *cb_id,
-                    rate_bps: *new_rate_bps,
-                })]
+                vec![SimAction::Monetary(MonetaryAction::SetPolicyRate { cb_id: *cb_id, rate_bps: *new_rate_bps })]
             }
             SimIntention::Monetary(MonetaryIntention::AdjustReserveRequirement { cb_id, new_ratio }) => {
-                vec![SimAction::Monetary(MonetaryAction::SetReserveRequirement {
-                    cb_id: *cb_id,
-                    ratio: *new_ratio,
-                })]
+                vec![SimAction::Monetary(MonetaryAction::SetReserveRequirement { cb_id: *cb_id, ratio: *new_ratio })]
             }
-            SimIntention::Monetary(MonetaryIntention::ProvideLiquidityFacility { cb_id, bank_id, amount, collateral })=> {
+            SimIntention::Monetary(MonetaryIntention::ProvideLiquidityFacility {
+                cb_id,
+                bank_id,
+                amount,
+                collateral,
+            }) => {
                 vec![SimAction::Monetary(MonetaryAction::ProvideLiquidityAssistance {
                     cb_id: *cb_id,
                     bank_id: *bank_id,
@@ -48,16 +48,19 @@ impl Domain for MonetaryDomain {
             }
             _ => return None,
         };
-
         Some(ResolutionResult::success(actions))
     }
 
     fn resolution_phase(&self, intention: &SimIntention) -> Option<ResolutionPhase> {
         match intention {
             SimIntention::Monetary(MonetaryIntention::ConductOMO { .. }) => Some(ResolutionPhase::Market),
-            SimIntention::Monetary(MonetaryIntention::SetPolicyRate { .. }) | 
-            SimIntention::Monetary(MonetaryIntention::AdjustReserveRequirement { .. }) => Some(ResolutionPhase::Independent),
-            SimIntention::Monetary(MonetaryIntention::ProvideLiquidityFacility { .. }) => Some(ResolutionPhase::Independent),
+            SimIntention::Monetary(MonetaryIntention::SetPolicyRate { .. })
+            | SimIntention::Monetary(MonetaryIntention::AdjustReserveRequirement { .. }) => {
+                Some(ResolutionPhase::Independent)
+            }
+            SimIntention::Monetary(MonetaryIntention::ProvideLiquidityFacility { .. }) => {
+                Some(ResolutionPhase::Independent)
+            }
             _ => None,
         }
     }
@@ -76,9 +79,7 @@ impl Domain for MonetaryDomain {
             MonetaryAction::OpenMarketOperation { cb_id, operation_type, amount } => {
                 self.execute_omo(*cb_id, *operation_type, *amount, state)
             }
-            MonetaryAction::SetPolicyRate { cb_id, rate_bps } => {
-                self.execute_rate_change(*cb_id, *rate_bps, state)
-            }
+            MonetaryAction::SetPolicyRate { cb_id, rate_bps } => self.execute_rate_change(*cb_id, *rate_bps, state),
             MonetaryAction::SetReserveRequirement { cb_id, ratio } => {
                 self.execute_reserve_requirement_change(*cb_id, *ratio, state)
             }
@@ -131,7 +132,6 @@ impl MonetaryDomain {
     }
 
     fn execute_omo(&self, _cb_id: AgentId, operation_type: OMOType, amount: f64, _state: &SimState) -> DomainResult {
-        
         match operation_type {
             OMOType::QuantitativeEasing => {
                 tracing::warn!("Quantitative Easing not yet implemented, amount: {}", amount);
@@ -143,37 +143,37 @@ impl MonetaryDomain {
                 tracing::warn!("Repo operations not yet implemented (Args: {} days at {} bps)", term_days, rate_bps);
             }
             OMOType::ReverseRepo { term_days, rate_bps } => {
-                tracing::warn!("Reverse Repo operations not yet implemented (Args: {} days at {} bps)", term_days, rate_bps);
+                tracing::warn!(
+                    "Reverse Repo operations not yet implemented (Args: {} days at {} bps)",
+                    term_days,
+                    rate_bps
+                );
             }
         }
-        
-        DomainResult::empty()
+        // Return success with no effects (no-op) to maintain deterministic flow
+        DomainResult::success(vec![])
     }
 
-    fn execute_rate_change(&self, _cb_id: AgentId, _rate_bps: BasisPoints, _state: &SimState) -> DomainResult {
-        let mut effects = Vec::new();
-        effects.push(StateEffect::Monetary(MonetaryEffect::SetPolicyRate { rate_bps: _rate_bps }));
-        tracing::info!("Central Bank policy rate changed to {} bps", _rate_bps);
-        DomainResult::empty()
+    fn execute_rate_change(&self, _cb_id: AgentId, rate_bps: BasisPoints, _state: &SimState) -> DomainResult {
+        let effects = vec![StateEffect::Monetary(MonetaryEffect::SetPolicyRate { rate_bps })];
+        DomainResult::success(effects)
     }
 
-    fn execute_reserve_requirement_change(&self, _cb_id: AgentId, _ratio: f64, _state: &SimState) -> DomainResult {
-        tracing::info!("Central Bank reserve requirement changed to {}", _ratio);
-        DomainResult::empty()
+    fn execute_reserve_requirement_change(&self, _cb_id: AgentId, ratio: f64, _state: &SimState) -> DomainResult {
+        let effects = vec![StateEffect::Monetary(MonetaryEffect::SetReserveRequirement { ratio })];
+        DomainResult::success(effects)
     }
 
     fn execute_liquidity_assistance(
-        &self, cb_id: AgentId, bank_id: AgentId, amount: f64, 
-        collateral: &Option<Vec<InstrumentId>>, _state: &SimState
+        &self, _cb_id: AgentId, bank_id: AgentId, amount: f64, collateral: &Option<Vec<InstrumentId>>,
+        _state: &SimState,
     ) -> DomainResult {
-        let mut effects = Vec::new();
-        effects.push(StateEffect::Monetary(MonetaryEffect::ProvideLiquidityAssistance {
+        let effects = vec![StateEffect::Monetary(MonetaryEffect::ProvideLiquidityAssistance {
             bank_id,
             amount,
             collateral: collateral.clone(),
-        }));
-        tracing::warn!("Liquidity assistance not yet fully implemented {} to bank {:?} for amount {}", cb_id, bank_id, amount);
-        DomainResult::empty()
+        })];
+        DomainResult::success(effects)
     }
 }
 
@@ -183,4 +183,3 @@ inventory::submit! {
         constructor: || Box::new(MonetaryDomain::new()),
     }
 }
-

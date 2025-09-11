@@ -8,11 +8,11 @@ use serde::{
     de::Deserializer,
     ser::{SerializeStruct, Serializer},
 };
-use std::collections::{HashMap};
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::sync::Arc;
 use uuid::Uuid;
-use std::sync::{Arc};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimedTrade {
@@ -240,7 +240,14 @@ pub struct Exchange {
 
 impl Exchange {
     pub fn attach_pricing_feeds(&mut self, feeds: PricingFeeds) {
-        self.pricing_feeds = Some(feeds);
+        {
+            self.pricing_feeds = Some(feeds.clone());
+        }
+        {
+            for (_gid, mkt) in self.goods_markets.iter_mut() {
+                mkt.pricer = std::sync::Arc::new(CostPlusGoodsPricer::new(feeds.clone(), CostPlusParams::default()));
+            }
+        }
     }
 
     pub fn ensure_listed(&mut self, inst_id: InstrumentId, inst: &Instrument) {
@@ -264,12 +271,7 @@ impl Exchange {
                 }
                 _ => Arc::new(NoOpPricer),
             };
-            MarketGeneric {
-                key: inst_id,
-                book: OrderBook::new(),
-                pricer,
-                settlement: Arc::new(NoopSettlement),
-            }
+            MarketGeneric { key: inst_id, book: OrderBook::new(), pricer, settlement: Arc::new(NoopSettlement) }
         });
         self.update_index_only(inst_id, inst);
     }

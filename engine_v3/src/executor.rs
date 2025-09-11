@@ -55,10 +55,10 @@ impl SimulationEngine {
         scheduler.register_handler(TickStep::Auction, DebtAuctionsHandler);
         scheduler.register_handler(TickStep::ClearMarkets, ClearMarketsHandler);
         scheduler.register_handler(TickStep::SettleTrades, SettleTradesHandler);
-        scheduler.register_handler(TickStep::ServiceCredit, CreditServicingHandler); // NEW
+        scheduler.register_handler(TickStep::ServiceCredit, CreditServicingHandler);
         scheduler.register_handler(TickStep::ApplyPaymentQueuing, ApplyPaymentQueuingHandler);
         scheduler.register_handler(TickStep::RunRTGS, RunRTGSHandler);
-        scheduler.register_handler(TickStep::ReconcileCredit, CreditReconciliationHandler); // NEW
+        scheduler.register_handler(TickStep::ReconcileCredit, CreditReconciliationHandler);
         scheduler.register_handler(TickStep::ApplyAllEffects, ApplyAllEffectsHandler);
         scheduler.register_handler(TickStep::UpdateHistory, UpdateHistoryHandler);
         scheduler
@@ -128,14 +128,15 @@ impl SimulationEngine {
                 agent_name,
             });
 
-            let effects = match self.domain_registry.execute_action(action, &self.state) {
-                Ok(effects) => effects,
-                Err(e) => {
-                    if !e.contains("Missing core support") {
-                        println!("[ACTION FAILED] - {:?}: {}", action.name(), e);
-                    }
-                    vec![]
+            let dres = self.domain_registry.execute_action(action, &self.state);
+            let effects = if dres.success {
+                dres.effects
+            } else {
+                let msg = dres.errors.join("; ");
+                if !msg.contains("Missing core support") {
+                    println!("[ACTION FAILED] - {:?}: {}", action.name(), msg);
                 }
+                vec![]
             };
 
             if !effects.is_empty() {
@@ -216,10 +217,15 @@ impl SimulationEngine {
         trades
             .iter()
             .flat_map(|trade| {
-                self.domain_registry.settle_trade(trade, &self.state).unwrap_or_else(|e| {
-                    println!("[ERROR] Failed to settle trade: {}", e);
+                let dres = self.domain_registry.settle_trade(trade, &self.state);
+                if dres.success {
+                    dres.effects
+                } else {
+                    for e in dres.errors {
+                        println!("[ERROR] Failed to settle trade: {}", e);
+                    }
                     vec![]
-                })
+                }
             })
             .collect()
     }
@@ -278,36 +284,55 @@ impl SimulationEngine {
         effects
     }
 
-    pub fn update_market_history(&mut self, trades: &[Trade], snapshots: &HashMap<MarketId, MarketView>) {
+    pub fn update_market_history(&mut self, trades: &[Trade], views: &HashMap<MarketId, MarketView>) {
         let current_date = self.state.current_date;
         let history = &mut self.state.history;
-        for (market_id, snapshot) in snapshots {
+
+        for (market_id, snapshot) in views {
             let market_trades: Vec<&Trade> = trades.iter().filter(|t| &t.market_id == market_id).collect();
             let close = market_trades.last().map(|t| t.price.to_f64()).or(snapshot.last);
 
+            let (best_bid, best_ask) = match market_id {
+                MarketId::Financial(inst_id) => self
+                    .state
+                    .financial_system
+                    .exchange
+                    .markets
+                    .get(inst_id)
+                    .map(|m| (m.book.best_bid().map(|p| p.to_f64()), m.book.best_ask().map(|p| p.to_f64())))
+                    .unwrap_or((None, None)),
+
+                MarketId::Goods(good_id) => self
+                    .state
+                    .financial_system
+                    .exchange
+                    .goods_markets
+                    .get(good_id)
+                    .map(|m| (m.book.best_bid().map(|p| p.to_f64()), m.book.best_ask().map(|p| p.to_f64())))
+                    .unwrap_or((None, None)),
+
+                MarketId::Labour(_) => (None, None),
+            };
+
             let prices = market_trades.iter().map(|t| t.price);
-
-            let high = prices.clone().max().map(|m| m.to_f64());
-            let low = prices.min().map(|m| m.to_f64());
-
             let tick = MarketTick {
                 date: current_date,
                 open: market_trades.first().map(|t| t.price.to_f64()),
-                high,
-                low,
+                high: prices.clone().max().map(|m| m.to_f64()),
+                low: prices.min().map(|m| m.to_f64()),
                 close,
                 volume: snapshot.volume,
                 turnover: snapshot.turnover,
                 last_price: snapshot.last,
                 last_qty: None,
-                best_bid: snapshot.mid,
-                best_ask: snapshot.mid,
-                spread: snapshot.spread,
+                best_bid,
+                best_ask,
+                spread: best_bid.zip(best_ask).map(|(b, a)| (a - b).max(0.0)),
             };
+
             history.market_ticks.entry(market_id.clone()).or_default().push_back(tick);
         }
     }
-
     pub fn get_agent_info(&self, agent_id: &AgentId) -> (String, Option<String>) {
         let agent_type = self.state.get_agent_type_string(agent_id).unwrap_or("Unknown").to_string();
 

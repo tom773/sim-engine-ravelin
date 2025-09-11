@@ -104,7 +104,7 @@ impl<'a> App<'a> {
     fn execute_action(&mut self) {
         let firm_id = self.engine.state.agents.firms.keys().next().cloned().unwrap();
         let consumer_id = self.engine.state.agents.consumers.keys().next().cloned().unwrap();
-        let action = SimAction::Transaction(TransactionAction::InitiatePayment {
+        let _action = SimAction::Transaction(TransactionAction::InitiatePayment {
             from: firm_id,
             to: consumer_id,
             amount: 20000.0,
@@ -114,19 +114,6 @@ impl<'a> App<'a> {
                 amount: 20000.0,
             },
         });
-        match self.engine.domain_registry.execute_action(&action, &self.engine.state) {
-            Ok(effects) => {
-                let effect_count = effects.len();
-                match self.engine.state.apply_effects(&effects) {
-                    Ok(_) => {
-                        self.last_action_result =
-                            format!("Success: Action generated and applied {} effects.", effect_count)
-                    }
-                    Err(e) => self.last_action_result = format!("Error applying effects: {:?}", e),
-                }
-            }
-            Err(e) => self.last_action_result = format!("Error executing action: {}", e),
-        };
     }
 
     fn process_rtgs(&mut self) {

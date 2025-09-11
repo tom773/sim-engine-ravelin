@@ -4,6 +4,7 @@ use sim_core::*;
 use std::collections::HashMap;
 use uuid::Uuid;
 use tracing::{debug, info, trace, warn};
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProductionDomain {}
 
@@ -22,7 +23,7 @@ impl Domain for ProductionDomain {
         "Production"
     }
 
-    fn resolve_intention(&self, intention: &SimIntention, context: &ResolutionContext) -> Option<ResolutionResult> {
+    fn resolve_intention(&self, intention: &SimIntention, _context: &ResolutionContext) -> Option<ResolutionResult> {
         let actions = match intention {
             SimIntention::Production(ProductionIntention::Produce { agent_id, recipe_id, batches }) => {
                 vec![SimAction::Production(ProductionAction::Produce {
@@ -31,59 +32,15 @@ impl Domain for ProductionDomain {
                     batches: *batches,
                 })]
             }
-
-            SimIntention::Production(ProductionIntention::HireWorkers { agent_id, count, wage_rate }) => {
-                let market_id = match context.state.financial_system.find_general_labour_market() {
-                    Some(id) => id,
-                    None => {
-                        return Some(ResolutionResult::failure(vec!["No labour market found for hiring.".to_string()]));
-                    }
-                };
-
-                vec![SimAction::Transaction(TransactionAction::PostJobOffer {
-                    market_id,
-                    offer: JobOffer {
-                        offer_id: Uuid::new_v4(),
-                        firm_id: *agent_id,
-                        quantity: *count,
-                        wage_rate: *wage_rate,
-                        hours_required: 40.0, // Assuming standard 40 hours.
-                    },
-                })]
+            SimIntention::Production(ProductionIntention::FireWorkers { agent_id, employee_ids }) => {
+                employee_ids
+                    .iter()
+                    .map(|eid| SimAction::Production(ProductionAction::Fire {
+                        agent_id: *agent_id,
+                        employee_id: *eid,
+                    }))
+                    .collect()
             }
-
-            SimIntention::Production(ProductionIntention::PurchaseInputs {
-                agent_id,
-                good_id,
-                quantity,
-                max_price,
-            }) => {
-                vec![SimAction::Transaction(TransactionAction::PostMarketOrder {
-                    agent_id: *agent_id,
-                    market_id: MarketId::Goods(*good_id),
-                    side: Side::Bid,
-                    quantity: *quantity,
-                    price: Some(Money::from_f64(*max_price).unwrap_or_default()),
-                    order_type: OrderType::Limit,
-                })]
-            }
-
-            SimIntention::Production(ProductionIntention::PostGoodToMarket {
-                agent_id,
-                good_id,
-                quantity,
-                ask_price,
-            }) => {
-                vec![SimAction::Transaction(TransactionAction::PostMarketOrder {
-                    agent_id: *agent_id,
-                    market_id: MarketId::Goods(*good_id),
-                    quantity: *quantity,
-                    price: Some(Money::from_f64(*ask_price).unwrap_or_default()),
-                    order_type: OrderType::Limit,
-                    side: Side::Ask,
-                })]
-            }
-
             _ => return None,
         };
 
@@ -93,9 +50,7 @@ impl Domain for ProductionDomain {
     fn resolution_phase(&self, intention: &SimIntention) -> Option<ResolutionPhase> {
         match intention {
             SimIntention::Production(ProductionIntention::Produce { .. }) => Some(ResolutionPhase::Independent),
-            SimIntention::Production(ProductionIntention::HireWorkers { .. }) => Some(ResolutionPhase::Independent),
-            SimIntention::Production(ProductionIntention::PurchaseInputs { .. }) => Some(ResolutionPhase::Market),
-            SimIntention::Production(ProductionIntention::PostGoodToMarket { .. }) => Some(ResolutionPhase::Market),
+            SimIntention::Production(ProductionIntention::FireWorkers { .. }) => Some(ResolutionPhase::Independent),
             _ => None,
         }
     }

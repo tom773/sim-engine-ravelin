@@ -65,3 +65,4 @@ sim_core.md
 target/debug/.fingerprint/ahash-ecf52de1f1f7f207/invoked.timestamp
 *.md
 !README.md
+collate.sh

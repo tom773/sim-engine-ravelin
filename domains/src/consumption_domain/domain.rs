@@ -30,43 +30,16 @@ impl Domain for ConsumptionDomain {
         "Consumption"
     }
 
-    fn resolve_intention(&self, intention: &SimIntention, context: &ResolutionContext) -> Option<ResolutionResult> {
+    fn resolve_intention(&self, intention: &SimIntention, _context: &ResolutionContext) -> Option<ResolutionResult> {
         let actions = match intention {
-            SimIntention::Production(ProductionIntention::ApplyForJob { agent_id: _, market_id, application }) => {
-                vec![SimAction::Transaction(TransactionAction::PostJobApplication {
-                    market_id: *market_id,
-                    application: application.clone(),
-                })]
-            }
-
             SimIntention::Consumption(ConsumptionIntention::ConsumeGood { agent_id, good_id, quantity }) => {
                 let qty = quantity.round();
                 vec![SimAction::Consumption(ConsumptionAction::Consume {
-
                     agent_id: *agent_id,
                     good_id: *good_id,
                     amount: qty,
                 })]
             }
-
-            SimIntention::Consumption(ConsumptionIntention::SpendOnGood { agent_id, good_id, max_notional }) => {
-                let px =
-                    context.state.financial_system.exchange.goods_market(good_id).and_then(|v| v.book.best_ask()).unwrap_or(Money::from(1));
-
-
-                let qty = (max_notional / px.to_f64()).max(0.0);
-                let start_bid = Money::from_f64(px.to_f64() * 1.01).unwrap_or_default(); // +1%
-
-                vec![SimAction::Transaction(TransactionAction::PostMarketOrder {
-                    agent_id: *agent_id,
-                    market_id: MarketId::Goods(*good_id),
-                    side: Side::Bid,
-                    quantity: qty.round(),
-                    price: Some(start_bid),
-                    order_type: OrderType::Limit,
-                })]
-            }
-
             _ => return None,
         };
 
@@ -75,9 +48,7 @@ impl Domain for ConsumptionDomain {
 
     fn resolution_phase(&self, intention: &SimIntention) -> Option<ResolutionPhase> {
         match intention {
-            SimIntention::Production(ProductionIntention::ApplyForJob { .. }) => Some(ResolutionPhase::Independent),
             SimIntention::Consumption(ConsumptionIntention::ConsumeGood { .. }) => Some(ResolutionPhase::Independent),
-            SimIntention::Consumption(ConsumptionIntention::SpendOnGood { .. }) => Some(ResolutionPhase::Market),
             _ => None,
         }
     }
