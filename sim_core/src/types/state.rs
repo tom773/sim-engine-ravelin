@@ -107,7 +107,6 @@ impl AgentRegistry {
             None
         }
     }
-
     pub fn get_consumer_mut(&mut self, id: &AgentId) -> Option<&mut Consumer> {
         self.consumers.get_mut(id)
     }
@@ -125,6 +124,9 @@ impl AgentRegistry {
         } else {
             None
         }
+    }
+    pub fn golden_consumer_id(&self) -> Option<AgentId> {
+        self.consumers.values().find(|c| c.is_golden).map(|c| c.id)
     }
 }
 

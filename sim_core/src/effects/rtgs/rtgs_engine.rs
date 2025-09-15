@@ -102,9 +102,9 @@ fn bilateral_netting(state: &mut SimState) -> Result<(), EffectError> {
 
     for payment in &state.financial_system.rtgs.pending {
         let is_gov = payment.payer == gov_id || payment.payee == gov_id;
-        let is_dvp = matches!(payment.context, TransactionContext::TradeSettlement{..});
-        if is_gov || is_dvp { 
-            continue; 
+        let is_dvp = matches!(payment.context, TransactionContext::TradeSettlement { .. });
+        if is_gov || is_dvp {
+            continue;
         }
 
         let pair = (payment.from_bank, payment.to_bank);
@@ -135,8 +135,8 @@ fn bilateral_netting(state: &mut SimState) -> Result<(), EffectError> {
     for payment in std::mem::take(&mut state.financial_system.rtgs.pending) {
         let pair = (payment.from_bank, payment.to_bank);
         let is_gov = payment.payer == gov_id || payment.payee == gov_id;
-        let is_dvp = matches!(payment.context, TransactionContext::TradeSettlement{..});
-        
+        let is_dvp = matches!(payment.context, TransactionContext::TradeSettlement { .. });
+
         if is_gov || is_dvp || !processed_pairs.contains(&pair) {
             remaining_payments.push(payment);
         }
@@ -164,15 +164,67 @@ fn bilateral_netting(state: &mut SimState) -> Result<(), EffectError> {
 }
 
 fn apply_cash_movements_immediately(state: &mut SimState, pi: &PaymentInstruction) -> Result<(), EffectError> {
+    let cb_id = state.financial_system.central_bank.id;
     let gov_id = state.financial_system.government.id;
+
     if pi.payer == gov_id || pi.payee == gov_id {
         return apply_tga_transfer(state, pi);
     }
-    if pi.from_bank == pi.to_bank {
-        apply_same_bank_transfer(state, pi)
-    } else {
-        apply_interbank_transfer(state, pi)
+
+    if pi.payer == cb_id && pi.to_bank == cb_id && pi.payee != cb_id {
+        let payee_reserves = state
+            .financial_system
+            .find_bank_reserves_account(&pi.payee)
+            .ok_or_else(|| EffectError::InvalidState(format!("Payee {} has no reserves account", pi.payee)))?;
+
+        StateEffectApplicator::apply_cash_position_adjustment(
+            state,
+            pi.payee,
+            payee_reserves,
+            pi.amount,
+            &PositionSide::Asset,
+            None,
+        )?;
+        StateEffectApplicator::apply_cash_position_adjustment(
+            state,
+            cb_id,
+            payee_reserves,
+            pi.amount,
+            &PositionSide::Liability,
+            None,
+        )?;
+
+        return Ok(());
     }
+    if let TransactionContext::CouponPayment { instrument_id } = pi.context {
+        if let Some(inst) = state.financial_system.instruments.get(&instrument_id) {
+            if let InstrumentType::Cash(details) = &inst.instrument_type {
+                if matches!(details.cash_type, CashType::DemandDeposit | CashType::SavingsDeposit) {
+                    let bank_id = details.issuer;
+
+                    StateEffectApplicator::apply_cash_position_adjustment(
+                        state,
+                        pi.payee,
+                        instrument_id,
+                        pi.amount,
+                        &PositionSide::Asset,
+                        None,
+                    )?;
+                    StateEffectApplicator::apply_cash_position_adjustment(
+                        state,
+                        bank_id,
+                        instrument_id,
+                        pi.amount,
+                        &PositionSide::Liability,
+                        None,
+                    )?;
+
+                    return Ok(());
+                }
+            }
+        }
+    }
+    if pi.from_bank == pi.to_bank { apply_same_bank_transfer(state, pi) } else { apply_interbank_transfer(state, pi) }
 }
 
 fn apply_same_bank_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Result<(), EffectError> {
@@ -382,11 +434,41 @@ fn apply_interbank_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Re
 
     Ok(())
 }
+fn apply_central_bank_payment(state: &mut SimState, pi: &PaymentInstruction) -> Result<(), EffectError> {
+    let fs = &mut state.financial_system;
+    let cb_id = fs.central_bank.id;
 
+    if !state.agents.banks.contains_key(&pi.payee) {
+        return Err(EffectError::InvalidState(format!(
+            "Central Bank can only pay IORB to commercial banks. Payee: {}",
+            pi.payee
+        )));
+    }
+    let bank_id = pi.payee;
+
+    let reserve_inst_id = fs
+        .find_bank_reserves_account(&bank_id)
+        .ok_or_else(|| EffectError::InvalidState(format!("Bank {:?} has no reserves account", bank_id)))?;
+
+    let bank_bs = fs.balance_sheets.get_mut(&bank_id).ok_or(EffectError::AgentNotFound { id: bank_id })?;
+
+    let bank_res_pos = bank_bs.assets.entry(reserve_inst_id).or_default();
+    bank_res_pos.quantity += pi.amount;
+    bank_bs.income_statement.add_interest_income(pi.amount);
+
+    let cb_bs = fs.balance_sheets.get_mut(&cb_id).ok_or(EffectError::AgentNotFound { id: cb_id })?;
+
+    let cb_res_pos = cb_bs.liabilities.entry(reserve_inst_id).or_default();
+    cb_res_pos.quantity += pi.amount;
+
+    Ok(())
+}
 fn apply_tga_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Result<(), EffectError> {
     let cb_id = state.financial_system.central_bank.id;
     let gov_id = state.financial_system.government.id;
-
+    if pi.payer == cb_id {
+        return apply_central_bank_payment(state, pi);
+    }
     let (tga_id, _) = state
         .financial_system
         .find_government_tga_account()

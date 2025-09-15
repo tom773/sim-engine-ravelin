@@ -108,13 +108,14 @@ impl<'a> AgentFactory<'a> {
     }
 
     pub fn create_consumer(
-        &mut self, config: &ConsumerConfig, bank_id: AgentId, cb_id: AgentId, agent_ids: &HashMap<String, AgentId>,
+        &mut self, config: &ConsumerConfig, bank_id: AgentId, cb_id: AgentId, agent_ids: &HashMap<String, AgentId>, count: usize
     ) -> Consumer {
         let personality =
             *vec![PersonalityArchetype::Balanced, PersonalityArchetype::Saver, PersonalityArchetype::Spender]
                 .choose(self.rng)
                 .unwrap();
-        let mut consumer = Consumer::new(self.rng.random_range(25..65), bank_id, personality);
+        let is_golden = count == 0; // Make the first consumer golden
+        let mut consumer = Consumer::new(self.rng.random_range(25..65), bank_id, personality, is_golden);
         consumer.income = config.income;
         self.state.financial_system.balance_sheets.insert(consumer.id, BalanceSheet::new(consumer.id));
         for asset in &config.initial_assets {
@@ -281,7 +282,7 @@ impl<'a> AgentFactory<'a> {
             self.state.current_date,
             self.state.current_date + Duration::days(365 * 30), // 30-year bond
         )
-        .zero_coupon_rate_bps()
+        .coupon_bps(decimal_to_bps(dec!(0.035))) // 3.5% coupon
         .build()
         .map_err(|e| e.to_string())?;
         let bond_id = bond_instrument.id;

@@ -12,6 +12,8 @@ pub enum TickStep {
     Auction,
     ClearMarkets,
     SettleTrades,
+    ServiceDeposits,
+    ServiceGovernmentDebt,
     ServiceCredit,
     ApplyPaymentQueuing,
     RunRTGS,
@@ -25,11 +27,13 @@ impl TickStep {
         Upkeep, GatherIntentions, ResolveIndependentPhase, ResolveMarketPhase,
         ApplyMarketEffectsForPriceDiscovery, ResolveDependentPhase, Auction,
         ClearMarkets, SettleTrades,
+        ServiceDeposits, ServiceGovernmentDebt,
         ServiceCredit,
         ApplyPaymentQueuing, RunRTGS,
         ReconcileCredit,
         ApplyAllEffects, UpdateHistory,
     ]}
+
     pub fn dependencies(&self) -> Vec<Self> { use TickStep::*; match self {
         Upkeep => vec![],
         GatherIntentions => vec![Upkeep],
@@ -40,14 +44,15 @@ impl TickStep {
         Auction => vec![ResolveDependentPhase],
         ClearMarkets => vec![Auction],
         SettleTrades => vec![ClearMarkets],
-        ServiceCredit => vec![SettleTrades],
+        ServiceDeposits => vec![SettleTrades],
+        ServiceGovernmentDebt => vec![SettleTrades],
+        ServiceCredit => vec![ServiceDeposits, ServiceGovernmentDebt],
         ApplyPaymentQueuing => vec![ServiceCredit],
         RunRTGS => vec![SettleTrades],
         ReconcileCredit => vec![RunRTGS],
         ApplyAllEffects => vec![ReconcileCredit],
         UpdateHistory => vec![RunRTGS],
     }}
-
     pub fn should_abort_on_failure(&self) -> bool {
         true
     }

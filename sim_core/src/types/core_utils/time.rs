@@ -2,8 +2,7 @@ use chrono::{NaiveDate, Months, Datelike, Duration};
 use rust_decimal::prelude::*;
 use serde::{Deserialize, Serialize};
 use rust_decimal_macros::dec;
-
-use crate::{Money, Rate};
+use crate::*;
 
 pub fn is_weekend(date: NaiveDate) -> bool {
     matches!(date.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun)
@@ -111,7 +110,9 @@ pub fn add_months(date: NaiveDate, months: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(year, month as u32, adjusted_day)
         .unwrap_or(date)
 }
-
+pub fn is_last_day_of_month(date: NaiveDate) -> bool {
+    date.day() == 4
+}
 pub fn days_in_month(year: i32, month: u32) -> u32 {
     match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
@@ -122,7 +123,14 @@ pub fn days_in_month(year: i32, month: u32) -> u32 {
         _ => 30,
     }
 }
-
+pub fn is_coupon_date(date: NaiveDate, bond: &BondDetails) -> bool {
+    if bond.frequency == 0 {
+        return false;
+    }
+    let months_since_issue =
+        ((date.year() - bond.issue_date.year()) * 12 + date.month() as i32 - bond.issue_date.month() as i32) as u32;
+    date.day() == bond.issue_date.day() && months_since_issue > 0 && months_since_issue % (12 / bond.frequency) == 0
+}
 pub fn is_leap_year(year: i32) -> bool {
     (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
 }

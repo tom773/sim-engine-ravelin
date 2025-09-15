@@ -98,6 +98,7 @@ fn api_v1_router() -> Router<Arc<AppState>> {
         .route("/exchange", get(get_exchange))
         .route("/history/ticks", get(list_ticks))
         .route("/history/ticks/{tick_number}", get(get_tick_detail))
+        .route("/cb/actions", get(get_cb_actions))
 }
 
 async fn get_simulation_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -251,6 +252,13 @@ async fn get_tick_events(
     match state.bus.get(n) {
         Some(v) => Ok(Json(Arc::unwrap_or_clone(v))),
         None => Err(StatusCode::NOT_FOUND),
+    }
+}
+async fn get_cb_actions(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let query_service = QueryService::new(state.engine.clone());
+    match query_service.get_cb_actions() {
+        Ok(data) => (StatusCode::OK, Json(data)).into_response(),
+        Err((status, msg)) => (status, msg).into_response(),
     }
 }
 async fn get_infra(State(state): State<Arc<AppState>>) -> impl IntoResponse {

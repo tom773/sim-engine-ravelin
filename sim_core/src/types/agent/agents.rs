@@ -50,6 +50,8 @@ pub struct Consumer {
     pub hours_worked: f64,
     #[serde(default)]
     pub adaptive: ConsumerAdaptive,
+
+    pub is_golden: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -109,7 +111,7 @@ impl Bank {
 }
 
 impl Consumer {
-    pub fn new(age: u32, bank_id: AgentId, personality: PersonalityArchetype) -> Self {
+    pub fn new(age: u32, bank_id: AgentId, personality: PersonalityArchetype, is_golden: bool) -> Self {
         Self {
             id: AgentId(uuid::Uuid::new_v4()),
             age,
@@ -122,6 +124,8 @@ impl Consumer {
             employed_by: None,
             hours_worked: 0.0,
             adaptive: ConsumerAdaptive::default(),
+
+            is_golden,
         }
     }
     pub fn update_employment(&mut self, firm_id: Option<AgentId>, hours_worked: f64) {

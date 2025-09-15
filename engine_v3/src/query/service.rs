@@ -470,4 +470,22 @@ impl QueryService {
             }
         })
     }
+
+    pub fn get_cb_actions(&self) -> QueryResult<Vec<SimIntention>> {
+        let engine_lock = self.get_engine_lock()?;
+        let state = &engine_lock.state;
+
+        let intentions: Vec<SimIntention> = state.history.tick_records.iter().flat_map(|r| r.intentions.clone())
+        .filter(|intent| matches!(intent, SimIntention::Monetary(m) if {
+            matches!(
+                m,
+                MonetaryIntention::ConductOMO { .. }
+                    | MonetaryIntention::SetPolicyRate { .. }
+                    | MonetaryIntention::AdjustReserveRequirement { .. }
+                    | MonetaryIntention::ProvideLiquidityFacility { .. }
+            )
+        })).collect();
+
+        Ok(intentions)
+    }
 }

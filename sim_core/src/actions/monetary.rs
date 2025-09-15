@@ -1,7 +1,7 @@
 use crate::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum MonetaryAction {
     OpenMarketOperation { cb_id: AgentId, operation_type: OMOType, amount: f64 },
     SetPolicyRate { cb_id: AgentId, rate_bps: BasisPoints },
@@ -29,7 +29,7 @@ impl MonetaryAction {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Copy)]
+#[derive(Clone, Debug, Serialize, Deserialize, Copy, PartialEq)]
 pub enum OMOType {
     QuantitativeEasing,     // CB buys securities to expand balance sheet (injects liquidity)
     QuantitativeTightening, // CB sells securities to shrink balance sheet (drains liquidity)
@@ -52,7 +52,7 @@ impl OMOType {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum MonetaryIntention {
     ConductOMO {
         cb_id: AgentId,

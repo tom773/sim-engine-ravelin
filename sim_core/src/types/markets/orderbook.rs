@@ -342,6 +342,7 @@ impl OrderBook {
 
         trades
     }
+    
     pub fn match_to_completion(
         &mut self, market_id: &MarketId, choose_price: impl Fn(Money, Money) -> Money,
     ) -> Vec<Trade> {
@@ -398,6 +399,7 @@ impl OrderBook {
         }
         trades
     }
+    
     pub fn validate_sell_order(
         &self, order: &Order, csd: &CentralSecuritiesDepository, instrument_id: &InstrumentId,
     ) -> Result<(), String> {

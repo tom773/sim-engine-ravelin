@@ -133,6 +133,104 @@ impl StepHandler for ClearMarketsHandler {
     }
 }
 #[derive(Debug)]
+pub struct GovCouponsHandler;
+
+impl StepHandler for GovCouponsHandler {
+    fn execute(&self, engine: &mut SimulationEngine, _ctx: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
+        execute_step(|| {
+            let mut effects: Vec<StateEffect> = Vec::new();
+            let state = &engine.state;
+            let fs = &state.financial_system;
+            let current_date = state.current_date;
+            let gov_id = fs.government.id;
+
+            let gov_bonds: Vec<(InstrumentId, BondDetails)> = fs
+                .instruments
+                .iter()
+                .filter_map(|(id, inst)| {
+                    if let InstrumentType::Debt(DebtInstrument::Bond(details)) = &inst.instrument_type {
+                        if details.bond_type == BondType::Government {
+                            return Some((*id, details.clone()));
+                        }
+                    }
+                    None
+                })
+                .collect();
+
+            for (inst_id, details) in gov_bonds {
+                let is_coupon = is_coupon_date(current_date, &details);
+                let is_maturity = current_date == details.maturity_date;
+
+                if !is_coupon && !is_maturity {
+                    continue; // Skip if no payment is due today
+                }
+
+                for (agent_id, account) in &fs.clearing_house.csd.custody_accounts {
+                    if let Some(holding) = account.holdings.get(&inst_id) {
+                        let quantity = holding.total_position();
+                        if quantity < 1.0 {
+                            continue;
+                        } // Skip if they don't hold a full unit
+
+                        let payee_bank = match fs.find_agent_liquid_account(agent_id) {
+                            Some((_, bank_id)) => bank_id,
+                            None => {
+                                tracing::warn!(
+                                    "Could not find liquid account for bond holder {}, skipping payment.",
+                                    agent_id
+                                );
+                                continue;
+                            }
+                        };
+
+                        if is_coupon {
+                            let coupon_rate = bps_to_decimal(details.coupon_rate_bps);
+                            let payment_per_bond = details.face_value * coupon_rate / details.frequency as f64;
+                            let total_payment = payment_per_bond.to_f64() * quantity;
+
+                            effects.push(StateEffect::Financial(FinancialEffect::QueuePayment(PaymentInstruction {
+                                id: Uuid::new_v4(),
+                                from_bank: fs.central_bank.id, // Gov payments are routed via the CB
+                                to_bank: payee_bank,
+                                payer: gov_id,
+                                payee: *agent_id,
+                                amount: total_payment,
+                                context: TransactionContext::CouponPayment { instrument_id: inst_id },
+                                priority: PaymentPriority::Normal,
+                                earliest_release_tick: state.ticknum,
+                                deadline_tick: state.ticknum + 10,
+                            })));
+                        }
+
+                        if is_maturity {
+                            let total_principal = details.face_value.to_f64() * quantity;
+                            effects.push(StateEffect::Financial(FinancialEffect::QueuePayment(PaymentInstruction {
+                                id: Uuid::new_v4(),
+                                from_bank: fs.central_bank.id,
+                                to_bank: payee_bank,
+                                payer: gov_id,
+                                payee: *agent_id,
+                                amount: total_principal,
+                                context: TransactionContext::PrincipalRepayment { instrument_id: inst_id },
+                                priority: PaymentPriority::Urgent, // Principal is high priority
+                                earliest_release_tick: state.ticknum,
+                                deadline_tick: state.ticknum + 10,
+                            })));
+                        }
+                    }
+                }
+            }
+
+            let payment_count = effects.len();
+            if payment_count > 0 {
+                engine.state.apply_effects(&effects).map_err(|e| e.to_string())?;
+            }
+            Ok(serde_json::json!({ "payments_generated": payment_count }))
+        })
+    }
+}
+
+#[derive(Debug)]
 pub struct SettleTradesHandler;
 
 impl StepHandler for SettleTradesHandler {
@@ -337,6 +435,75 @@ impl StepHandler for CreditServicingHandler {
 }
 
 #[derive(Debug)]
+pub struct DepositServicingHandler;
+
+impl StepHandler for DepositServicingHandler {
+    fn execute(&self, engine: &mut SimulationEngine, _ctx: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
+        execute_step(|| {
+            if !is_last_day_of_month(engine.state.current_date) {
+                return Ok(serde_json::json!({ "payments_generated": 0 }));
+            }
+
+            let mut effects: Vec<StateEffect> = Vec::new();
+            let state = &engine.state;
+            let fs = &state.financial_system;
+            let year_frac = 1.0 / 12.0;
+
+            for (agent_id, bs) in &fs.balance_sheets {
+                for (inst_id, pos) in &bs.assets {
+                    if let Some(inst) = fs.instruments.get(inst_id) {
+                        if let InstrumentType::Cash(details) = &inst.instrument_type {
+                            let is_interest_bearing = matches!(
+                                details.cash_type,
+                                CashType::DemandDeposit | CashType::SavingsDeposit | CashType::CentralBankReserves
+                            );
+
+                            if is_interest_bearing && details.interest_bps > dec!(0.0) && pos.quantity > 0.0 {
+                                let annual_rate = bps_to_decimal(details.interest_bps);
+                                let interest_amount = pos.quantity * annual_rate.to_f64().unwrap_or(0.0) * year_frac;
+
+                                if interest_amount < 0.01 {
+                                    continue;
+                                }
+                                let (from_bank, to_bank) = match details.cash_type {
+                                    CashType::CentralBankReserves => {
+                                        (fs.central_bank.id, fs.central_bank.id)
+                                    }
+                                    CashType::DemandDeposit | CashType::SavingsDeposit => {
+                                        (details.issuer, details.issuer)
+                                    }
+                                    _ => continue, // not interest-bearing here
+                                };
+
+                                let pi = PaymentInstruction {
+                                    id: Uuid::new_v4(),
+                                    from_bank,
+                                    to_bank,
+                                    payer: details.issuer,
+                                    payee: *agent_id,
+                                    amount: interest_amount,
+                                    context: TransactionContext::CouponPayment { instrument_id: *inst_id },
+                                    priority: PaymentPriority::Normal,
+                                    earliest_release_tick: state.ticknum,
+                                    deadline_tick: state.ticknum + 10,
+                                };
+                                effects.push(StateEffect::Financial(FinancialEffect::QueuePayment(pi)));
+                            }
+                        }
+                    }
+                }
+            }
+
+            let payment_count = effects.len();
+            if payment_count > 0 {
+                engine.state.apply_effects(&effects).map_err(|e| e.to_string())?;
+            }
+            Ok(serde_json::json!({ "payments_generated": payment_count }))
+        })
+    }
+}
+
+#[derive(Debug)]
 pub struct ApplyPaymentQueuingHandler;
 impl StepHandler for ApplyPaymentQueuingHandler {
     fn execute(&self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
@@ -432,7 +599,6 @@ impl StepHandler for ApplyAllEffectsHandler {
             engine.state.apply_effects(&all_effects).map_err(|e| e.to_string())?;
 
             context.store("all_effects", &all_effects)?;
-            engine.log_orderbooks(&["bread", "wheat"]);
             Ok(serde_json::json!({"total_effects_applied": all_effects.len()}))
         })
     }
@@ -457,7 +623,6 @@ impl StepHandler for UpdateHistoryHandler {
                 trades,
                 events: engine.event_log.clone(),
             };
-            
 
             engine.state.history.add_tick_record(tick_record);
             Ok(serde_json::Value::Null)

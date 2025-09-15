@@ -127,9 +127,6 @@ impl StateEffectApplicator {
 
             FinancialEffect::QueuePayment(pi) => {
                 state.financial_system.rtgs.pending.push(pi.clone());
-                if let Some(payee) = state.agents.consumers.get(&pi.payee) {
-                    tracing::info!("Queued payment of {} from {} to consumer {}", pi.amount, pi.payer, payee.id);
-                }
                 Ok(())
             }
 

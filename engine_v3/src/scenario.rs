@@ -384,10 +384,10 @@ impl Scenario {
         all_firms.append(&mut expanded_firms);
 
         let mut factory = AgentFactory::new(&mut state, &mut rng);
-
+        let mut count = 0;
         for consumer_conf in &all_consumers {
             let bank_id = *agent_ids.get(&consumer_conf.bank_id).expect("Bank not found for consumer");
-            let consumer = factory.create_consumer(consumer_conf, bank_id, cb_id, &agent_ids);
+            let consumer = factory.create_consumer(consumer_conf, bank_id, cb_id, &agent_ids, count);
             agent_ids.insert(consumer_conf.id.clone(), consumer.id);
 
             let basket: HashMap<GoodId, f64> = consumer_conf
@@ -400,6 +400,7 @@ impl Scenario {
                 consumer.id,
                 Box::new(SimpleConsumerDecisionModel { consumption_basket: basket, ..Default::default() }),
             );
+            count += 1;
         }
 
         for firm_conf in &all_firms {

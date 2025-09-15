@@ -22,7 +22,7 @@ impl DecisionModel for ProductionFirmDecisionModel {
     fn name(&self) -> &str {
         "Production Firm"
     }
-    fn decide(&self, agent: &dyn Any, state: &SimState, rng: &mut dyn RngCore) -> Vec<SimIntention> {
+    fn decide(&self, agent: &dyn Any, state: &SimState, _rng: &mut dyn RngCore) -> Vec<SimIntention> {
         let firm = match agent.downcast_ref::<Firm>() {
             Some(f) => f,
             None => return vec![],
@@ -30,19 +30,16 @@ impl DecisionModel for ProductionFirmDecisionModel {
 
         let mut intentions = Vec::new();
 
-        self.handle_hiring(firm, state, &mut intentions);
-        self.handle_separations(firm, state, &mut intentions, rng);
-        self.handle_production(firm, state, &mut intentions);
+        //self.handle_hiring(firm, state, &mut intentions);
+
+        self.force_handle_hiring(firm, state, &mut intentions);
         self.handle_wages(firm, state, &mut intentions);
-        self.handle_sales(firm, state, &mut intentions);
-        self.handle_input_purchases(firm, state, &mut intentions);
-        self.consider_financing(firm, state, &mut intentions);
         intentions
     }
 }
 
 impl ProductionFirmDecisionModel {
-    fn calculate_marginal_value_of_labor(&self, firm: &Firm, state: &SimState) -> f64 {
+    pub fn calculate_marginal_value_of_labor(&self, firm: &Firm, state: &SimState) -> f64 {
         let fs = &state.financial_system;
 
         let Some(recipe_id) = firm.recipe.as_ref() else {
@@ -76,7 +73,7 @@ impl ProductionFirmDecisionModel {
         vj.max(0.0)
     }
 
-    fn calculate_unit_cost(&self, recipe: &ProductionRecipe, state: &SimState) -> f64 {
+    pub fn calculate_unit_cost(&self, recipe: &ProductionRecipe, state: &SimState) -> f64 {
         let total_input_cost: f64 = recipe
             .inputs
             .iter()
@@ -92,8 +89,37 @@ impl ProductionFirmDecisionModel {
 
         total_input_cost / output_qty
     }
+    pub fn force_handle_hiring(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
+        let has_open_offer = state
+            .financial_system
+            .exchange
+            .labour_markets
+            .values()
+            .any(|market| market.job_offers.iter().any(|offer| offer.firm_id == firm.id && offer.quantity > 0));
 
-    fn handle_hiring(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
+        if has_open_offer {
+            return;
+        }
+
+        let avg_daily_sales: f64 = 0.0;
+        let desired_employees = ((avg_daily_sales / 100.0).ceil() as usize).max(self.target_employees);
+
+        let current_employees = firm.employees.len();
+
+        if current_employees < desired_employees {
+            let open_roles = (desired_employees - current_employees) as u32;
+
+            let posted_wage = self.base_wage;
+
+            intentions.push(SimIntention::Production(ProductionIntention::HireWorkers {
+                agent_id: firm.id,
+                count: open_roles,
+                wage_rate: posted_wage,
+                max_wage: posted_wage * 1.1, // Set max_wage slightly higher to accept offers
+            }));
+        }
+    }
+    pub fn handle_hiring(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
         let has_open_offer = state
             .financial_system
             .exchange
@@ -128,7 +154,7 @@ impl ProductionFirmDecisionModel {
             }));
         }
     }
-    fn handle_production(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
+    pub fn handle_production(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
         let fs = &state.financial_system;
         let firm_name = &firm.name;
         trace!(target: "sim.prod", firm_id = ?firm.id, firm_name, "consider_production");
@@ -237,7 +263,7 @@ impl ProductionFirmDecisionModel {
         }
     }
 
-    fn handle_wages(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
+    pub fn handle_wages(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
         for (emp_id, c) in &firm.employees {
             if state.current_date >= c.next_pay_date {
                 let amount = c.wage_rate * c.hours * (c.pay_interval_days as f64 / 7.0);
@@ -252,7 +278,7 @@ impl ProductionFirmDecisionModel {
         }
     }
 
-    fn consider_financing(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
+    pub fn consider_financing(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
         let fs = &state.financial_system;
         let liquid = fs.get_liquid_assets(&firm.id);
 
@@ -295,7 +321,7 @@ impl ProductionFirmDecisionModel {
         }
     }
 
-    fn handle_sales(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
+    pub fn handle_sales(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
         let fs = &state.financial_system;
         let goods_config = &state.config.goods;
 
@@ -356,7 +382,7 @@ impl ProductionFirmDecisionModel {
         }
     }
 
-    fn handle_separations(
+    pub fn handle_separations(
         &self, firm: &Firm, _state: &SimState, intentions: &mut Vec<SimIntention>, rng: &mut dyn RngCore,
     ) {
         let quit_rate = 0.005;
@@ -374,7 +400,7 @@ impl ProductionFirmDecisionModel {
         }
     }
 
-    fn handle_input_purchases(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
+    pub fn handle_input_purchases(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
         let fs = &state.financial_system;
         let Some(recipe_id) = firm.recipe.clone() else {
             return;

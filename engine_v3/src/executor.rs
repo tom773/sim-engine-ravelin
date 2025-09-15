@@ -56,6 +56,8 @@ impl SimulationEngine {
         scheduler.register_handler(TickStep::ClearMarkets, ClearMarketsHandler);
         scheduler.register_handler(TickStep::SettleTrades, SettleTradesHandler);
         scheduler.register_handler(TickStep::ServiceCredit, CreditServicingHandler);
+        scheduler.register_handler(TickStep::ServiceDeposits, DepositServicingHandler);
+        scheduler.register_handler(TickStep::ServiceGovernmentDebt, GovCouponsHandler);
         scheduler.register_handler(TickStep::ApplyPaymentQueuing, ApplyPaymentQueuingHandler);
         scheduler.register_handler(TickStep::RunRTGS, RunRTGSHandler);
         scheduler.register_handler(TickStep::ReconcileCredit, CreditReconciliationHandler);
@@ -75,7 +77,7 @@ impl SimulationEngine {
         if execution_result.success {
             self.state.ticknum += 1;
         }
-
+        tracing::warn!("Failed Steps: {:?}", execution_result.failed_steps);
         (execution_result, std::mem::take(&mut self.event_log))
     }
     pub fn run_day(&mut self, rng: &mut dyn rand::RngCore) -> (Vec<TickExecutionResult>, Vec<SimEvent>) {
@@ -276,7 +278,7 @@ impl SimulationEngine {
 
         tracing::info!(
             "Order Book for {} - Best Bid: {:?} | Best Ask: {:?} | Bid Lvls: {:?} | Ask Lvls: {:?}", 
-            good_name, book.depth_summary().best_ask, book.depth_summary().best_bid, book.depth_summary().ask_levels, book.depth_summary().bid_levels
+            good_name, book.depth_summary().best_bid, book.depth_summary().best_ask, book.depth_summary().bid_levels, book.depth_summary().ask_levels
         );
     }
 

@@ -44,8 +44,8 @@ impl DecisionModel for SimpleConsumerDecisionModel {
         let budget = total_resources * self.mpc;
         let save_amount = total_resources - budget;
 
-        self.make_purchases(consumer, budget, &mut intentions);
-        self.consume_stuff(consumer, fs, &mut intentions);
+        //self.make_purchases(consumer, budget, &mut intentions);
+        //self.consume_stuff(consumer, fs, &mut intentions);
         self.apply_for_loan(consumer, &state.financial_system, &mut intentions);
         if save_amount > 1.0 {}
         intentions
@@ -53,7 +53,7 @@ impl DecisionModel for SimpleConsumerDecisionModel {
 }
 
 impl SimpleConsumerDecisionModel {
-    fn handle_employment(&self, consumer: &Consumer, state: &SimState, intentions: &mut Vec<SimIntention>) {
+    pub fn handle_employment(&self, consumer: &Consumer, state: &SimState, intentions: &mut Vec<SimIntention>) {
         if consumer.employed_by.is_none() {
             let market_id = match state.financial_system.find_general_labour_market() {
                 Some(id) => id,
@@ -80,7 +80,7 @@ impl SimpleConsumerDecisionModel {
             }));
         }
     }
-    fn apply_for_loan(&self, consumer: &Consumer, fs: &FinancialSystem, intentions: &mut Vec<SimIntention>) {
+    pub fn apply_for_loan(&self, consumer: &Consumer, fs: &FinancialSystem, intentions: &mut Vec<SimIntention>) {
         if let Some(ids) = fs.credit_registry.applications_by_borrower.get(&consumer.id) {
             let has_open = ids.iter().any(|id| {
                 fs.credit_registry
@@ -101,7 +101,11 @@ impl SimpleConsumerDecisionModel {
         }
 
         let liquid_assets = fs.get_liquid_assets(&consumer.id);
-        if liquid_assets < 10_000.0 && consumer.income > 1_000.0 {
+        let mut loan_amt = 5_000.0; 
+        if consumer.is_golden {
+            loan_amt = 1_000_000.0;
+        }
+        if liquid_assets < 100_000.0 && consumer.income > 500.0 {
             let existing_debt = fs.get_total_liabilities(&consumer.id);
             if existing_debt > consumer.income * 0.5 {
                 return;
@@ -110,13 +114,13 @@ impl SimpleConsumerDecisionModel {
             intentions.push(SimIntention::Banking(BankingIntention::RequestLoan {
                 agent_id: consumer.id,
                 bank_id: consumer.bank_id,
-                amount: 5_000.0,
+                amount: loan_amt,
                 purpose: LoanPurpose::PersonalConsumption,
                 collateral: None,
             }));
         }
     }
-    fn make_purchases(&self, consumer: &Consumer, budget: f64, intentions: &mut Vec<SimIntention>) {
+    pub fn make_purchases(&self, consumer: &Consumer, budget: f64, intentions: &mut Vec<SimIntention>) {
         for (good_id, budget_share) in &self.consumption_basket {
             let allocation = budget * budget_share;
 
@@ -129,7 +133,7 @@ impl SimpleConsumerDecisionModel {
             }
         }
     }
-    fn consume_stuff(&self, consumer: &Consumer, fs: &FinancialSystem, intentions: &mut Vec<SimIntention>) {
+    pub fn consume_stuff(&self, consumer: &Consumer, fs: &FinancialSystem, intentions: &mut Vec<SimIntention>) {
         let inv = fs.get_agent_inventory(&consumer.id);
         for (good_id, &desired_qty) in &self.consumption_basket {
             let available_qty = inv.get(good_id).cloned().unwrap_or_default();
