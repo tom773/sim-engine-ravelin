@@ -132,7 +132,7 @@ impl DebtInstrument {
 
     pub fn debtor(&self) -> AgentId {
         match self {
-            DebtInstrument::Bond(b) => b.issuer, // issuer is debtor for bonds
+            DebtInstrument::Bond(b) => b.issuer,
             DebtInstrument::Loan(l) => l.borrower,
             DebtInstrument::CreditLine(c) => c.borrower,
             DebtInstrument::TradeCredit(t) => t.debtor,
@@ -145,7 +145,7 @@ pub struct LoanDetails {
     pub lender: AgentId,
     pub borrower: AgentId,
     pub loan_type: LoanType,
-    pub facility_id: Option<Uuid>, // if drawn from a credit line
+    pub facility_id: Option<Uuid>,
     pub borrower_type: BorrowerType,
     pub principal: Money,
     pub outstanding_principal: Money,
@@ -175,7 +175,6 @@ pub struct LoanDetails {
     pub accrued_interest: Money,
     pub unamortized_fees: Money,
 }
-// Add this to your credit.rs or instrument.rs file:
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SpCreditRating {
@@ -203,7 +202,6 @@ pub enum CreditRating {
     Consumer(ConsumerCreditRating),
 }
 
-// Add helper methods for easier usage:
 impl CreditRating {
     pub fn government_aaa() -> Self {
         CreditRating::Government(SpCreditRating::AAA)
@@ -310,8 +308,8 @@ pub struct PrepaymentTerms {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PrepaymentPenalty {
     None,
-    FixedAmount(i64),        // Store as cents/basis units
-    PercentOfPrincipal(u32), // basis points
+    FixedAmount(i64),
+    PercentOfPrincipal(u32),
     MakeWhole,
     YieldMaintenance,
 }
@@ -355,10 +353,10 @@ pub type LienId = Uuid;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Lien {
     pub lien_id: LienId,
-    pub secured_obligation: InstrumentId, // The loan this secures
+    pub secured_obligation: InstrumentId,
     pub collateral_type: CollateralType,
     pub status: LienStatus,
-    pub priority: u32, // 1 = first lien, 2 = second, etc.
+    pub priority: u32,
     pub created_date: chrono::NaiveDate,
 }
 
@@ -367,7 +365,7 @@ pub enum CollateralType {
     Securities {
         instrument_id: InstrumentId,
         quantity: f64,
-        haircut: f64, // 0.1 = 10% haircut
+        haircut: f64,
     },
     RealEstate {
         property_id: Uuid,
@@ -750,13 +748,27 @@ impl LoanServicer {
             rate * Rate::from_f64(self.payment_frequency_to_year_frac(&loan.payment_frequency)).unwrap_or(Rate::ZERO);
         let n = self.count_payment_periods(loan) as i64;
 
-        if period_rate == Rate::ZERO {
-            loan.outstanding_principal / n as f64
-        } else {
-            let factor =
-                period_rate * (Rate::ONE + period_rate).powi(n) / ((Rate::ONE + period_rate).powi(n) - Rate::ONE);
-            loan.outstanding_principal * factor
+        if n <= 0 {
+            return loan.outstanding_principal;
         }
+
+        if period_rate == Rate::ZERO {
+            return loan.outstanding_principal / n as f64;
+        }
+
+        let v = Rate::ONE / (Rate::ONE + period_rate);
+        let mut v_n = Rate::ONE;
+        for _ in 0..n {
+            v_n *= v;
+        }
+
+        let denom = Rate::ONE - v_n;
+        if denom == Rate::ZERO {
+            return loan.outstanding_principal;
+        }
+
+        let factor = period_rate / denom;
+        loan.outstanding_principal * factor
     }
 
     fn count_payment_periods(&self, loan: &LoanDetails) -> u32 {
@@ -766,7 +778,7 @@ impl LoanServicer {
             PaymentFrequency::Quarterly => months / 3,
             PaymentFrequency::SemiAnnual => months / 6,
             PaymentFrequency::Annual => months / 12,
-            PaymentFrequency::InterestOnly => months, // Assuming monthly interest
+            PaymentFrequency::InterestOnly => months,
         }
     }
 

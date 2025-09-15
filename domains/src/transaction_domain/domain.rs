@@ -100,18 +100,17 @@ impl Domain for TransactionsDomain {
             }
 
             SimIntention::Consumption(ConsumptionIntention::SpendOnGood { agent_id, good_id, max_notional }) => {
-                let consumer = context
-                    .state
-                    .agents
-                    .consumers
-                    .get(agent_id)
-                    .ok_or_else(|| ResolutionResult::failure(vec!["Consumer not found".to_string()]))
-                    .unwrap();
+
+                let consumer = match context.state.agents.consumers.get(agent_id) {
+                    Some(c) => c,
+                    None => return Some(ResolutionResult::failure(vec!["Consumer not found".to_string()])),
+                };
 
                 let market_id = match context.state.financial_system.exchange.good_to_symbol.get(good_id) {
                     Some(s) => s.clone(),
                     None => return Some(ResolutionResult::failure(vec![format!("No market for good {:?}", good_id)])),
                 };
+
                 let goods_config = &context.state.config.goods;
 
                 let anchor = context
@@ -123,7 +122,7 @@ impl Domain for TransactionsDomain {
                     .or_else(|| context.state.market_view(&market_id).and_then(|v| v.last_or_mid()))
                     .unwrap_or(1.0);
 
-                let mut limit_price = consumer
+                let reservation_price = consumer
                     .adaptive
                     .reservation
                     .get(good_id)
@@ -131,13 +130,10 @@ impl Domain for TransactionsDomain {
                     .unwrap_or(anchor * (1.0 + goods_config.reservation_nudge_up));
 
                 let cap = anchor * goods_config.reservation_cap_mult;
-                limit_price = limit_price.min(cap).max(0.01);
+                let limit_price = reservation_price.min(cap).max(0.01);
 
-                let quantity_to_buy = if limit_price > 1e-9 {
-                    (*max_notional / limit_price).floor().max(1.0)
-                } else {
-                    1.0
-                };
+                let quantity_to_buy =
+                    if limit_price > 1e-9 { (*max_notional / limit_price).floor().max(1.0) } else { 1.0 };
 
                 vec![SimAction::Transaction(TransactionAction::PostMarketOrder {
                     agent_id: *agent_id,
@@ -156,12 +152,7 @@ impl Domain for TransactionsDomain {
                 })]
             }
 
-            SimIntention::Production(ProductionIntention::HireWorkers {
-                agent_id,
-                count,
-                wage_rate,
-                max_wage,
-            }) => {
+            SimIntention::Production(ProductionIntention::HireWorkers { agent_id, count, wage_rate, max_wage }) => {
                 let Some(market_id) = context.state.financial_system.find_general_labour_market() else {
                     return Some(ResolutionResult::failure(vec!["No general labour market found".to_string()]));
                 };
@@ -476,7 +467,8 @@ impl TransactionsDomain {
         &self, agent_id: AgentId, market_id: Symbol, side: Side, quantity: f64, price: Option<Money>,
         order_type: OrderType,
     ) -> DomainResult {
-        let order = Order { id: Uuid::new_v4(), agent_id, side, quantity, price, order_type, market: market_id.clone() };
+        let order =
+            Order { id: Uuid::new_v4(), agent_id, side, quantity, price, order_type, market: market_id.clone() };
         let effect = StateEffect::Market(MarketEffect::PlaceOrderInBook { market_id, order });
         DomainResult::success(vec![effect])
     }
@@ -540,11 +532,11 @@ impl TransactionsDomain {
                     );
 
                     let bid_price = pricer
-                        .price_from_yield(&inst_id, bid_yield_bps.to_f64().unwrap_or_default())
+                        .price_from_yield(&inst_id, bps_to_decimal(bid_yield_bps).to_f64().unwrap_or_default())
                         .unwrap_or(Money::ZERO);
 
                     let ask_price = pricer
-                        .price_from_yield(&inst_id, ask_yield_bps.to_f64().unwrap_or_default())
+                        .price_from_yield(&inst_id, bps_to_decimal(ask_yield_bps).to_f64().unwrap_or_default())
                         .unwrap_or(Money::ZERO);
 
                     if bid_price > Money::ZERO {

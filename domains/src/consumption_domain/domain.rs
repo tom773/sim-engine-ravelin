@@ -34,11 +34,15 @@ impl Domain for ConsumptionDomain {
         let actions = match intention {
             SimIntention::Consumption(ConsumptionIntention::ConsumeGood { agent_id, good_id, quantity }) => {
                 let qty = quantity.round();
-                vec![SimAction::Consumption(ConsumptionAction::Consume {
+                if qty >= 1.0 { 
+                    vec![SimAction::Consumption(ConsumptionAction::Consume {
                     agent_id: *agent_id,
                     good_id: *good_id,
                     amount: qty,
                 })]
+                } else {
+                    vec![SimAction::Consumption(ConsumptionAction::NoAction { agent_id: *agent_id })]
+                }
             }
             _ => return None,
         };
@@ -65,6 +69,7 @@ impl Domain for ConsumptionDomain {
 
         match consumption_action {
             ConsumptionAction::Consume { agent_id, good_id, amount } => {
+                tracing::info!("Agent {:?} consuming {:.2} of good {:?}", agent_id, amount, good_id);
                 self.execute_consume(*agent_id, *good_id, *amount)
             }
             ConsumptionAction::NoAction { .. } => DomainResult::empty(),

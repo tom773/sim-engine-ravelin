@@ -105,6 +105,13 @@ impl StepHandler for ApplyMarketEffectsHandler {
                 all_effects.into_iter().filter(|e| matches!(e, StateEffect::Market(_))).collect();
 
             engine.state.apply_effects(&market_effects).map_err(|e| e.to_string())?;
+
+            let staged = std::mem::take(&mut engine.state.financial_system.exchange.recent_trades);
+            if !staged.is_empty() {
+                let mut all_trades = context.get_trades().unwrap_or_default();
+                all_trades.extend(staged);
+                context.store("trades", &all_trades)?;
+            }
             Ok(serde_json::json!({ "market_effects_applied": market_effects.len() }))
         })
     }
@@ -116,7 +123,13 @@ impl StepHandler for ClearMarketsHandler {
     fn execute(&self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
         execute_step(|| {
             let (market_trades, snapshots) = engine.clear_all_markets();
-
+            if !market_trades.is_empty() {
+                let now = std::time::SystemTime::now();
+                let tape = &mut engine.state.financial_system.exchange.tape;
+                for t in &market_trades {
+                    tape.entry(t.market_id.clone()).or_default().push(TimedTrade { ts: now, trade: t.clone() });
+                }
+            }
             let snapshots_s: std::collections::HashMap<String, MarketView> =
                 snapshots.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
 
@@ -162,7 +175,7 @@ impl StepHandler for GovCouponsHandler {
                 let is_maturity = current_date == details.maturity_date;
 
                 if !is_coupon && !is_maturity {
-                    continue; // Skip if no payment is due today
+                    continue;
                 }
 
                 for (agent_id, account) in &fs.clearing_house.csd.custody_accounts {
@@ -170,7 +183,7 @@ impl StepHandler for GovCouponsHandler {
                         let quantity = holding.total_position();
                         if quantity < 1.0 {
                             continue;
-                        } // Skip if they don't hold a full unit
+                        }
 
                         let payee_bank = match fs.find_agent_liquid_account(agent_id) {
                             Some((_, bank_id)) => bank_id,
@@ -190,7 +203,7 @@ impl StepHandler for GovCouponsHandler {
 
                             effects.push(StateEffect::Financial(FinancialEffect::QueuePayment(PaymentInstruction {
                                 id: Uuid::new_v4(),
-                                from_bank: fs.central_bank.id, // Gov payments are routed via the CB
+                                from_bank: fs.central_bank.id,
                                 to_bank: payee_bank,
                                 payer: gov_id,
                                 payee: *agent_id,
@@ -212,7 +225,7 @@ impl StepHandler for GovCouponsHandler {
                                 payee: *agent_id,
                                 amount: total_principal,
                                 context: TransactionContext::PrincipalRepayment { instrument_id: inst_id },
-                                priority: PaymentPriority::Urgent, // Principal is high priority
+                                priority: PaymentPriority::Urgent,
                                 earliest_release_tick: state.ticknum,
                                 deadline_tick: state.ticknum + 10,
                             })));
@@ -470,7 +483,7 @@ impl StepHandler for DepositServicingHandler {
                                     CashType::DemandDeposit | CashType::SavingsDeposit => {
                                         (details.issuer, details.issuer)
                                     }
-                                    _ => continue, // not interest-bearing here
+                                    _ => continue,
                                 };
 
                                 let pi = PaymentInstruction {
@@ -627,6 +640,7 @@ impl StepHandler for UpdateHistoryHandler {
         })
     }
 }
+
 #[derive(Debug)]
 pub struct DebtAuctionsHandler;
 impl StepHandler for DebtAuctionsHandler {
@@ -646,7 +660,8 @@ impl StepHandler for DebtAuctionsHandler {
                 return Ok(serde_json::json!({ "auctions_processed": false }));
             }
 
-            let mut auction_trades = vec![];
+            let mut all_auction_trades: Vec<Trade> = Vec::new();
+
             for auction_id in open_auctions {
                 let auction = engine
                     .state
@@ -659,23 +674,30 @@ impl StepHandler for DebtAuctionsHandler {
                 let inst_id = auction.instrument_id;
                 let quantity_offered = auction.quantity_offered;
 
-                let mut trades = engine
+                let mut trades_this_auction = match engine
                     .state
                     .financial_system
                     .exchange
-                    .conduct_dutch_auction(&auction_id, &engine.state.financial_system.instruments);
+                    .conduct_dutch_auction(&auction_id, &engine.state.financial_system.instruments)
+                {
+                    Ok(trades) => trades,
+                    Err(e) => {
+                        tracing::error!("Failed to conduct auction {}: {}", auction_id, e);
+                        continue;
+                    }
+                };
 
-                let sold_qty: u32 = trades
-                    .iter()
-                    .filter(|t| {
-                        if let Some(inst_symbol) = engine.state.financial_system.exchange.inst_to_symbol.get(&inst_id) {
-                            &t.market_id == inst_symbol
-                        } else {
-                            false
-                        }
-                    })
-                    .map(|t| t.quantity as u32)
-                    .sum();
+                let inst_symbol = engine
+                    .state
+                    .financial_system
+                    .exchange
+                    .inst_to_symbol
+                    .get(&inst_id)
+                    .cloned()
+                    .unwrap_or_else(|| Symbol(format!("UNKNOWN_{}", inst_id)));
+
+                let sold_qty: u32 =
+                    trades_this_auction.iter().filter(|t| t.market_id == inst_symbol).map(|t| t.quantity as u32).sum();
 
                 let leftover = (quantity_offered - sold_qty).max(0);
                 if leftover > 0 {
@@ -698,23 +720,14 @@ impl StepHandler for DebtAuctionsHandler {
                         Money::from(1000)
                     };
 
-                    let inst_symbol = engine
-                        .state
-                        .financial_system
-                        .exchange
-                        .inst_to_symbol
-                        .get(&inst_id)
-                        .cloned()
-                        .unwrap_or_else(|| Symbol(format!("UNKNOWN_{}", inst_id)));
-
-                    let last_price = trades
+                    let last_price = trades_this_auction
                         .iter()
                         .rev()
                         .find(|t| t.market_id == inst_symbol)
                         .map(|t| t.price)
                         .unwrap_or(fallback_price);
 
-                    trades.push(Trade {
+                    trades_this_auction.push(Trade {
                         trade_id: Uuid::new_v4(),
                         market_id: inst_symbol,
                         buyer: engine.state.financial_system.central_bank.id,
@@ -723,12 +736,18 @@ impl StepHandler for DebtAuctionsHandler {
                         price: last_price,
                     });
                 }
-                auction_trades.extend(trades);
+                all_auction_trades.extend(trades_this_auction);
             }
 
-            if !auction_trades.is_empty() {
+            if !all_auction_trades.is_empty() {
+                let now = std::time::SystemTime::now();
+                let tape = &mut engine.state.financial_system.exchange.tape;
+                for t in &all_auction_trades {
+                    tape.entry(t.market_id.clone()).or_default().push(TimedTrade { ts: now, trade: t.clone() });
+                }
+
                 let mut all_trades = context.get_trades().unwrap_or_default();
-                all_trades.extend(auction_trades);
+                all_trades.extend(all_auction_trades);
                 context.store("trades", &all_trades)?;
             }
 

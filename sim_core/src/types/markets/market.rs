@@ -12,6 +12,8 @@ use std::hash::Hash;
 use std::sync::Arc;
 use uuid::Uuid;
 
+// TODO Interbank Lending and Repo
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimedTrade {
     pub ts: std::time::SystemTime,
@@ -240,6 +242,7 @@ pub struct Exchange {
     pub index: MarketIndex,
     pub open_auctions: HashMap<Uuid, DebtAuction>,
     pub tape: HashMap<Symbol, Vec<TimedTrade>>,
+    pub recent_trades: Vec<Trade>,
     pub pricing_feeds: Option<PricingFeeds>,
 }
 
@@ -250,6 +253,36 @@ impl Exchange {
             match market {
                 MarketType::Goods(mkt) => {
                     mkt.pricer = Arc::new(CostPlusGoodsPricer::new(feeds.clone(), CostPlusParams::default()));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// New: also refresh pricers for *existing* financial markets using instrument registry.
+    pub fn attach_pricing_feeds_with_registry(
+        &mut self,
+        feeds: PricingFeeds,
+        instruments: &std::collections::HashMap<InstrumentId, Instrument>,
+    ) {
+        self.pricing_feeds = Some(feeds.clone());
+        for (_, market) in self.markets.iter_mut() {
+            match market {
+                MarketType::Goods(g) => {
+                    g.pricer = Arc::new(CostPlusGoodsPricer::new(feeds.clone(), CostPlusParams::default()));
+                }
+                MarketType::Financial(f) => {
+                    if let Some(inst) = instruments.get(&f.key) {
+                        if let InstrumentType::Debt(DebtInstrument::Bond(bond)) = &inst.instrument_type {
+                            if bond.bond_type == BondType::Government {
+                                f.pricer = Arc::new(GovTermStructurePricer::new(
+                                    bond.clone(),
+                                    TermStructureMethod::default(),
+                                    feeds.clone(),
+                                ));
+                            }
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -363,35 +396,32 @@ impl Exchange {
     }
 
     pub fn conduct_dutch_auction(
-        &mut self, auction_id: &Uuid, instruments: &HashMap<InstrumentId, Instrument>,
-    ) -> Vec<Trade> {
+        &mut self,
+        auction_id: &Uuid,
+        instruments: &std::collections::HashMap<InstrumentId, Instrument>,
+    ) -> Result<Vec<Trade>, String> {
         let mut trades = Vec::new();
         let auction = match self.open_auctions.get_mut(auction_id) {
             Some(a) => a,
-            None => return trades,
+            None => return Err(format!("Auction {} not found", auction_id)),
         };
 
         if auction.status != AuctionStatus::Open || auction.bids.is_empty() {
             auction.status = AuctionStatus::Closed;
-            return trades;
+            return Ok(trades);
         }
 
-        let (government_id, symbol) = match instruments.get(&auction.instrument_id) {
-            Some(instrument) => {
-                let issuer = if let InstrumentType::Debt(details) = &instrument.instrument_type {
-                    details.issuer()
-                } else {
-                    auction.status = AuctionStatus::Closed;
-                    return trades;
-                };
-                let symbol = self.inst_to_symbol.get(&instrument.id).cloned().unwrap_or_default();
-                (issuer, symbol)
-            }
-            None => {
-                auction.status = AuctionStatus::Closed;
-                return trades;
-            }
+        let instrument = instruments.get(&auction.instrument_id)
+            .ok_or_else(|| format!("Auction instrument {} not found", auction.instrument_id))?;
+        let issuer = if let InstrumentType::Debt(details) = &instrument.instrument_type {
+            details.issuer()
+        } else {
+            auction.status = AuctionStatus::Closed;
+            return Err("Auction instrument is not a debt security".into());
         };
+        let symbol = self.inst_to_symbol.get(&instrument.id)
+            .cloned()
+            .ok_or_else(|| format!("No symbol registered for instrument {}", instrument.id))?;
 
         auction.bids.sort_by(|a, b| b.price.cmp(&a.price));
 
@@ -415,14 +445,14 @@ impl Exchange {
                     trade_id: Uuid::new_v4(),
                     market_id: symbol.clone(),
                     buyer: winner_id,
-                    seller: government_id,
+                    seller: issuer,
                     quantity: quantity as f64,
                     price: clearing_price,
                 });
             }
         }
         auction.status = AuctionStatus::Closed;
-        trades
+        Ok(trades)
     }
 
     pub fn validate_and_submit_order(
@@ -498,10 +528,15 @@ impl Serialize for Exchange {
 }
 
 impl<'de> Deserialize<'de> for Exchange {
-    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        Ok(Exchange::default())
+        // Consume input but reject: Exchange must be reconstructed, not deserialized.
+        let _ = serde::de::IgnoredAny::deserialize(deserializer)?;
+        Err(serde::de::Error::custom(
+            "Exchange does not support direct deserialization. \
+             Serialize/deserialize ExchangeDto instead, and reconstruct Exchange at runtime.",
+        ))
     }
 }

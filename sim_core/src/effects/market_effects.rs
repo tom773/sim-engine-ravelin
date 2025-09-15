@@ -43,22 +43,31 @@ impl StateEffectApplicator {
         match effect {
             MarketEffect::PlaceOrderInBook { market_id, order } => {
                 let exchange = &mut state.financial_system.exchange;
-                if let Some(good_id) = exchange.symbol_to_good.get(market_id).copied() {
-                    let market = exchange
+
+                let trades = if let Some(good_id) = exchange.symbol_to_good.get(market_id).copied() {
+                    let mkt = exchange
                         .goods_market_mut(&good_id)
                         .ok_or_else(|| EffectError::MarketNotFound { market: market_id.to_string() })?;
-                    market.book.submit_order(order.clone(), market_id);
+                    mkt.book.submit_order(order.clone(), market_id)
                 } else if let Some(inst_id) = exchange.symbol_to_inst.get(market_id).copied() {
-                    let order_book = exchange
+                    let book = exchange
                         .financial_market_mut(&inst_id)
                         .ok_or_else(|| EffectError::MarketNotFound { market: market_id.to_string() })?;
-                    order_book.submit_order(order.clone(), market_id);
-                } else if exchange.labour_market_mut(&market_id.0.parse().unwrap()).is_some() {
-                     return Err(EffectError::InvalidState(
-                        "Cannot place direct orders in a labour market".to_string(),
-                    ));
+                    book.submit_order(order.clone(), market_id)
                 } else {
                     return Err(EffectError::MarketNotFound { market: market_id.to_string() });
+                };
+
+                if !trades.is_empty() {
+                    let now = std::time::SystemTime::now();
+                    exchange.recent_trades.extend(trades.iter().cloned());
+                    for t in &trades {
+                        exchange
+                            .tape
+                            .entry(t.market_id.clone())
+                            .or_default()
+                            .push(TimedTrade { ts: now, trade: t.clone() });
+                    }
                 }
                 Ok(())
             }
@@ -71,7 +80,7 @@ impl StateEffectApplicator {
                 } else if let Some(inst_id) = exchange.symbol_to_inst.get(market_id).copied() {
                     exchange.financial_market_mut(&inst_id)
                 } else if exchange.labour_to_symbol.values().any(|s| s == market_id) {
-                     return Err(EffectError::InvalidState(
+                    return Err(EffectError::InvalidState(
                         "ClearMarket is not applicable to labour markets.".to_string(),
                     ));
                 } else {

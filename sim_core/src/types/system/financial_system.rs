@@ -115,7 +115,11 @@ impl FinancialSystem {
             goods: Arc::new(RwLock::new(GoodsMetrics::default())),
             current_date: Arc::new(RwLock::new(now)),
         };
-        self.exchange.attach_pricing_feeds(self.pricing_feeds.clone());
+        // Use the instrument registry to re-inject financial pricers as well.
+        self.exchange.attach_pricing_feeds_with_registry(
+            self.pricing_feeds.clone(),
+            &self.instruments,
+        );
     }
     fn find_inventory_instrument_mut(&mut self, agent_id: &AgentId) -> Option<&mut Instrument> {
         let bs = self.balance_sheets.get(agent_id)?;

@@ -26,7 +26,9 @@ impl fmt::Display for ShortId {
             v /= 36;
         }
 
-        f.write_str(std::str::from_utf8(&buf[i..]).unwrap())
+        let full_id = std::str::from_utf8(&buf[i..]).unwrap();
+        let truncated_id = &full_id[..full_id.len().min(4)];
+        f.write_str(truncated_id)
     }
 }
 
@@ -72,7 +74,7 @@ impl SymbolRegistry {
     pub fn register_good(&self, id: GoodId, name: &str) -> Symbol {
         let short = short_from_uuid(id.0);
         let w = self.goods.write();
-        let entry = w.entry(id).or_insert_with(|| (Symbol(format!("{}_{}", slugify(name), short)), short));
+        let entry = w.entry(id).or_insert_with(|| (Symbol(format!("{}:{}", slugify(name), short)), short));
         entry.0.clone()
     }
 
@@ -130,7 +132,8 @@ fn slugify(s: &str) -> String {
         };
         out.push(ch);
     }
-    out.trim_matches('_').to_string()
+    out.trim_matches('_').to_string();
+    out.to_lowercase().replace(' ', "_")
 }
 
 fn derive_instrument_symbol(inst: &Instrument) -> Symbol {

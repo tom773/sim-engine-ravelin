@@ -30,7 +30,6 @@ impl Distribution {
             Distribution::PctOfIncome { pct } => *pct,
         };
 
-        // Ensure the value is finite
         if !value.is_finite() {
             eprintln!("Warning: Distribution {:?} produced non-finite value, defaulting to 0", self);
             0.0
@@ -55,7 +54,6 @@ pub struct ClampRange {
     pub min: Option<f64>,
     pub max: Option<f64>,
 }
-   
 
 impl DistributionWithClamp {
     pub fn sample(&self, rng: &mut impl Rng) -> f64 {
@@ -424,6 +422,8 @@ impl Scenario {
             .insert(state.financial_system.government.id, Box::new(BasicGovernmentDecisionModel::default()));
 
         state.financial_system.exchange.ensure_labour_market(LabourMarketId(Uuid::new_v4()), "General");
+
+        state.financial_system.attach_default_pricing_feeds(state.current_date);
 
         let all_instruments = state.financial_system.instruments.clone();
         for (inst_id, inst) in all_instruments.iter() {

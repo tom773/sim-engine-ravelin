@@ -5,15 +5,15 @@ use crate::types::system::financial_system::{GoodMetric, PricingFeeds};
 use chrono::NaiveDate;
 use ordered_float::NotNan;
 use rust_decimal::prelude::*;
+use rust_decimal_macros::dec;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
-use rust_decimal_macros::dec;
 #[derive(Clone, Debug)]
 pub enum TermStructureMethod {
     Bootstrapped,
     PolicyPlusTermPremium {
-        base_bps: f64,           // level shift
-        slope_bps_per_year: f64, // simple linear term premium by tenor
+        base_bps: f64,
+        slope_bps_per_year: f64,
     },
 }
 impl Default for TermStructureMethod {
@@ -38,22 +38,31 @@ impl GovTermStructurePricer {
     }
 
     fn price_from_yield_inner(&self, y_annual: f64, as_of: NaiveDate) -> Option<Money> {
-        let freq = self.spec.frequency.max(1) as i32; // CHANGED from freq_per_year
-        let n = (self.spec.remaining_tenor_years(as_of) * self.spec.frequency as f64) // CHANGED from tenor_years and frequency
-            .ceil()
-            .max(0.0) as i32;
+        let freq = self.spec.frequency.max(1) as i32;
+        let n = (self.spec.remaining_tenor_years(as_of) * self.spec.frequency as f64).ceil().max(0.0) as i32;
+
+        const MAX_PERIODS: i32 = 4000;
+        if n > MAX_PERIODS {
+            return None;
+        }
+
         let y = Decimal::from_f64(y_annual).unwrap_or(Decimal::ZERO) / Decimal::from(freq);
         if y <= dec!(-1.0) {
             return None;
         }
 
-        let c = self.spec.face_value * (self.coupon_rate() / Decimal::from(self.spec.frequency)); // CHANGED from face and frequency
-        let mut pv = dec!(0.0);
-        let df = dec!(1.0) + y;
-        for t in 1..=n {
-            pv += c.0 / df.powi(t.into());
+        let c = self.spec.face_value * (self.coupon_rate() / Decimal::from(self.spec.frequency));
+        let mut pv = dec!(0);
+
+        let v = dec!(1) / (dec!(1) + y);
+
+        let mut v_n = Decimal::ONE;
+        for _ in 0..n {
+            v_n *= v;
+            pv += c.0 * v_n;
         }
-        pv += self.spec.face_value.0 / df.powi(n.into()); // CHANGED from face
+
+        pv += self.spec.face_value.0 * v_n;
         Some(Money(pv))
     }
 
@@ -68,7 +77,7 @@ impl GovTermStructurePricer {
                 lo = mid;
             } else {
                 hi = mid;
-            } // decreasing in y (for plain-vanilla)
+            }
         }
         Some(0.5 * (lo + hi))
     }
@@ -85,7 +94,7 @@ impl GovTermStructurePricer {
                     return Some(y);
                 }
                 let policy = self.policy_decimal()?;
-                let slope_bps_per_year = 12.5; // gentle +12.5 bps/yr
+                let slope_bps_per_year = 12.5;
                 let premium = (slope_bps_per_year * tenor) / 10_000.0;
                 Some((policy + premium).max(0.0))
             }
@@ -137,9 +146,9 @@ impl Pricer<FinancialProduct> for GovTermStructurePricer {
 
 #[derive(Clone, Debug)]
 pub struct CostPlusParams {
-    pub wage_pass_through: f64, // fraction of wage growth that passes into price
-    pub inv_target_days: f64,   // desired coverage days
-    pub inv_elasticity: f64,    // scarcity -> price elasticity
+    pub wage_pass_through: f64,
+    pub inv_target_days: f64,
+    pub inv_elasticity: f64,
 }
 
 impl Default for CostPlusParams {

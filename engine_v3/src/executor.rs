@@ -305,6 +305,8 @@ impl SimulationEngine {
 
         let market_symbols: Vec<Symbol> = self.state.financial_system.exchange.markets.keys().cloned().collect();
 
+        let pre_snapshots: HashMap<Symbol, MarketView> =
+            market_symbols.iter().map(|s| (s.clone(), self.state.market_view(s).unwrap_or_default())).collect();
         for symbol in &market_symbols {
             let trades = match self.state.financial_system.exchange.markets.get_mut(symbol) {
                 Some(MarketType::Goods(market)) => {
@@ -320,15 +322,7 @@ impl SimulationEngine {
             all_trades.extend(trades);
         }
 
-        let all_snapshots: HashMap<Symbol, MarketView> = market_symbols
-            .into_iter()
-            .map(|symbol| {
-                let view = self.state.market_view(&symbol).unwrap_or_default();
-                (symbol, view)
-            })
-            .collect();
-
-        (all_trades, all_snapshots)
+        (all_trades, pre_snapshots)
     }
 
     pub fn settle_trades(&self, trades: &[Trade]) -> Vec<StateEffect> {
@@ -352,14 +346,14 @@ impl SimulationEngine {
         use rand::seq::SliceRandom;
         let mut effects = Vec::new();
         let beta = 0.5;
-        
+
         let mut labour_markets = Vec::new();
         for (symbol, market) in self.state.financial_system.exchange.markets.iter_mut() {
             if let MarketType::Labour(labour_market) = market {
                 labour_markets.push((symbol.clone(), labour_market));
             }
         }
-        
+
         for (_symbol, market) in labour_markets.iter_mut() {
             market.job_applications.retain(|app| {
                 self.state.agents.consumers.get(&app.consumer_id).map_or(false, |c| c.employed_by.is_none())
@@ -556,7 +550,6 @@ impl SimulationEngine {
                 yc.points = points;
             }
         }
-
         let prev_wage = self.state.financial_system.pricing_feeds.goods.read().ok().map(|g| g.avg_wage).unwrap_or(0.0);
         let mut avg_wage = 0.0;
         let mut n_w = 0usize;

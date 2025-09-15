@@ -217,9 +217,14 @@ initial_liabilities = []
 id = "capital_ventures"
 name = "Capital Ventures Investment Fund"
 bank_id = "bank_b"
-initial_assets = [{ type = "Deposit", bank_id = "bank_b", amount = 500000.0 }]
+initial_assets = [
+    { type = "Deposit", bank_id = "bank_b", amount = 500000.0 },
+    { type = "Bond", tenor = "T5Y", quantity = 10000 },
+    { type = "Bond", tenor = "T10Y", quantity = 5000 }
+]
 initial_liabilities = []
 decision_model = { type = "InvestmentFirm", min_liquidity = 100000.0, quote_qty = 10000.0 }
+
 
 # --- Individual Consumers (dummy to satisfy parser) ---
 [[consumers]]
