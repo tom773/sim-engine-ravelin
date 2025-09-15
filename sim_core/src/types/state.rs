@@ -148,7 +148,7 @@ impl Default for SimConfig {
 pub struct SimHistory {
     pub transactions: Vec<Transaction>,
     #[serde_as(as = "HashMap<DisplayFromStr, _>")]
-    pub market_ticks: HashMap<MarketId, VecDeque<MarketTick>>,
+    pub market_ticks: HashMap<Symbol, VecDeque<MarketTick>>, // Changed from MarketId
     pub tick_records: VecDeque<TickRecord>,
 }
 

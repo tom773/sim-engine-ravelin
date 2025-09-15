@@ -44,8 +44,8 @@ impl DecisionModel for SimpleConsumerDecisionModel {
         let budget = total_resources * self.mpc;
         let save_amount = total_resources - budget;
 
-        //self.make_purchases(consumer, budget, &mut intentions);
-        //self.consume_stuff(consumer, fs, &mut intentions);
+        self.make_purchases(consumer, budget, &mut intentions);
+        self.consume_stuff(consumer, fs, &mut intentions);
         self.apply_for_loan(consumer, &state.financial_system, &mut intentions);
         if save_amount > 1.0 {}
         intentions
@@ -240,7 +240,7 @@ impl CESConsumerDecisionModel {
         let mut market_data = Vec::new();
 
         for (good_id, weight) in &self.weights {
-            if let Some(view) = state.market_view(&MarketId::Goods(*good_id)) {
+            if let Some(view) = state.market_view(&state.financial_system.exchange.symbol_registry.symbol_of_good(good_id).map(|(s, _)| s).unwrap_or(Symbol("".to_string()))) {
                 if let Some(price) = view.last_or_mid() {
                     if price > 1e-6 {
                         market_data.push((*good_id, price, *weight));

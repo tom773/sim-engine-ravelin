@@ -14,6 +14,7 @@ pub struct ConsolidationKey {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstrumentInfo {
     pub instrument_id: InstrumentId,
+    pub symbol: Option<Symbol>,
     pub instrument_type: &'static str,
     pub issuer_id: Option<AgentId>,
     pub issuer_name: Option<String>,
@@ -22,7 +23,6 @@ pub struct InstrumentInfo {
     pub maturity_date: Option<NaiveDate>,
     pub remaining_years: Option<f64>,
     pub currency: Option<Currency>,
-    pub market_id: Option<MarketId>,
 }
 
 impl Instrument {
@@ -190,6 +190,7 @@ impl FinancialSystem {
 
         let mut info = InstrumentInfo {
             instrument_id: *instrument_id,
+            symbol: self.exchange.symbol_registry.symbol_of_inst(instrument_id).map(|(s, _)| s),
             instrument_type: instrument.type_as_string(),
             issuer_id: None,
             issuer_name: None,
@@ -198,7 +199,6 @@ impl FinancialSystem {
             maturity_date: None,
             remaining_years: None,
             currency: None,
-            market_id: Some(MarketId::Financial(*instrument_id)),
         };
 
         let issuer_id = match &instrument.instrument_type {
@@ -274,7 +274,7 @@ impl FinancialSystem {
         HashMap::new()
     }
     pub fn find_general_labour_market(&self) -> Option<LabourMarketId> {
-        self.exchange.labour_markets.keys().next().cloned()
+        self.exchange.labour_to_symbol.keys().next().cloned()
     }
     pub fn get_agent_total_positions(&self, agent_id: &AgentId) -> HashMap<InstrumentId, Position> {
         let mut positions = HashMap::new();
@@ -340,6 +340,7 @@ impl FinancialSystem {
                 bs.assets
                     .iter()
                     .map(|(id, pos)| {
+                        // This call is now valid
                         let price = self.get_market_price(id).unwrap_or(pos.book_value_per_unit);
                         price.to_f64() * pos.quantity
                     })
@@ -354,6 +355,7 @@ impl FinancialSystem {
             .iter()
             .map(|(id, qty)| {
                 let price = self
+                    // This call is now valid
                     .get_market_price(id)
                     .or_else(|| self.instruments.get(id).and_then(|i| i.face_value()))
                     .unwrap_or(Money::ZERO);
@@ -371,6 +373,7 @@ impl FinancialSystem {
                 bs.liabilities
                     .iter()
                     .map(|(id, pos)| {
+                        // This call is now valid
                         let price = self.get_market_price(id).unwrap_or(pos.book_value_per_unit);
                         price.to_f64() * pos.quantity
                     })

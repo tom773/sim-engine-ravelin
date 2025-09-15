@@ -2,9 +2,7 @@ use crate::prelude::*;
 use crate::types::money::Money;
 use chrono::NaiveDate;
 use ordered_float::OrderedFloat;
-use rust_decimal::prelude::*;
 use serde::{
-    Deserialize, Serialize,
     de::Deserializer,
     ser::{SerializeStruct, Serializer},
 };
@@ -139,13 +137,16 @@ pub trait Pricer<P: Product>: Send + Sync + Debug {
         None
     }
 }
+
 pub trait Settlement<P: Product>: Send + Sync + Debug {
     fn dvp(&self, key: &P::Key, buyer: AgentId, seller: AgentId, qty: P::Lot, price: P::Quote) -> Result<(), String>;
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct Market {
-    pub book: OrderBook,
+#[derive(Debug, Clone)]
+pub enum MarketType {
+    Financial(MarketGeneric<FinancialProduct>),
+    Goods(MarketGeneric<GoodProduct>),
+    Labour(LabourMarket),
 }
 
 #[derive(Clone, Debug)]
@@ -176,7 +177,7 @@ impl<P: Product<Quote = Money, Lot = f64>> MarketGeneric<P> {
         }
     }
 
-    pub fn clear_and_match(&mut self, exchange_id: &MarketId) -> Vec<Trade> {
+    pub fn clear_and_match(&mut self, exchange_id: &Symbol) -> Vec<Trade> {
         let trades = self.book.clear_and_match(exchange_id);
         for t in &trades {
             let _ = self.settlement.dvp(&self.key, t.buyer, t.seller, t.quantity, t.price);
@@ -185,7 +186,7 @@ impl<P: Product<Quote = Money, Lot = f64>> MarketGeneric<P> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct MarketIndex {
     pub by_issuer: HashMap<AgentId, Vec<InstrumentId>>,
     pub by_rating_and_tenor: HashMap<(CreditRating, TenorBucket), Vec<InstrumentId>>,
@@ -224,253 +225,227 @@ pub enum AuctionStatus {
     Closed,
 }
 
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Exchange {
-    pub markets: HashMap<InstrumentId, MarketGeneric<FinancialProduct>>,
+    pub markets: HashMap<Symbol, MarketType>,
+    pub symbol_registry: SymbolRegistry,
+
+    pub inst_to_symbol: HashMap<InstrumentId, Symbol>,
+    pub good_to_symbol: HashMap<GoodId, Symbol>,
+    pub labour_to_symbol: HashMap<LabourMarketId, Symbol>,
+
+    pub symbol_to_inst: HashMap<Symbol, InstrumentId>,
+    pub symbol_to_good: HashMap<Symbol, GoodId>,
+
     pub index: MarketIndex,
-    pub goods_markets: HashMap<GoodId, MarketGeneric<GoodProduct>>,
-    pub labour_markets: HashMap<LabourMarketId, LabourMarket>,
     pub open_auctions: HashMap<Uuid, DebtAuction>,
-    pub tape: HashMap<MarketId, Vec<TimedTrade>>,
-    pricing_feeds: Option<PricingFeeds>,
+    pub tape: HashMap<Symbol, Vec<TimedTrade>>,
+    pub pricing_feeds: Option<PricingFeeds>,
 }
 
 impl Exchange {
     pub fn attach_pricing_feeds(&mut self, feeds: PricingFeeds) {
-        {
-            self.pricing_feeds = Some(feeds.clone());
-        }
-        {
-            for (_gid, mkt) in self.goods_markets.iter_mut() {
-                mkt.pricer = std::sync::Arc::new(CostPlusGoodsPricer::new(feeds.clone(), CostPlusParams::default()));
+        self.pricing_feeds = Some(feeds.clone());
+        for market in self.markets.values_mut() {
+            match market {
+                MarketType::Goods(mkt) => {
+                    mkt.pricer = Arc::new(CostPlusGoodsPricer::new(feeds.clone(), CostPlusParams::default()));
+                }
+                _ => {}
             }
         }
     }
 
-    pub fn ensure_listed(&mut self, inst_id: InstrumentId, inst: &Instrument) {
-        if !inst.should_create_order_book() {
-            self.update_index_only(inst_id, inst);
-            return;
-        }
-        self.markets.entry(inst_id).or_insert_with(|| {
-            let pricer: Arc<dyn Pricer<FinancialProduct>> = match &inst.instrument_type {
-                InstrumentType::Debt(DebtInstrument::Bond(b)) if b.bond_type == BondType::Government => {
-                    let feeds = self.pricing_feeds.clone().expect("attach_pricing_feeds before listing");
-                    let spec = BondDetails {
-                        issue_date: b.issue_date,
-                        issuer: b.issuer,
-                        maturity_date: b.maturity_date,
-                        coupon_rate_bps: b.coupon_rate_bps,
-                        frequency: b.frequency,
-                        day_count: b.day_count,
-                        face_value: b.face_value,
-                        bond_type: b.bond_type,
-                        rating: b.rating,
-                        cash_flow: b.cash_flow,
-                        last_accrual_date: b.last_accrual_date,
-                    };
+    pub fn ensure_financial_market(&mut self, inst_id: InstrumentId, inst: &Instrument) -> Symbol {
+        let symbol = self.symbol_registry.ensure_instrument(inst_id, inst);
 
-                    let method = TermStructureMethod::Bootstrapped;
-                    Arc::new(GovTermStructurePricer::new(spec, method, feeds))
-                }
-                _ => Arc::new(NoOpPricer),
-            };
-            MarketGeneric { key: inst_id, book: OrderBook::new(), pricer, settlement: Arc::new(NoopSettlement) }
-        });
+        self.inst_to_symbol.insert(inst_id, symbol.clone());
+        self.symbol_to_inst.insert(symbol.clone(), inst_id);
+
+        if inst.should_create_order_book() {
+            self.markets.entry(symbol.clone()).or_insert_with(|| {
+                let pricer: Arc<dyn Pricer<FinancialProduct>> = match &inst.instrument_type {
+                    InstrumentType::Debt(DebtInstrument::Bond(b)) if b.bond_type == BondType::Government => {
+                        let feeds = self.pricing_feeds.clone().expect("attach_pricing_feeds before listing");
+                        let method = TermStructureMethod::Bootstrapped;
+                        Arc::new(GovTermStructurePricer::new(b.clone(), method, feeds))
+                    }
+                    _ => Arc::new(NoOpPricer),
+                };
+                MarketType::Financial(MarketGeneric {
+                    key: inst_id,
+                    book: OrderBook::new(),
+                    pricer,
+                    settlement: Arc::new(NoopSettlement),
+                })
+            });
+        }
         self.update_index_only(inst_id, inst);
+        symbol
     }
 
-    pub fn register_goods_market(&mut self, good_id: GoodId) {
-        self.goods_markets.entry(good_id).or_insert_with(|| {
+    pub fn ensure_goods_market(&mut self, good_id: GoodId, good_name: &str) -> Symbol {
+        let symbol = self.symbol_registry.register_good(good_id, good_name);
+        self.good_to_symbol.insert(good_id, symbol.clone());
+        self.symbol_to_good.insert(symbol.clone(), good_id);
+
+        self.markets.entry(symbol.clone()).or_insert_with(|| {
             let pricer: Arc<dyn Pricer<GoodProduct>> = if let Some(feeds) = self.pricing_feeds.clone() {
                 Arc::new(CostPlusGoodsPricer::new(feeds, CostPlusParams::default()))
             } else {
                 Arc::new(NoOpPricer)
             };
-            MarketGeneric { key: good_id, book: OrderBook::new(), pricer, settlement: Arc::new(NoopSettlement) }
+            MarketType::Goods(MarketGeneric {
+                key: good_id,
+                book: OrderBook::new(),
+                pricer,
+                settlement: Arc::new(NoopSettlement),
+            })
         });
+        symbol
     }
 
-    pub fn fair_price_for_good(&self, id: &GoodId) -> Option<Money> {
-        self.goods_markets.get(id).and_then(|m| m.pricer.fair_price(id))
+    pub fn ensure_labour_market(&mut self, market_id: LabourMarketId, label: &str) -> Symbol {
+        let symbol = self.symbol_registry.register_labour(market_id, label);
+        self.labour_to_symbol.insert(market_id, symbol.clone());
+        self.markets.entry(symbol.clone()).or_insert_with(|| MarketType::Labour(LabourMarket::default()));
+        symbol
+    }
+    pub fn ensure_listed(&mut self, instrument_id: InstrumentId, inst: &Instrument) -> Symbol {
+        self.ensure_financial_market(instrument_id, inst)
     }
 
     fn update_index_only(&mut self, inst_id: InstrumentId, inst: &Instrument) {
-        match &inst.instrument_type {
-            InstrumentType::Debt(DebtInstrument::Bond(b)) => {
-                self.index.by_issuer.entry(b.issuer).or_default().push(inst_id);
-                self.index.by_bond_type.entry(b.bond_type).or_default().push(inst_id);
-                let years = ((b.maturity_date - b.issue_date).num_days() as f64 / 365.0).max(0.0);
-                let tenor_bucket = TenorBucket::from_years(years);
-                self.index.by_rating_and_tenor.entry((b.rating, tenor_bucket)).or_default().push(inst_id);
-            }
-            InstrumentType::Cash(c) => {
-                self.index.by_issuer.entry(c.issuer).or_default().push(inst_id);
-            }
-            InstrumentType::Equity(e) => {
-                self.index.by_issuer.entry(e.issuer).or_default().push(inst_id);
-            }
-            InstrumentType::StructuredTranche(s) => {
-                self.index.by_rating_and_tenor.entry((s.rating, TenorBucket::GT10)).or_default().push(inst_id);
-            }
-            InstrumentType::Debt(DebtInstrument::Loan(l)) => {
-                self.index.by_issuer.entry(l.lender).or_default().push(inst_id);
-            }
-            InstrumentType::Debt(DebtInstrument::CreditLine(c)) => {
-                self.index.by_issuer.entry(c.lender).or_default().push(inst_id);
-            }
-            _ => {}
+        if let InstrumentType::Debt(DebtInstrument::Bond(b)) = &inst.instrument_type {
+            self.index.by_issuer.entry(b.issuer).or_default().push(inst_id);
+
+            let tenor_bucket = b.tenor_bucket();
+            self.index.by_rating_and_tenor.entry((b.rating, tenor_bucket)).or_default().push(inst_id);
+
+            self.index.by_bond_type.entry(b.bond_type).or_default().push(inst_id);
         }
     }
-
-    pub fn get_posted_rate(
-        &self, inst_id: &InstrumentId, financial_system: &FinancialSystem, agents: &AgentRegistry,
-    ) -> Option<f64> {
-        let inst = financial_system.instruments.get(inst_id)?;
-
-        match (&inst.instrument_type, &inst.listability) {
-            (InstrumentType::Cash(details), Listability::Listed(VenueType::PostedRates)) => match details.cash_type {
-                CashType::DemandDeposit => {
-                    if let Some(bank) = agents.banks.get(&details.issuer) {
-                        let base_rate = bps_to_decimal(financial_system.central_bank.policy_rate_bps);
-                        let spread = bps_to_decimal(bank.deposit_spread_bps);
-                        Some((base_rate + spread).to_f64().unwrap_or(0.0))
-                    } else {
-                        None
-                    }
-                }
-                CashType::CentralBankReserves => {
-                    Some(bps_to_decimal(financial_system.central_bank.policy_rate_bps).to_f64().unwrap_or(0.0))
-                }
-                _ => Some(bps_to_decimal(details.interest_bps).to_f64().unwrap_or(0.0)),
-            },
+    pub fn financial_market(&self, id: &InstrumentId) -> Option<&OrderBook> {
+        let symbol = self.inst_to_symbol.get(id)?;
+        self.markets.get(symbol).and_then(|market| match market {
+            MarketType::Financial(m) => Some(&m.book),
             _ => None,
-        }
-    }
-
-    pub fn has_order_book(&self, inst_id: &InstrumentId) -> bool {
-        self.markets.contains_key(inst_id)
-    }
-
-    pub fn register_labour_market(&mut self, market_id: LabourMarketId) {
-        self.labour_markets.entry(market_id).or_insert_with(LabourMarket::default);
+        })
     }
 
     pub fn financial_market_mut(&mut self, id: &InstrumentId) -> Option<&mut OrderBook> {
-        self.markets.get_mut(id).map(|m| &mut m.book)
-    }
-    pub fn financial_market(&self, id: &InstrumentId) -> Option<&OrderBook> {
-        self.markets.get(id).map(|m| &m.book)
-    }
-    pub fn goods_market(&self, id: &GoodId) -> Option<&MarketGeneric<GoodProduct>> {
-        self.goods_markets.get(id)
-    }
-    pub fn goods_market_mut(&mut self, id: &GoodId) -> Option<&mut MarketGeneric<GoodProduct>> {
-        self.goods_markets.get_mut(id)
+        let symbol = self.inst_to_symbol.get(id)?.clone();
+        self.markets.get_mut(&symbol).and_then(|market| match market {
+            MarketType::Financial(m) => Some(&mut m.book),
+            _ => None,
+        })
     }
 
-    pub fn labour_market(&self, id: &LabourMarketId) -> Option<&LabourMarket> {
-        self.labour_markets.get(id)
+    pub fn goods_market_mut(&mut self, id: &GoodId) -> Option<&mut MarketGeneric<GoodProduct>> {
+        let symbol = self.good_to_symbol.get(id)?.clone();
+        self.markets.get_mut(&symbol).and_then(|market| match market {
+            MarketType::Goods(m) => Some(m),
+            _ => None,
+        })
     }
 
     pub fn labour_market_mut(&mut self, id: &LabourMarketId) -> Option<&mut LabourMarket> {
-        self.labour_markets.get_mut(id)
+        let symbol = self.labour_to_symbol.get(id)?.clone();
+        self.markets.get_mut(&symbol).and_then(|market| match market {
+            MarketType::Labour(m) => Some(m),
+            _ => None,
+        })
     }
+    pub fn fair_price_for_good(&self, good_id: &GoodId) -> Option<Money> {
+        self.good_to_symbol.get(good_id).and_then(|symbol| self.markets.get(symbol)).and_then(|market| {
+            if let MarketType::Goods(goods_market) = market { goods_market.pricer.fair_price(good_id) } else { None }
+        })
+    }
+
     pub fn conduct_dutch_auction(
         &mut self, auction_id: &Uuid, instruments: &HashMap<InstrumentId, Instrument>,
     ) -> Vec<Trade> {
         let mut trades = Vec::new();
-        if let Some(auction) = self.open_auctions.get_mut(auction_id) {
-            if auction.status != AuctionStatus::Open || auction.bids.is_empty() {
-                auction.status = AuctionStatus::Closed;
-                return trades;
-            }
-            let government_id = if let Some(instrument) = instruments.get(&auction.instrument_id) {
-                if let InstrumentType::Debt(details) = &instrument.instrument_type {
+        let auction = match self.open_auctions.get_mut(auction_id) {
+            Some(a) => a,
+            None => return trades,
+        };
+
+        if auction.status != AuctionStatus::Open || auction.bids.is_empty() {
+            auction.status = AuctionStatus::Closed;
+            return trades;
+        }
+
+        let (government_id, symbol) = match instruments.get(&auction.instrument_id) {
+            Some(instrument) => {
+                let issuer = if let InstrumentType::Debt(details) = &instrument.instrument_type {
                     details.issuer()
                 } else {
                     auction.status = AuctionStatus::Closed;
                     return trades;
-                }
-            } else {
+                };
+                let symbol = self.inst_to_symbol.get(&instrument.id).cloned().unwrap_or_default();
+                (issuer, symbol)
+            }
+            None => {
                 auction.status = AuctionStatus::Closed;
                 return trades;
-            };
-
-            auction.bids.sort_by(|a, b| b.price.cmp(&a.price));
-
-            let mut quantity_filled: u32 = 0;
-            let mut clearing_price = Money::ZERO;
-            let mut winning_bids: Vec<(AgentId, u32)> = Vec::new();
-
-            for bid in &auction.bids {
-                if quantity_filled >= auction.quantity_offered {
-                    break;
-                }
-                let quantity_to_fill = (auction.quantity_offered - quantity_filled).min(bid.quantity);
-                winning_bids.push((bid.agent_id, quantity_to_fill));
-                quantity_filled += quantity_to_fill;
-                clearing_price = bid.price;
             }
+        };
 
-            if !winning_bids.is_empty() {
-                for (winner_id, quantity) in winning_bids {
-                    trades.push(Trade {
-                        trade_id: Uuid::new_v4(),
-                        market_id: MarketId::Financial(auction.instrument_id),
-                        buyer: winner_id,
-                        seller: government_id,
-                        quantity: quantity as f64,
-                        price: clearing_price,
-                    });
-                }
+        auction.bids.sort_by(|a, b| b.price.cmp(&a.price));
+
+        let mut quantity_filled: u32 = 0;
+        let mut clearing_price = Money::ZERO;
+        let mut winning_bids: Vec<(AgentId, u32)> = Vec::new();
+
+        for bid in &auction.bids {
+            if quantity_filled >= auction.quantity_offered {
+                break;
             }
-            println!(
-                "Auction {} concluded: {} of {} units sold at {:?}",
-                auction.auction_id, quantity_filled, auction.quantity_offered, clearing_price
-            );
-            auction.status = AuctionStatus::Closed;
+            let quantity_to_fill = (auction.quantity_offered - quantity_filled).min(bid.quantity);
+            winning_bids.push((bid.agent_id, quantity_to_fill));
+            quantity_filled += quantity_to_fill;
+            clearing_price = bid.price;
         }
 
+        if !winning_bids.is_empty() {
+            for (winner_id, quantity) in winning_bids {
+                trades.push(Trade {
+                    trade_id: Uuid::new_v4(),
+                    market_id: symbol.clone(),
+                    buyer: winner_id,
+                    seller: government_id,
+                    quantity: quantity as f64,
+                    price: clearing_price,
+                });
+            }
+        }
+        auction.status = AuctionStatus::Closed;
         trades
     }
-    pub fn validate_and_submit_order(
-        &mut self, order: Order, market_id: &MarketId, csd: &CentralSecuritiesDepository,
-    ) -> Result<Vec<Trade>, String> {
-        match market_id {
-            MarketId::Financial(inst_id) => {
-                if csd.is_security(inst_id) {
-                    let market = self
-                        .markets
-                        .get_mut(inst_id)
-                        .ok_or_else(|| format!("Market not found for instrument {}", inst_id))?;
-                    market.book.validate_sell_order(&order, csd, inst_id)?;
-                }
 
-                let market = self
-                    .markets
-                    .get_mut(inst_id)
-                    .ok_or_else(|| format!("Market not found for instrument {}", inst_id))?;
-                Ok(market.book.submit_order(order, market_id))
-            }
-            _ => match market_id {
-                MarketId::Goods(id) => {
-                    let market =
-                        self.goods_markets.get_mut(id).ok_or_else(|| format!("Goods market not found for {}", id))?;
-                    Ok(market.book.submit_order(order, market_id))
+    pub fn validate_and_submit_order(
+        &mut self, order: Order, csd: &CentralSecuritiesDepository,
+    ) -> Result<Vec<Trade>, String> {
+        let symbol = order.market.clone();
+        let market = self.markets.get_mut(&symbol).ok_or_else(|| format!("Market not found for symbol {}", symbol))?;
+
+        match market {
+            MarketType::Financial(mkt) => {
+                if csd.is_security(&mkt.key) {
+                    mkt.book.validate_sell_order(&order, csd, &mkt.key)?;
                 }
-                _ => Ok(vec![]),
-            },
+                return mkt.book.submit_order_with_validation(order, &symbol, csd, &mkt.key);
+            }
+            MarketType::Goods(mkt) => {
+                return Ok(mkt.book.submit_order(order, &symbol));
+            }
+            MarketType::Labour(_) => Err("Use dedicated labour APIs".into()),
         }
     }
 }
 
-fn make_goods_market(key: GoodId) -> MarketGeneric<GoodProduct> {
-    MarketGeneric { key, book: OrderBook::new(), pricer: Arc::new(NoOpPricer), settlement: Arc::new(NoopSettlement) }
-}
-fn make_financial_market(key: InstrumentId) -> MarketGeneric<FinancialProduct> {
-    MarketGeneric { key, book: OrderBook::new(), pricer: Arc::new(NoOpPricer), settlement: Arc::new(NoopSettlement) }
-}
 #[derive(Debug, Clone, PartialEq)]
 struct NoOpPricer;
 impl Pricer<GoodProduct> for NoOpPricer {
@@ -515,69 +490,18 @@ impl Serialize for Exchange {
     where
         S: Serializer,
     {
-        let mut state = serializer.serialize_struct("Exchange", 5)?;
-
-        let markets_books: HashMap<_, _> =
-            self.markets.iter().map(|(k, v)| (*k, Market { book: v.book.clone() })).collect();
-        state.serialize_field("markets", &markets_books)?;
-
+        let mut state = serializer.serialize_struct("Exchange", 2)?;
         state.serialize_field("index", &self.index)?;
-
-        let goods_books: HashMap<_, _> =
-            self.goods_markets.iter().map(|(k, v)| (k, Market { book: v.book.clone() })).collect();
-        state.serialize_field("goods_markets", &goods_books)?;
-
-        state.serialize_field("labour_markets", &self.labour_markets)?;
-
         state.serialize_field("tape", &self.tape)?;
         state.end()
     }
 }
 
-#[derive(Deserialize)]
-pub struct ExchangeData {
-    markets: HashMap<InstrumentId, Market>,
-    index: MarketIndex,
-    goods_markets: HashMap<GoodId, Market>,
-    labour_markets: HashMap<LabourMarketId, LabourMarket>,
-    tape: HashMap<MarketId, Vec<TimedTrade>>,
-}
-
 impl<'de> Deserialize<'de> for Exchange {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let data = ExchangeData::deserialize(deserializer)?;
-
-        let markets = data
-            .markets
-            .into_iter()
-            .map(|(key, market)| {
-                let mut mg = make_financial_market(key);
-                mg.book = market.book;
-                (key, mg)
-            })
-            .collect();
-
-        let goods_markets = data
-            .goods_markets
-            .into_iter()
-            .map(|(key, market)| {
-                let mut mg = make_goods_market(key);
-                mg.book = market.book;
-                (key, mg)
-            })
-            .collect();
-
-        Ok(Exchange {
-            markets,
-            index: data.index,
-            goods_markets,
-            labour_markets: data.labour_markets,
-            open_auctions: HashMap::new(),
-            tape: data.tape,
-            pricing_feeds: None,
-        })
+        Ok(Exchange::default())
     }
 }

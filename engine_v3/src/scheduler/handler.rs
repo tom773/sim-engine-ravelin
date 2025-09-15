@@ -466,9 +466,7 @@ impl StepHandler for DepositServicingHandler {
                                     continue;
                                 }
                                 let (from_bank, to_bank) = match details.cash_type {
-                                    CashType::CentralBankReserves => {
-                                        (fs.central_bank.id, fs.central_bank.id)
-                                    }
+                                    CashType::CentralBankReserves => (fs.central_bank.id, fs.central_bank.id),
                                     CashType::DemandDeposit | CashType::SavingsDeposit => {
                                         (details.issuer, details.issuer)
                                     }
@@ -669,7 +667,13 @@ impl StepHandler for DebtAuctionsHandler {
 
                 let sold_qty: u32 = trades
                     .iter()
-                    .filter(|t| t.market_id == MarketId::Financial(inst_id))
+                    .filter(|t| {
+                        if let Some(inst_symbol) = engine.state.financial_system.exchange.inst_to_symbol.get(&inst_id) {
+                            &t.market_id == inst_symbol
+                        } else {
+                            false
+                        }
+                    })
                     .map(|t| t.quantity as u32)
                     .sum();
 
@@ -694,16 +698,25 @@ impl StepHandler for DebtAuctionsHandler {
                         Money::from(1000)
                     };
 
+                    let inst_symbol = engine
+                        .state
+                        .financial_system
+                        .exchange
+                        .inst_to_symbol
+                        .get(&inst_id)
+                        .cloned()
+                        .unwrap_or_else(|| Symbol(format!("UNKNOWN_{}", inst_id)));
+
                     let last_price = trades
                         .iter()
                         .rev()
-                        .find(|t| t.market_id == MarketId::Financial(inst_id))
+                        .find(|t| t.market_id == inst_symbol)
                         .map(|t| t.price)
                         .unwrap_or(fallback_price);
 
                     trades.push(Trade {
                         trade_id: Uuid::new_v4(),
-                        market_id: MarketId::Financial(inst_id),
+                        market_id: inst_symbol,
                         buyer: engine.state.financial_system.central_bank.id,
                         seller: engine.state.financial_system.government.id,
                         quantity: leftover as f64,

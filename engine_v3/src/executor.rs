@@ -1,6 +1,5 @@
 use crate::registry::DomainRegistry;
 use crate::scheduler::*;
-use chrono::{Datelike, NaiveDate};
 use domains::prelude::*;
 use ordered_float::NotNan;
 use rand::RngCore;
@@ -190,7 +189,7 @@ impl SimulationEngine {
                 ..
             }) = &record.action
             {
-                if let MarketId::Goods(gid) = market_id {
+                if let Some(gid) = self.state.financial_system.exchange.symbol_to_good.get(market_id) {
                     match side {
                         Side::Bid => *posted_buys.entry((*agent_id, *gid)).or_default() += *quantity,
                         Side::Ask => *posted_sells.entry((*agent_id, *gid)).or_default() += *quantity,
@@ -203,9 +202,9 @@ impl SimulationEngine {
         let mut sold: HashMap<(AgentId, GoodId), f64> = HashMap::new();
 
         for trade in &last_tick.trades {
-            if let MarketId::Goods(gid) = trade.market_id {
-                *bought.entry((trade.buyer, gid)).or_default() += trade.quantity;
-                *sold.entry((trade.seller, gid)).or_default() += trade.quantity;
+            if let Some(gid) = self.state.financial_system.exchange.symbol_to_good.get(&trade.market_id) {
+                *bought.entry((trade.buyer, *gid)).or_default() += trade.quantity;
+                *sold.entry((trade.seller, *gid)).or_default() += trade.quantity;
             }
         }
 
@@ -213,14 +212,18 @@ impl SimulationEngine {
         for (agent_id, gid) in posted_buys.keys().map(|(agent, good)| (*agent, *good)) {
             if self.state.agents.consumers.contains_key(&agent_id) {
                 let filled_qty = bought.get(&(agent_id, gid)).copied().unwrap_or(0.0);
-                let anchor = self
-                    .state
-                    .financial_system
-                    .exchange
-                    .fair_price_for_good(&gid)
-                    .map(|m| m.to_f64())
-                    .or_else(|| self.state.market_view(&MarketId::Goods(gid)).and_then(|v| v.last_or_mid()))
-                    .unwrap_or(1.0);
+                let good_symbol = self.state.financial_system.exchange.good_to_symbol.get(&gid).cloned();
+                let anchor = if let Some(symbol) = good_symbol {
+                    self.state
+                        .financial_system
+                        .exchange
+                        .fair_price_for_good(&gid)
+                        .map(|m| m.to_f64())
+                        .or_else(|| self.state.market_view(&symbol).and_then(|v| v.last_or_mid()))
+                        .unwrap_or(1.0)
+                } else {
+                    1.0
+                };
                 consumer_updates.push((agent_id, gid, filled_qty, anchor));
             }
         }
@@ -269,17 +272,27 @@ impl SimulationEngine {
             return;
         };
 
-        let Some(market) = self.state.financial_system.exchange.goods_markets.get(&gid) else {
+        let Some(symbol) = self.state.financial_system.exchange.good_to_symbol.get(&gid) else {
+            tracing::warn!(good = good_name, ?gid, "No symbol found for good");
+            return;
+        };
+
+        let Some(market) = self.state.financial_system.exchange.markets.get(symbol) else {
             tracing::warn!(good = good_name, ?gid, "No market found for good");
             return;
         };
 
-        let book = &market.book;
-
-        tracing::info!(
-            "Order Book for {} - Best Bid: {:?} | Best Ask: {:?} | Bid Lvls: {:?} | Ask Lvls: {:?}", 
-            good_name, book.depth_summary().best_bid, book.depth_summary().best_ask, book.depth_summary().bid_levels, book.depth_summary().ask_levels
-        );
+        if let MarketType::Goods(goods_market) = market {
+            let book = &goods_market.book;
+            tracing::info!(
+                "Order Book for {} - Best Bid: {:?} | Best Ask: {:?} | Bid Lvls: {:?} | Ask Lvls: {:?}",
+                good_name,
+                book.depth_summary().best_bid,
+                book.depth_summary().best_ask,
+                book.depth_summary().bid_levels,
+                book.depth_summary().ask_levels
+            );
+        }
     }
 
     pub fn log_orderbooks(&self, goods: &[&str]) {
@@ -287,49 +300,33 @@ impl SimulationEngine {
             self.log_orderbook_for_good(good);
         }
     }
-    pub fn clear_all_markets(&mut self) -> (Vec<Trade>, HashMap<MarketId, MarketView>) {
+    pub fn clear_all_markets(&mut self) -> (Vec<Trade>, HashMap<Symbol, MarketView>) {
         let mut all_trades = Vec::new();
 
-        let market_ids: Vec<MarketId> = self
-            .state
-            .financial_system
-            .exchange
-            .goods_markets
-            .keys()
-            .map(|id| MarketId::Goods(*id))
-            .chain(self.state.financial_system.exchange.markets.keys().map(|id| MarketId::Financial(*id)))
-            .collect();
+        let market_symbols: Vec<Symbol> = self.state.financial_system.exchange.markets.keys().cloned().collect();
 
-        for market_id in &market_ids {
-            let trades = match market_id {
-                MarketId::Goods(id) => self
-                    .state
-                    .financial_system
-                    .exchange
-                    .goods_markets
-                    .get_mut(id)
-                    .map(|m| {
-                        let trades = m.clear_and_match(market_id);
-                        m.book.bids.clear();
-                        m.book.asks.clear();
-                        trades
-                    })
-                    .unwrap_or_default(),
-                MarketId::Financial(id) => self
-                    .state
-                    .financial_system
-                    .exchange
-                    .markets
-                    .get_mut(id)
-                    .map(|m| m.book.clear_and_match(market_id))
-                    .unwrap_or_default(),
-                MarketId::Labour(_) => vec![],
+        for symbol in &market_symbols {
+            let trades = match self.state.financial_system.exchange.markets.get_mut(symbol) {
+                Some(MarketType::Goods(market)) => {
+                    let trades = market.clear_and_match(symbol);
+                    market.book.bids.clear();
+                    market.book.asks.clear();
+                    trades
+                }
+                Some(MarketType::Financial(market)) => market.book.clear_and_match(symbol),
+                Some(MarketType::Labour(_)) => vec![],
+                None => vec![],
             };
             all_trades.extend(trades);
         }
 
-        let all_snapshots: HashMap<MarketId, MarketView> =
-            market_ids.into_iter().map(|id| (id.clone(), self.state.market_view(&id).unwrap_or_default())).collect();
+        let all_snapshots: HashMap<Symbol, MarketView> = market_symbols
+            .into_iter()
+            .map(|symbol| {
+                let view = self.state.market_view(&symbol).unwrap_or_default();
+                (symbol, view)
+            })
+            .collect();
 
         (all_trades, all_snapshots)
     }
@@ -355,8 +352,15 @@ impl SimulationEngine {
         use rand::seq::SliceRandom;
         let mut effects = Vec::new();
         let beta = 0.5;
-
-        for (_id, market) in self.state.financial_system.exchange.labour_markets.iter_mut() {
+        
+        let mut labour_markets = Vec::new();
+        for (symbol, market) in self.state.financial_system.exchange.markets.iter_mut() {
+            if let MarketType::Labour(labour_market) = market {
+                labour_markets.push((symbol.clone(), labour_market));
+            }
+        }
+        
+        for (_symbol, market) in labour_markets.iter_mut() {
             market.job_applications.retain(|app| {
                 self.state.agents.consumers.get(&app.consumer_id).map_or(false, |c| c.employed_by.is_none())
             });
@@ -420,34 +424,22 @@ impl SimulationEngine {
         effects
     }
 
-    pub fn update_market_history(&mut self, trades: &[Trade], views: &HashMap<MarketId, MarketView>) {
+    pub fn update_market_history(&mut self, trades: &[Trade], views: &HashMap<Symbol, MarketView>) {
         let current_date = self.state.current_date;
         let history = &mut self.state.history;
 
-        for (market_id, snapshot) in views {
-            let market_trades: Vec<&Trade> = trades.iter().filter(|t| &t.market_id == market_id).collect();
+        for (symbol, snapshot) in views {
+            let market_trades: Vec<&Trade> = trades.iter().filter(|t| &t.market_id == symbol).collect();
             let close = market_trades.last().map(|t| t.price.to_f64()).or(snapshot.last);
 
-            let (best_bid, best_ask) = match market_id {
-                MarketId::Financial(inst_id) => self
-                    .state
-                    .financial_system
-                    .exchange
-                    .markets
-                    .get(inst_id)
-                    .map(|m| (m.book.best_bid().map(|p| p.to_f64()), m.book.best_ask().map(|p| p.to_f64())))
-                    .unwrap_or((None, None)),
-
-                MarketId::Goods(good_id) => self
-                    .state
-                    .financial_system
-                    .exchange
-                    .goods_markets
-                    .get(good_id)
-                    .map(|m| (m.book.best_bid().map(|p| p.to_f64()), m.book.best_ask().map(|p| p.to_f64())))
-                    .unwrap_or((None, None)),
-
-                MarketId::Labour(_) => (None, None),
+            let (best_bid, best_ask) = match self.state.financial_system.exchange.markets.get(symbol) {
+                Some(MarketType::Financial(m)) => {
+                    (m.book.best_bid().map(|p| p.to_f64()), m.book.best_ask().map(|p| p.to_f64()))
+                }
+                Some(MarketType::Goods(m)) => {
+                    (m.book.best_bid().map(|p| p.to_f64()), m.book.best_ask().map(|p| p.to_f64()))
+                }
+                _ => (None, None),
             };
 
             let prices = market_trades.iter().map(|t| t.price);
@@ -469,7 +461,7 @@ impl SimulationEngine {
                 spread: best_bid.zip(best_ask).map(|(b, a)| (a - b).max(0.0)),
             };
 
-            history.market_ticks.entry(market_id.clone()).or_default().push_back(tick);
+            history.market_ticks.entry(symbol.clone()).or_default().push_back(tick);
         }
     }
     pub fn get_agent_info(&self, agent_id: &AgentId) -> (String, Option<String>) {
@@ -522,43 +514,50 @@ impl SimulationEngine {
         Ok(effects_to_apply.len())
     }
     pub fn refresh_pricing_feeds(&mut self) {
-        let fs = &mut self.state.financial_system;
+        {
+            let fs = &mut self.state.financial_system;
 
-        if let Ok(mut pr) = fs.pricing_feeds.policy_rate_bps.write() {
-            *pr = fs.central_bank.policy_rate_bps.to_f64().unwrap_or(69.0);
-        }
-        if let Ok(mut d) = fs.pricing_feeds.current_date.write() {
-            *d = self.state.current_date;
-        }
+            if let Ok(mut pr) = fs.pricing_feeds.policy_rate_bps.write() {
+                *pr = fs.central_bank.policy_rate_bps.to_f64().unwrap_or(69.0);
+            }
+            if let Ok(mut d) = fs.pricing_feeds.current_date.write() {
+                *d = self.state.current_date;
+            }
 
-        use std::collections::BTreeMap;
-        let mut points: BTreeMap<NotNan<f64>, f64> = BTreeMap::new();
-        if let Ok(mut yc) = fs.pricing_feeds.yield_curve.write() {
-            yc.date = self.state.current_date;
-            if let Some(treasury_ids) = fs.exchange.index.by_bond_type.get(&BondType::Government) {
-                for inst_id in treasury_ids {
-                    if let (Some(inst), Some(market)) = (fs.instruments.get(inst_id), fs.exchange.markets.get(inst_id))
-                    {
-                        if let InstrumentType::Debt(DebtInstrument::Bond(b)) = &inst.instrument_type {
-                            if let Some(mid) = market.book.mid_price() {
-                                let tenor = b.remaining_tenor_years(self.state.current_date);
-                                let tmp = GovTermStructurePricer::new(
-                                    b.clone(),
-                                    TermStructureMethod::Bootstrapped,
-                                    fs.pricing_feeds.clone(),
-                                );
-                                if let Some(y) = tmp.yield_from_price(inst_id, mid) {
-                                    points.insert(NotNan::new(tenor.max(0.1)).unwrap(), y);
+            use std::collections::BTreeMap;
+            let mut points: BTreeMap<NotNan<f64>, f64> = BTreeMap::new();
+            if let Ok(mut yc) = fs.pricing_feeds.yield_curve.write() {
+                yc.date = self.state.current_date;
+                if let Some(treasury_ids) = fs.exchange.index.by_bond_type.get(&BondType::Government) {
+                    for inst_id in treasury_ids {
+                        if let Some(inst) = fs.instruments.get(inst_id) {
+                            if let Some(symbol) = fs.exchange.inst_to_symbol.get(inst_id) {
+                                if let Some(market) = fs.exchange.markets.get(symbol) {
+                                    if let MarketType::Financial(fin_market) = market {
+                                        if let InstrumentType::Debt(DebtInstrument::Bond(b)) = &inst.instrument_type {
+                                            if let Some(mid) = fin_market.book.mid_price() {
+                                                let tenor = b.remaining_tenor_years(self.state.current_date);
+                                                let tmp = GovTermStructurePricer::new(
+                                                    b.clone(),
+                                                    TermStructureMethod::Bootstrapped,
+                                                    fs.pricing_feeds.clone(),
+                                                );
+                                                if let Some(y) = tmp.yield_from_price(inst_id, mid) {
+                                                    points.insert(NotNan::new(tenor.max(0.1)).unwrap(), y);
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                 }
+                yc.points = points;
             }
-            yc.points = points;
         }
 
-        let prev_wage = fs.pricing_feeds.goods.read().ok().map(|g| g.avg_wage).unwrap_or(0.0);
+        let prev_wage = self.state.financial_system.pricing_feeds.goods.read().ok().map(|g| g.avg_wage).unwrap_or(0.0);
         let mut avg_wage = 0.0;
         let mut n_w = 0usize;
         for (_, f) in &self.state.agents.firms {
@@ -575,7 +574,7 @@ impl SimulationEngine {
         let mut unit_cost_sum: HashMap<GoodId, (f64 /*sum qty*/, f64 /*sum qty*cost*/)> = HashMap::new();
         let mut inv_qty: HashMap<GoodId, f64> = HashMap::new();
 
-        for (_id, inst) in &fs.instruments {
+        for (_id, inst) in &self.state.financial_system.instruments {
             if let InstrumentType::RealAsset(RealAssetType::Inventory { goods, .. }) = &inst.instrument_type {
                 for (gid, item) in goods {
                     let q = item.quantity.max(0.0);
@@ -589,8 +588,9 @@ impl SimulationEngine {
         }
 
         let mut sales_per_day: HashMap<GoodId, f64> = HashMap::new();
-        for (mid, ticks) in &self.state.history.market_ticks {
-            if let MarketId::Goods(gid) = mid {
+        let ticks = self.state.history.market_ticks.clone();
+        for (symbol, ticks) in &ticks {
+            if let Some(gid) = self.state.financial_system.exchange.symbol_to_good.get(symbol) {
                 let mut cnt = 0usize;
                 let mut vol = 0.0;
                 for t in ticks.iter().rev().take(7) {
@@ -604,7 +604,7 @@ impl SimulationEngine {
             }
         }
 
-        if let Ok(mut gm) = fs.pricing_feeds.goods.write() {
+        if let Ok(mut gm) = self.state.financial_system.pricing_feeds.goods.write() {
             gm.last_avg_wage = prev_wage;
             gm.avg_wage = avg_wage;
             gm.per_good.clear();
@@ -626,18 +626,6 @@ impl SimulationEngine {
             }
         }
     }
-}
-
-fn _is_last_day_of_month(date: NaiveDate) -> bool {
-    date.month() != (date + chrono::Duration::days(1)).month()
-}
-fn _is_coupon_date(date: NaiveDate, bond: &BondDetails) -> bool {
-    if bond.frequency == 0 {
-        return false;
-    }
-    let months_since_issue =
-        ((date.year() - bond.issue_date.year()) * 12 + date.month() as i32 - bond.issue_date.month() as i32) as u32;
-    date.day() == bond.issue_date.day() && months_since_issue > 0 && months_since_issue % (12 / bond.frequency) == 0
 }
 
 pub fn run_simulation(engine: &mut SimulationEngine) -> Vec<TickExecutionResult> {

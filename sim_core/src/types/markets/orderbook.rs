@@ -1,44 +1,11 @@
 use crate::{prelude::*, types::money::Money};
+use rust_decimal::Decimal;
+use rust_decimal_macros::dec;
 use serde::ser::{SerializeMap, Serializer};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-use uuid::Uuid;
-use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
 use std::str::FromStr;
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum MarketId {
-    Financial(InstrumentId),
-    Goods(GoodId),
-    Labour(LabourMarketId),
-}
-
-impl std::fmt::Display for MarketId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            MarketId::Financial(id) => write!(f, "Financial:{}", id),
-            MarketId::Goods(id) => write!(f, "Goods:{}", id),
-            MarketId::Labour(id) => write!(f, "Labour:{}", id),
-        }
-    }
-}
-
-impl std::str::FromStr for MarketId {
-    type Err = String;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if let Some(rest) = s.strip_prefix("Financial:") {
-            return rest.parse::<InstrumentId>().map(MarketId::Financial).map_err(|e| e.to_string());
-        }
-        if let Some(rest) = s.strip_prefix("Goods:") {
-            return rest.parse::<GoodId>().map(MarketId::Goods).map_err(|e| e.to_string());
-        }
-        if let Some(rest) = s.strip_prefix("Labour:") {
-            return rest.parse::<LabourMarketId>().map(MarketId::Labour).map_err(|e| e.to_string());
-        }
-        Err(format!("Unrecognized MarketId format: {}", s))
-    }
-}
+use uuid::Uuid;
 
 pub fn decimal_map_as_money<S>(m: &HashMap<Decimal, f64>, s: S) -> Result<S::Ok, S::Error>
 where
@@ -79,7 +46,7 @@ pub struct MarketSnapshot {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Trade {
     pub trade_id: Uuid,
-    pub market_id: MarketId,
+    pub market_id: Symbol, // Changed from MarketId
     pub buyer: AgentId,
     pub seller: AgentId,
     pub quantity: f64,
@@ -97,7 +64,6 @@ pub enum OrderType {
     Limit,
     Market,
 }
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Order {
     pub id: Uuid,
@@ -106,6 +72,7 @@ pub struct Order {
     pub quantity: f64,
     pub price: Option<Money>,
     pub order_type: OrderType,
+    pub market: Symbol, // NEW: target market
 }
 
 impl Default for Order {
@@ -117,6 +84,7 @@ impl Default for Order {
             quantity: 0.0,
             price: None,
             order_type: OrderType::Market,
+            market: Symbol("".to_string()),
         }
     }
 }
@@ -124,9 +92,9 @@ impl Default for Order {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 pub struct OrderBook {
     #[serde(with = "order_book_side_serde")]
-    pub bids: BTreeMap<Decimal, Vec<Order>>, // Key is now Decimal
+    pub bids: BTreeMap<Decimal, Vec<Order>>,
     #[serde(with = "order_book_side_serde")]
-    pub asks: BTreeMap<Decimal, Vec<Order>>, // Key is now Decimal
+    pub asks: BTreeMap<Decimal, Vec<Order>>,
     pub last_price: Option<Money>,
 }
 
@@ -161,7 +129,7 @@ impl OrderBook {
         self.last_price.or_else(|| self.mid_price())
     }
 
-    pub fn submit_order(&mut self, order: Order, _market_id: &MarketId) -> Vec<Trade> {
+    pub fn submit_order(&mut self, order: Order, market_id: &Symbol) -> Vec<Trade> {
         match order.order_type {
             OrderType::Limit => {
                 self.add_to_book(order);
@@ -169,13 +137,13 @@ impl OrderBook {
             }
             OrderType::Market => {
                 let mut trades = Vec::new();
-                self.match_order(order, &mut trades, _market_id);
+                self.match_order(order, &mut trades, market_id);
                 trades
             }
         }
     }
 
-    fn match_order(&mut self, mut incoming_order: Order, trades: &mut Vec<Trade>, market_id: &MarketId) {
+    fn match_order(&mut self, mut incoming_order: Order, trades: &mut Vec<Trade>, market_id: &Symbol) {
         match incoming_order.side {
             Side::Bid => self.match_bid(&mut incoming_order, trades, market_id),
             Side::Ask => self.match_ask(&mut incoming_order, trades, market_id),
@@ -189,7 +157,7 @@ impl OrderBook {
         }
     }
 
-    fn match_bid(&mut self, incoming_bid: &mut Order, trades: &mut Vec<Trade>, market_id: &MarketId) {
+    fn match_bid(&mut self, incoming_bid: &mut Order, trades: &mut Vec<Trade>, market_id: &Symbol) {
         let mut asks_to_remove = Vec::new();
         for (ask_price_decimal, ask_queue) in self.asks.iter_mut() {
             let ask_price = Money(*ask_price_decimal);
@@ -239,7 +207,7 @@ impl OrderBook {
         }
     }
 
-    fn match_ask(&mut self, incoming_ask: &mut Order, trades: &mut Vec<Trade>, market_id: &MarketId) {
+    fn match_ask(&mut self, incoming_ask: &mut Order, trades: &mut Vec<Trade>, market_id: &Symbol) {
         let mut bids_to_remove = Vec::new();
         for (bid_price_decimal, bid_queue) in self.bids.iter_mut().rev() {
             let bid_price = Money(*bid_price_decimal);
@@ -317,24 +285,13 @@ impl OrderBook {
         let best_bid = self.best_bid();
         let best_ask = self.best_ask();
 
-        let bid_size_at_best = best_bid
-            .and_then(|price| bid_levels.get(&price.0).copied())
-            .unwrap_or(0.0);
-        let ask_size_at_best = best_ask
-            .and_then(|price| ask_levels.get(&price.0).copied())
-            .unwrap_or(0.0);
+        let bid_size_at_best = best_bid.and_then(|price| bid_levels.get(&price.0).copied()).unwrap_or(0.0);
+        let ask_size_at_best = best_ask.and_then(|price| ask_levels.get(&price.0).copied()).unwrap_or(0.0);
 
-        MarketDepthSummary {
-            best_bid,
-            best_ask,
-            bid_size_at_best,
-            ask_size_at_best,
-            bid_levels,
-            ask_levels,
-        }
+        MarketDepthSummary { best_bid, best_ask, bid_size_at_best, ask_size_at_best, bid_levels, ask_levels }
     }
 
-    pub fn clear_and_match(&mut self, market_id: &MarketId) -> Vec<Trade> {
+    pub fn clear_and_match(&mut self, market_id: &Symbol) -> Vec<Trade> {
         let trades = self.match_to_completion(market_id, |_, ask_price| ask_price);
 
         self.bids.clear();
@@ -342,30 +299,30 @@ impl OrderBook {
 
         trades
     }
-    
+
     pub fn match_to_completion(
-        &mut self, market_id: &MarketId, choose_price: impl Fn(Money, Money) -> Money,
+        &mut self, market_id: &Symbol, choose_price: impl Fn(Money, Money) -> Money,
     ) -> Vec<Trade> {
         let mut trades = Vec::new();
         loop {
             let best_bid_price = match self.bids.keys().next_back() {
                 Some(p) => *p,
-                None => break, // No bids, can't cross
+                None => break,
             };
             let best_ask_price = match self.asks.keys().next() {
                 Some(p) => *p,
-                None => break, // No asks, can't cross
+                None => break,
             };
 
             if best_bid_price < best_ask_price {
-                break; // Book is no longer crossed
+                break;
             }
 
             let bid_queue = self.bids.get_mut(&best_bid_price).unwrap();
-            let mut bid = bid_queue.remove(0); // FIFO
+            let mut bid = bid_queue.remove(0);
 
             let ask_queue = self.asks.get_mut(&best_ask_price).unwrap();
-            let mut ask = ask_queue.remove(0); // FIFO
+            let mut ask = ask_queue.remove(0);
 
             let trade_qty = bid.quantity.min(ask.quantity);
             let trade_price = choose_price(Money(best_bid_price), Money(best_ask_price));
@@ -384,10 +341,10 @@ impl OrderBook {
             ask.quantity -= trade_qty;
 
             if bid.quantity > 1e-9 {
-                bid_queue.insert(0, bid); // Re-insert at the front
+                bid_queue.insert(0, bid);
             }
             if ask.quantity > 1e-9 {
-                ask_queue.insert(0, ask); // Re-insert at the front
+                ask_queue.insert(0, ask);
             }
 
             if bid_queue.is_empty() {
@@ -399,7 +356,7 @@ impl OrderBook {
         }
         trades
     }
-    
+
     pub fn validate_sell_order(
         &self, order: &Order, csd: &CentralSecuritiesDepository, instrument_id: &InstrumentId,
     ) -> Result<(), String> {
@@ -422,7 +379,7 @@ impl OrderBook {
     }
 
     pub fn submit_order_with_validation(
-        &mut self, order: Order, market_id: &MarketId, csd: &CentralSecuritiesDepository, instrument_id: &InstrumentId,
+        &mut self, order: Order, market_id: &Symbol, csd: &CentralSecuritiesDepository, instrument_id: &InstrumentId,
     ) -> Result<Vec<Trade>, String> {
         self.validate_sell_order(&order, csd, instrument_id)?;
 
@@ -441,8 +398,7 @@ mod order_book_side_serde {
     where
         S: Serializer,
     {
-        let transformed_map: BTreeMap<String, &Vec<Order>> =
-            map.iter().map(|(k, v)| (k.to_string(), v)).collect();
+        let transformed_map: BTreeMap<String, &Vec<Order>> = map.iter().map(|(k, v)| (k.to_string(), v)).collect();
         transformed_map.serialize(serializer)
     }
 
@@ -453,16 +409,9 @@ mod order_book_side_serde {
         let map = BTreeMap::<String, Vec<Order>>::deserialize(deserializer)?;
         map.into_iter()
             .map(|(k, v)| {
-                let decimal = Decimal::from_str(&k)
-                    .map_err(|_| serde::de::Error::custom("Invalid Decimal format"))?;
+                let decimal = Decimal::from_str(&k).map_err(|_| serde::de::Error::custom("Invalid Decimal format"))?;
                 Ok((decimal, v))
             })
             .collect()
-    }
-}
-
-impl From<OrderBook> for Market {
-    fn from(book: OrderBook) -> Self {
-        Self { book }
     }
 }

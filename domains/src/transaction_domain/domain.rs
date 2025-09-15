@@ -65,9 +65,13 @@ impl Domain for TransactionsDomain {
                 quantity,
                 ask_price,
             }) => {
+                let market_id = match context.state.financial_system.exchange.good_to_symbol.get(good_id) {
+                    Some(s) => s.clone(),
+                    None => return Some(ResolutionResult::failure(vec![format!("No market for good {:?}", good_id)])),
+                };
                 vec![SimAction::Transaction(TransactionAction::PostMarketOrder {
                     agent_id: *agent_id,
-                    market_id: MarketId::Goods(*good_id),
+                    market_id,
                     side: Side::Ask,
                     quantity: *quantity,
                     price: Some(Money::from_f64(*ask_price).unwrap_or_default()),
@@ -81,9 +85,13 @@ impl Domain for TransactionsDomain {
                 quantity,
                 max_price,
             }) => {
+                let market_id = match context.state.financial_system.exchange.good_to_symbol.get(good_id) {
+                    Some(s) => s.clone(),
+                    None => return Some(ResolutionResult::failure(vec![format!("No market for good {:?}", good_id)])),
+                };
                 vec![SimAction::Transaction(TransactionAction::PostMarketOrder {
                     agent_id: *agent_id,
-                    market_id: MarketId::Goods(*good_id),
+                    market_id,
                     side: Side::Bid,
                     quantity: *quantity,
                     price: Some(Money::from_f64(*max_price).unwrap_or_default()),
@@ -100,6 +108,10 @@ impl Domain for TransactionsDomain {
                     .ok_or_else(|| ResolutionResult::failure(vec!["Consumer not found".to_string()]))
                     .unwrap();
 
+                let market_id = match context.state.financial_system.exchange.good_to_symbol.get(good_id) {
+                    Some(s) => s.clone(),
+                    None => return Some(ResolutionResult::failure(vec![format!("No market for good {:?}", good_id)])),
+                };
                 let goods_config = &context.state.config.goods;
 
                 let anchor = context
@@ -108,7 +120,7 @@ impl Domain for TransactionsDomain {
                     .exchange
                     .fair_price_for_good(good_id)
                     .map(|m| m.to_f64())
-                    .or_else(|| context.state.market_view(&MarketId::Goods(*good_id)).and_then(|v| v.last_or_mid()))
+                    .or_else(|| context.state.market_view(&market_id).and_then(|v| v.last_or_mid()))
                     .unwrap_or(1.0);
 
                 let mut limit_price = consumer
@@ -129,7 +141,7 @@ impl Domain for TransactionsDomain {
 
                 vec![SimAction::Transaction(TransactionAction::PostMarketOrder {
                     agent_id: *agent_id,
-                    market_id: MarketId::Goods(*good_id),
+                    market_id,
                     side: Side::Bid,
                     quantity: quantity_to_buy,
                     price: Some(Money::from_f64(limit_price).unwrap_or_default()),
@@ -215,86 +227,19 @@ impl Domain for TransactionsDomain {
     }
 
     fn settle_trade(&self, trade: &Trade, state: &SimState) -> DomainResult {
-        match &trade.market_id {
-            MarketId::Financial(inst_id) => {
-                let mut effects = Vec::new();
+        let fs = &state.financial_system;
+        if let Some(inst_id) = fs.exchange.symbol_to_inst.get(&trade.market_id).copied() {
+            let mut effects = Vec::new();
 
-                if trade.buyer == state.financial_system.central_bank.id
-                    && trade.seller == state.financial_system.government.id
-                {
-                    let instruction = SettlementInstruction {
-                        instruction_id: Uuid::new_v4(),
-                        trade_id: trade.trade_id,
-                        seller: trade.seller,
-                        buyer: trade.buyer,
-                        instrument_id: *inst_id,
-                        quantity: trade.quantity,
-                        cash_amount: (trade.price * trade.quantity).to_f64(),
-                        settlement_date: state.current_date,
-                        status: SettlementStatus::Pending,
-                    };
-                    effects.push(StateEffect::Financial(FinancialEffect::RecordSettlementInstruction(instruction)));
-
-                    let payment_amount = (trade.price * trade.quantity).to_f64();
-                    if let Some((_tga_id, _)) = state.financial_system.find_government_tga_account() {
-                        let payment = PaymentInstruction {
-                            id: Uuid::new_v4(),
-                            from_bank: state.financial_system.central_bank.id,
-                            to_bank: state.financial_system.central_bank.id,
-                            payer: state.financial_system.central_bank.id,
-                            payee: state.financial_system.government.id,
-                            amount: payment_amount,
-                            context: TransactionContext::TradeSettlement { trade_id: trade.trade_id },
-                            priority: PaymentPriority::Urgent,
-                            earliest_release_tick: state.ticknum,
-                            deadline_tick: state.ticknum + 1,
-                        };
-                        effects.push(StateEffect::Financial(FinancialEffect::QueuePayment(payment)));
-                    } else {
-                        let tga_instrument = Instrument::cash(
-                            InstrumentId(Uuid::new_v4()),
-                            state.financial_system.central_bank.id,
-                            CashType::TreasuryGeneralAccount,
-                            Currency::USD,
-                            dec!(0),
-                        )
-                        .build();
-                        effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument {
-                            instrument: tga_instrument,
-                            creditor: state.financial_system.government.id,
-                            debtor: state.financial_system.central_bank.id,
-                            quantity: payment_amount,
-                        }));
-                    }
-                    return DomainResult::success(effects);
-                }
-
-                let (_, from_bank) = match state.financial_system.find_agent_liquid_account(&trade.buyer) {
-                    Some((_, bank_id)) => ((), bank_id),
-                    None => {
-                        return DomainResult::failure(vec![format!(
-                            "Could not find liquid account for buyer {}",
-                            trade.buyer
-                        )]);
-                    }
-                };
-
-                let (_, to_bank) = match state.financial_system.find_agent_liquid_account(&trade.seller) {
-                    Some((_, bank_id)) => ((), bank_id),
-                    None => {
-                        return DomainResult::failure(vec![format!(
-                            "Could not find liquid account for seller {}",
-                            trade.seller
-                        )]);
-                    }
-                };
-
+            if trade.buyer == state.financial_system.central_bank.id
+                && trade.seller == state.financial_system.government.id
+            {
                 let instruction = SettlementInstruction {
                     instruction_id: Uuid::new_v4(),
                     trade_id: trade.trade_id,
                     seller: trade.seller,
                     buyer: trade.buyer,
-                    instrument_id: *inst_id,
+                    instrument_id: inst_id,
                     quantity: trade.quantity,
                     cash_amount: (trade.price * trade.quantity).to_f64(),
                     settlement_date: state.current_date,
@@ -302,79 +247,143 @@ impl Domain for TransactionsDomain {
                 };
                 effects.push(StateEffect::Financial(FinancialEffect::RecordSettlementInstruction(instruction)));
 
-                effects.push(StateEffect::Financial(FinancialEffect::QueuePayment(PaymentInstruction {
-                    id: Uuid::new_v4(),
-                    from_bank,
-                    to_bank,
-                    payer: trade.buyer,
-                    payee: trade.seller,
-                    amount: (trade.price * trade.quantity).to_f64(),
-                    context: TransactionContext::TradeSettlement { trade_id: trade.trade_id },
-                    priority: PaymentPriority::Normal,
-                    earliest_release_tick: state.ticknum,
-                    deadline_tick: state.ticknum + 10,
-                })));
-
-                DomainResult::success(effects)
+                let payment_amount = (trade.price * trade.quantity).to_f64();
+                if let Some((_tga_id, _)) = state.financial_system.find_government_tga_account() {
+                    let payment = PaymentInstruction {
+                        id: Uuid::new_v4(),
+                        from_bank: state.financial_system.central_bank.id,
+                        to_bank: state.financial_system.central_bank.id,
+                        payer: state.financial_system.central_bank.id,
+                        payee: state.financial_system.government.id,
+                        amount: payment_amount,
+                        context: TransactionContext::TradeSettlement { trade_id: trade.trade_id },
+                        priority: PaymentPriority::Urgent,
+                        earliest_release_tick: state.ticknum,
+                        deadline_tick: state.ticknum + 1,
+                    };
+                    effects.push(StateEffect::Financial(FinancialEffect::QueuePayment(payment)));
+                } else {
+                    let tga_instrument = Instrument::cash(
+                        InstrumentId(Uuid::new_v4()),
+                        state.financial_system.central_bank.id,
+                        CashType::TreasuryGeneralAccount,
+                        Currency::USD,
+                        dec!(0),
+                    )
+                    .build();
+                    effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument {
+                        instrument: tga_instrument,
+                        creditor: state.financial_system.government.id,
+                        debtor: state.financial_system.central_bank.id,
+                        quantity: payment_amount,
+                    }));
+                }
+                return DomainResult::success(effects);
             }
 
-            MarketId::Goods(good_id) => {
-                let mut effects = vec![];
-                let revenue = (trade.price * trade.quantity).to_f64();
-                let unit_cost = state
-                    .financial_system
-                    .get_agent_inventory(&trade.seller)
-                    .get(good_id)
-                    .map(|it| it.unit_cost.to_f64())
-                    .unwrap_or(0.0);
-                let cogs = unit_cost * trade.quantity;
+            let (_, from_bank) = match state.financial_system.find_agent_liquid_account(&trade.buyer) {
+                Some((_, bank_id)) => ((), bank_id),
+                None => {
+                    return DomainResult::failure(vec![format!(
+                        "Could not find liquid account for buyer {}",
+                        trade.buyer
+                    )]);
+                }
+            };
 
-                effects.push(StateEffect::Agent(AgentEffect::UpdateRevenue { id: trade.seller, revenue }));
-                effects.push(StateEffect::Agent(AgentEffect::RecordCogs { id: trade.seller, amount: cogs }));
+            let (_, to_bank) = match state.financial_system.find_agent_liquid_account(&trade.seller) {
+                Some((_, bank_id)) => ((), bank_id),
+                None => {
+                    return DomainResult::failure(vec![format!(
+                        "Could not find liquid account for seller {}",
+                        trade.seller
+                    )]);
+                }
+            };
 
-                effects.push(StateEffect::Inventory(InventoryEffect::RemoveInventory {
-                    owner: trade.seller,
-                    good_id: *good_id,
-                    quantity: trade.quantity,
-                }));
+            let instruction = SettlementInstruction {
+                instruction_id: Uuid::new_v4(),
+                trade_id: trade.trade_id,
+                seller: trade.seller,
+                buyer: trade.buyer,
+                instrument_id: inst_id,
+                quantity: trade.quantity,
+                cash_amount: (trade.price * trade.quantity).to_f64(),
+                settlement_date: state.current_date,
+                status: SettlementStatus::Pending,
+            };
+            effects.push(StateEffect::Financial(FinancialEffect::RecordSettlementInstruction(instruction)));
 
-                effects.push(StateEffect::Inventory(InventoryEffect::AddInventory {
-                    owner: trade.buyer,
-                    good_id: *good_id,
-                    quantity: trade.quantity,
-                    unit_cost: trade.price.to_f64(),
-                }));
+            effects.push(StateEffect::Financial(FinancialEffect::QueuePayment(PaymentInstruction {
+                id: Uuid::new_v4(),
+                from_bank,
+                to_bank,
+                payer: trade.buyer,
+                payee: trade.seller,
+                amount: (trade.price * trade.quantity).to_f64(),
+                context: TransactionContext::TradeSettlement { trade_id: trade.trade_id },
+                priority: PaymentPriority::Normal,
+                earliest_release_tick: state.ticknum,
+                deadline_tick: state.ticknum + 10,
+            })));
 
-                let (_, buyer_bank) = state
-                    .financial_system
-                    .find_agent_liquid_account(&trade.buyer)
-                    .ok_or_else(|| "Buyer has no liquid account".to_string())
-                    .unwrap();
+            DomainResult::success(effects)
+        } else if let Some(good_id) = fs.exchange.symbol_to_good.get(&trade.market_id).copied() {
+            let mut effects = vec![];
+            let revenue = (trade.price * trade.quantity).to_f64();
+            let unit_cost = state
+                .financial_system
+                .get_agent_inventory(&trade.seller)
+                .get(&good_id)
+                .map(|it| it.unit_cost.to_f64())
+                .unwrap_or(0.0);
+            let cogs = unit_cost * trade.quantity;
 
-                let (_, seller_bank) = state
-                    .financial_system
-                    .find_agent_liquid_account(&trade.seller)
-                    .ok_or_else(|| "Seller has no liquid account".to_string())
-                    .unwrap();
+            effects.push(StateEffect::Agent(AgentEffect::UpdateRevenue { id: trade.seller, revenue }));
+            effects.push(StateEffect::Agent(AgentEffect::RecordCogs { id: trade.seller, amount: cogs }));
 
-                let payment = PaymentInstruction {
-                    id: Uuid::new_v4(),
-                    from_bank: buyer_bank,
-                    to_bank: seller_bank,
-                    payer: trade.buyer,
-                    payee: trade.seller,
-                    amount: (trade.price * trade.quantity).to_f64(),
-                    context: TransactionContext::GoodsPurchase { market_id: trade.market_id.clone() },
-                    priority: PaymentPriority::Normal,
-                    earliest_release_tick: state.ticknum,
-                    deadline_tick: state.ticknum + 10,
-                };
+            effects.push(StateEffect::Inventory(InventoryEffect::RemoveInventory {
+                owner: trade.seller,
+                good_id,
+                quantity: trade.quantity,
+            }));
 
-                effects.push(StateEffect::Financial(FinancialEffect::QueuePayment(payment)));
-                DomainResult::success(effects)
-            }
+            effects.push(StateEffect::Inventory(InventoryEffect::AddInventory {
+                owner: trade.buyer,
+                good_id,
+                quantity: trade.quantity,
+                unit_cost: trade.price.to_f64(),
+            }));
 
-            MarketId::Labour(_) => DomainResult::empty(),
+            let (_, buyer_bank) = state
+                .financial_system
+                .find_agent_liquid_account(&trade.buyer)
+                .ok_or_else(|| "Buyer has no liquid account".to_string())
+                .unwrap();
+
+            let (_, seller_bank) = state
+                .financial_system
+                .find_agent_liquid_account(&trade.seller)
+                .ok_or_else(|| "Seller has no liquid account".to_string())
+                .unwrap();
+
+            let payment = PaymentInstruction {
+                id: Uuid::new_v4(),
+                from_bank: buyer_bank,
+                to_bank: seller_bank,
+                payer: trade.buyer,
+                payee: trade.seller,
+                amount: (trade.price * trade.quantity).to_f64(),
+                context: TransactionContext::GoodsPurchase { market_id: trade.market_id.clone() },
+                priority: PaymentPriority::Normal,
+                earliest_release_tick: state.ticknum,
+                deadline_tick: state.ticknum + 10,
+            };
+
+            effects.push(StateEffect::Financial(FinancialEffect::QueuePayment(payment)));
+            DomainResult::success(effects)
+        } else {
+            DomainResult::empty()
         }
     }
 
@@ -464,10 +473,10 @@ impl TransactionsDomain {
     }
 
     fn execute_market_order(
-        &self, agent_id: AgentId, market_id: MarketId, side: Side, quantity: f64, price: Option<Money>,
+        &self, agent_id: AgentId, market_id: Symbol, side: Side, quantity: f64, price: Option<Money>,
         order_type: OrderType,
     ) -> DomainResult {
-        let order = Order { id: Uuid::new_v4(), agent_id, side, quantity, price, order_type };
+        let order = Order { id: Uuid::new_v4(), agent_id, side, quantity, price, order_type, market: market_id.clone() };
         let effect = StateEffect::Market(MarketEffect::PlaceOrderInBook { market_id, order });
         DomainResult::success(vec![effect])
     }
@@ -494,7 +503,6 @@ impl TransactionsDomain {
     ) -> Vec<SimAction> {
         let fs = &state.financial_system;
         let mut actions = vec![];
-        let _current_date = state.current_date;
 
         let on_the_run_ids: Vec<InstrumentId> = fs
             .exchange
@@ -518,6 +526,11 @@ impl TransactionsDomain {
             .unwrap_or_default();
 
         for inst_id in on_the_run_ids {
+            let market_id = match fs.exchange.inst_to_symbol.get(&inst_id) {
+                Some(s) => s.clone(),
+                None => continue,
+            };
+
             if let Some(inst) = fs.instruments.get(&inst_id) {
                 if let Some(details) = inst.instrument_type.as_bond() {
                     let pricer = GovTermStructurePricer::new(
@@ -537,7 +550,7 @@ impl TransactionsDomain {
                     if bid_price > Money::ZERO {
                         actions.push(SimAction::Transaction(TransactionAction::PostMarketOrder {
                             agent_id,
-                            market_id: MarketId::Financial(inst_id),
+                            market_id: market_id.clone(),
                             side: Side::Bid,
                             quantity,
                             price: Some(bid_price),
@@ -547,7 +560,7 @@ impl TransactionsDomain {
                     if ask_price > Money::ZERO {
                         actions.push(SimAction::Transaction(TransactionAction::PostMarketOrder {
                             agent_id,
-                            market_id: MarketId::Financial(inst_id),
+                            market_id,
                             side: Side::Ask,
                             quantity,
                             price: Some(ask_price),

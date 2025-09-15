@@ -4,10 +4,10 @@ use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum MarketEffect {
-    PlaceOrderInBook { market_id: MarketId, order: Order },
+    PlaceOrderInBook { market_id: Symbol, order: Order },
     ExecuteTrade(Trade),
-    UpdatePrice { market_id: MarketId, new_price: f64 },
-    ClearMarket { market_id: MarketId },
+    UpdatePrice { market_id: Symbol, new_price: f64 },
+    ClearMarket { market_id: Symbol },
 
     UpdateLabourMarket { market_id: LabourMarketId, update: LabourMarketUpdate },
     ClearLabourMarketOrders { market_id: LabourMarketId, filled_applications: Vec<Uuid> },
@@ -42,45 +42,43 @@ impl StateEffectApplicator {
     pub fn apply_market_effect(state: &mut SimState, effect: &MarketEffect) -> Result<(), EffectError> {
         match effect {
             MarketEffect::PlaceOrderInBook { market_id, order } => {
-                match market_id {
-                    MarketId::Goods(id) => {
-                        let market = state
-                            .financial_system
-                            .exchange
-                            .goods_market_mut(id)
-                            .ok_or_else(|| EffectError::MarketNotFound { market: format!("{:?}", market_id) })?;
-                        market.book.submit_order(order.clone(), market_id);
-                    }
-                    MarketId::Financial(inst_id) => {
-                        let order_book = state
-                            .financial_system
-                            .exchange
-                            .financial_market_mut(inst_id)
-                            .ok_or_else(|| EffectError::MarketNotFound { market: format!("{:?}", inst_id) })?;
-
-                        order_book.submit_order(order.clone(), market_id);
-                    }
-                    MarketId::Labour(_) => {
-                        return Err(EffectError::InvalidState(
-                            "Cannot place direct orders in a labour market".to_string(),
-                        ));
-                    }
+                let exchange = &mut state.financial_system.exchange;
+                if let Some(good_id) = exchange.symbol_to_good.get(market_id).copied() {
+                    let market = exchange
+                        .goods_market_mut(&good_id)
+                        .ok_or_else(|| EffectError::MarketNotFound { market: market_id.to_string() })?;
+                    market.book.submit_order(order.clone(), market_id);
+                } else if let Some(inst_id) = exchange.symbol_to_inst.get(market_id).copied() {
+                    let order_book = exchange
+                        .financial_market_mut(&inst_id)
+                        .ok_or_else(|| EffectError::MarketNotFound { market: market_id.to_string() })?;
+                    order_book.submit_order(order.clone(), market_id);
+                } else if exchange.labour_market_mut(&market_id.0.parse().unwrap()).is_some() {
+                     return Err(EffectError::InvalidState(
+                        "Cannot place direct orders in a labour market".to_string(),
+                    ));
+                } else {
+                    return Err(EffectError::MarketNotFound { market: market_id.to_string() });
                 }
                 Ok(())
             }
             MarketEffect::ExecuteTrade(_trade) => Ok(()),
             MarketEffect::UpdatePrice { .. } => Ok(()),
             MarketEffect::ClearMarket { market_id } => {
-                let book = match market_id {
-                    MarketId::Goods(id) => state.financial_system.exchange.goods_market_mut(id).map(|m| &mut m.book),
-                    MarketId::Financial(id) => state.financial_system.exchange.financial_market_mut(id),
-                    MarketId::Labour(_) => {
-                        return Err(EffectError::InvalidState(
-                            "ClearMarket is not applicable to labour markets.".to_string(),
-                        ));
-                    }
-                }
-                .ok_or_else(|| EffectError::MarketNotFound { market: format!("{:?}", market_id) })?;
+                let exchange = &mut state.financial_system.exchange;
+                let book = if let Some(good_id) = exchange.symbol_to_good.get(market_id).copied() {
+                    exchange.goods_market_mut(&good_id).map(|m| &mut m.book)
+                } else if let Some(inst_id) = exchange.symbol_to_inst.get(market_id).copied() {
+                    exchange.financial_market_mut(&inst_id)
+                } else if exchange.labour_to_symbol.values().any(|s| s == market_id) {
+                     return Err(EffectError::InvalidState(
+                        "ClearMarket is not applicable to labour markets.".to_string(),
+                    ));
+                } else {
+                    None
+                };
+
+                let book = book.ok_or_else(|| EffectError::MarketNotFound { market: market_id.to_string() })?;
                 book.bids.clear();
                 book.asks.clear();
                 Ok(())

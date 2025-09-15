@@ -36,7 +36,7 @@ pub enum SimEvent {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MatchedTradeEvent {
     pub trade_id: Uuid,
-    pub market_id: MarketId,
+    pub market_id: Symbol,
     pub buyer_id: AgentId,
     pub seller_id: AgentId,
     pub quantity: f64,
@@ -167,7 +167,7 @@ pub enum OrderSide {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MarketActivityEvent {
-    pub market_id: MarketId,
+    pub market_id: Symbol,
     pub activity_type: MarketActivityType,
     pub agent_id: AgentId,
     pub instrument_id: InstrumentId,

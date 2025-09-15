@@ -30,10 +30,12 @@ impl DecisionModel for ProductionFirmDecisionModel {
 
         let mut intentions = Vec::new();
 
-        //self.handle_hiring(firm, state, &mut intentions);
 
         self.force_handle_hiring(firm, state, &mut intentions);
         self.handle_wages(firm, state, &mut intentions);
+        self.handle_input_purchases(firm, state, &mut intentions);
+        self.handle_production(firm, state, &mut intentions);
+        self.handle_sales(firm, state, &mut intentions);
         intentions
     }
 }
@@ -54,8 +56,9 @@ impl ProductionFirmDecisionModel {
             return 0.0;
         };
 
-        let expected_price = state
-            .market_view(&MarketId::Goods(output_good.good_id))
+        let good_symbol = fs.exchange.good_to_symbol.get(&output_good.good_id);
+        let expected_price = good_symbol
+            .and_then(|symbol| state.market_view(symbol))
             .and_then(|v| v.last_or_mid())
             .unwrap_or_else(|| self.target_markup * self.calculate_unit_cost(recipe, state));
 
@@ -78,8 +81,11 @@ impl ProductionFirmDecisionModel {
             .inputs
             .iter()
             .map(|input| {
-                let input_price =
-                    state.market_view(&MarketId::Goods(input.good_id)).and_then(|v| v.last_or_mid()).unwrap_or(1.0);
+                let good_symbol = state.financial_system.exchange.good_to_symbol.get(&input.good_id);
+                let input_price = good_symbol
+                    .and_then(|symbol| state.market_view(symbol))
+                    .and_then(|v| v.last_or_mid())
+                    .unwrap_or(1.0);
 
                 input.quantity * input_price
             })
@@ -93,9 +99,15 @@ impl ProductionFirmDecisionModel {
         let has_open_offer = state
             .financial_system
             .exchange
-            .labour_markets
+            .markets
             .values()
-            .any(|market| market.job_offers.iter().any(|offer| offer.firm_id == firm.id && offer.quantity > 0));
+            .any(|market| {
+                if let MarketType::Labour(lm) = market {
+                    lm.job_offers.iter().any(|offer| offer.firm_id == firm.id && offer.quantity > 0)
+                } else {
+                    false
+                }
+            });
 
         if has_open_offer {
             return;
@@ -123,9 +135,15 @@ impl ProductionFirmDecisionModel {
         let has_open_offer = state
             .financial_system
             .exchange
-            .labour_markets
+            .markets
             .values()
-            .any(|market| market.job_offers.iter().any(|offer| offer.firm_id == firm.id && offer.quantity > 0));
+            .any(|market| {
+                if let MarketType::Labour(lm) = market {
+                    lm.job_offers.iter().any(|offer| offer.firm_id == firm.id && offer.quantity > 0)
+                } else {
+                    false
+                }
+            });
 
         if has_open_offer {
             return;
@@ -290,8 +308,9 @@ impl ProductionFirmDecisionModel {
                     .inputs
                     .iter()
                     .map(|inp| {
-                        let px = state
-                            .market_view(&MarketId::Goods(inp.good_id))
+                        let good_symbol = fs.exchange.good_to_symbol.get(&inp.good_id);
+                        let px = good_symbol
+                            .and_then(|symbol| state.market_view(symbol))
                             .and_then(|v| v.last_or_mid())
                             .unwrap_or(0.0);
                         px * inp.quantity
@@ -352,8 +371,10 @@ impl ProductionFirmDecisionModel {
             markup = markup.clamp(1.01, 5.0);
 
             let unit_cost = item.unit_cost.to_f64();
-            let ref_structural = state.financial_system.exchange.fair_price_for_good(&good_id).map(|m| m.to_f64());
-            let px_hint = state.market_view(&MarketId::Goods(good_id)).and_then(|v| v.last_or_mid());
+            let ref_structural = fs.exchange.fair_price_for_good(&good_id).map(|m| m.to_f64());
+            let good_symbol = fs.exchange.good_to_symbol.get(&good_id);
+            let px_hint = good_symbol.and_then(|symbol| state.market_view(symbol)).and_then(|v| v.last_or_mid());
+
             let anchor = if let Some(px) = px_hint.or(ref_structural) {
                 0.7 * unit_cost * markup + 0.3 * px
             } else {
@@ -422,7 +443,7 @@ impl ProductionFirmDecisionModel {
             }
             let buy_qty = (target - have).max(0.0);
 
-            let ref_struct = state.financial_system.exchange.fair_price_for_good(&input.good_id).map(|m| m.to_f64());
+            let ref_struct = fs.exchange.fair_price_for_good(&input.good_id).map(|m| m.to_f64());
             let inv_cost = inventory.get(&input.good_id).map(|it| it.unit_cost.to_f64());
             let ref_px = inv_cost.or(ref_struct).unwrap_or(0.0);
             let max_price = (ref_px * 1.05).max(0.0);

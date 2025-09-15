@@ -1,9 +1,9 @@
 use crate::prelude::*;
 use crate::types::money::Money;
+use rust_decimal::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use std::collections::HashMap;
-use rust_decimal::prelude::*;
 
 #[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
@@ -55,43 +55,46 @@ impl IncomeStatement {
         self.recompute();
     }
     fn recompute(&mut self) {
-        self.net_income = self.revenue
-            - self.cost_of_goods_sold
-            - self.operating_expenses
-            + self.interest_income
+        self.net_income = self.revenue - self.cost_of_goods_sold - self.operating_expenses + self.interest_income
             - self.interest_expense;
     }
     pub fn gross_margin_rate(&self) -> Decimal {
-        if self.revenue.to_f64().abs() < 1e-9 { Decimal::from_f64(0.0_f64).unwrap() } else {
+        if self.revenue.to_f64().abs() < 1e-9 {
+            Decimal::from_f64(0.0_f64).unwrap()
+        } else {
             (self.revenue - self.cost_of_goods_sold) / self.revenue
         }
     }
 }
 
 fn get_market_price(inst: &Instrument, exchange: &Exchange) -> Option<Money> {
-    if let Some(market) = exchange.markets.get(&inst.id) {
-        if let Some(mid) = market.book.mid_price() {
-            return Some(mid);
-        }
-    }
+    let symbol = exchange.inst_to_symbol.get(&inst.id)?;
 
-    match &inst.instrument_type {
-        InstrumentType::Repo(r) => Some(r.loan_amount),
-        InstrumentType::RealAsset(asset_type) => match asset_type {
-            RealAssetType::Inventory { goods, .. } => {
-                let total: Money = goods.values().map(|item| item.unit_cost * item.quantity).sum();
-                Some(total)
-            }
-            RealAssetType::Property { market_value, .. } => Some(*market_value),
-        },
-        InstrumentType::Cash(_) => Some(Money::from(1 as i64)),
-        InstrumentType::Debt(debt) => match debt {
-            DebtInstrument::Loan(l) => Some(l.outstanding_principal),
-            DebtInstrument::CreditLine(c) => Some(c.drawn_amount),
-            DebtInstrument::TradeCredit(t) => Some(t.amount),
+    if let Some(market) = exchange.markets.get(symbol) {
+        match market {
+            MarketType::Financial(m) => m.book.mid_price(),
+            MarketType::Goods(m) => m.book.mid_price(),
+            MarketType::Labour(_) => None,
+        }
+    } else {
+        match &inst.instrument_type {
+            InstrumentType::Repo(r) => Some(r.loan_amount),
+            InstrumentType::RealAsset(asset_type) => match asset_type {
+                RealAssetType::Inventory { goods, .. } => {
+                    let total: Money = goods.values().map(|item| item.unit_cost * item.quantity).sum();
+                    Some(total)
+                }
+                RealAssetType::Property { market_value, .. } => Some(*market_value),
+            },
+            InstrumentType::Cash(_) => Some(Money::from(1 as i64)),
+            InstrumentType::Debt(debt) => match debt {
+                DebtInstrument::Loan(l) => Some(l.outstanding_principal),
+                DebtInstrument::CreditLine(c) => Some(c.drawn_amount),
+                DebtInstrument::TradeCredit(t) => Some(t.amount),
+                _ => None,
+            },
             _ => None,
-        },
-        _ => None,
+        }
     }
 }
 

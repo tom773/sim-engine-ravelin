@@ -179,22 +179,44 @@ pub struct InstrumentRegistryDto {
 #[derive(Serialize, Clone, Debug)]
 pub struct ExchangeDto {
     #[serde_as(as = "HashMap<DisplayFromStr, _>")]
-    pub markets: HashMap<InstrumentId, Market>,
+    pub markets: HashMap<Symbol, MarketTypeDto>,  // Create a DTO for MarketType
     
     pub index: MarketIndexDto,
-
-    #[serde_as(as = "HashMap<DisplayFromStr, _>")]
-    pub goods_markets: HashMap<GoodId, Market>,
-
-    #[serde_as(as = "HashMap<DisplayFromStr, _>")]
-    pub labour_markets: HashMap<LabourMarketId, LabourMarket>,
     
     #[serde_as(as = "HashMap<DisplayFromStr, _>")]
-    pub tape: HashMap<MarketId, Vec<TimedTrade>>,
-    
+    pub tape: HashMap<Symbol, Vec<TimedTrade>>,
 }
 
+#[derive(Serialize, Clone, Debug)]
+pub enum MarketTypeDto {
+    Financial { book: OrderBook },
+    Goods { book: OrderBook },
+    Labour { market: LabourMarket },
+}
 
+// Update the From implementation around line 220:
+impl From<&Exchange> for ExchangeDto {
+    fn from(exchange: &Exchange) -> Self {
+        let markets_dto = exchange
+            .markets
+            .iter()
+            .map(|(symbol, market_type)| {
+                let dto = match market_type {
+                    MarketType::Financial(m) => MarketTypeDto::Financial { book: m.book.clone() },
+                    MarketType::Goods(m) => MarketTypeDto::Goods { book: m.book.clone() },
+                    MarketType::Labour(m) => MarketTypeDto::Labour { market: m.clone() },
+                };
+                (symbol.clone(), dto)
+            })
+            .collect();
+
+        Self {
+            markets: markets_dto,
+            index: MarketIndexDto::from(&exchange.index),
+            tape: exchange.tape.clone(),
+        }
+    }
+}
 impl From<&MarketIndex> for MarketIndexDto {
     fn from(market_index: &MarketIndex) -> Self {
         let by_rating_and_tenor_dto = market_index
@@ -214,30 +236,6 @@ impl From<&MarketIndex> for MarketIndexDto {
     }
 }
 
-
-impl From<&Exchange> for ExchangeDto {
-    fn from(exchange: &Exchange) -> Self {
-        let markets_dto = exchange
-            .markets
-            .iter()
-            .map(|(id, market_generic)| (*id, market_generic.book.clone().into()))
-            .collect();
-
-        let goods_markets_dto = exchange
-            .goods_markets
-            .iter()
-            .map(|(id, market_generic)| (*id, market_generic.book.clone().into()))
-            .collect();
-
-        Self {
-            markets: markets_dto,
-            index: MarketIndexDto::from(&exchange.index),
-            goods_markets: goods_markets_dto,
-            labour_markets: exchange.labour_markets.clone(),
-            tape: exchange.tape.clone(),
-        }
-    }
-}
 
 #[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize)]

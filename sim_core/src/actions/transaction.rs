@@ -11,7 +11,7 @@ pub enum TransactionAction {
     },
     PostMarketOrder {
         agent_id: AgentId,
-        market_id: MarketId,
+        market_id: Symbol,
         side: Side,
         quantity: f64,
         price: Option<Money>,

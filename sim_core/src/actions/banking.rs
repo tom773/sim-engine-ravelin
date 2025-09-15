@@ -39,7 +39,7 @@ impl BankingAction {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum TransactionContext {
-    GoodsPurchase { market_id: MarketId },
+    GoodsPurchase { market_id: Symbol },
     TradeSettlement { trade_id: Uuid },
     WagePayment { employer: AgentId, employee: AgentId, amount: f64 },
     TaxPayment { payer: AgentId, amount: f64 },

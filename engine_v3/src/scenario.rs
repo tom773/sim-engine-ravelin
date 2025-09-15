@@ -333,7 +333,7 @@ impl Scenario {
                     cpi_weight: good_conf.cpi_weight,
                 },
             );
-            state.financial_system.exchange.register_goods_market(good_id);
+            state.financial_system.exchange.ensure_goods_market(good_id, &good_conf.name);
         }
 
         for recipe_conf in &self.recipes {
@@ -423,7 +423,7 @@ impl Scenario {
         decision_models_map
             .insert(state.financial_system.government.id, Box::new(BasicGovernmentDecisionModel::default()));
 
-        state.financial_system.exchange.register_labour_market(LabourMarketId(Uuid::new_v4()));
+        state.financial_system.exchange.ensure_labour_market(LabourMarketId(Uuid::new_v4()), "General");
 
         let all_instruments = state.financial_system.instruments.clone();
         for (inst_id, inst) in all_instruments.iter() {

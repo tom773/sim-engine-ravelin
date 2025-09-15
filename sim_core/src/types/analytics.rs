@@ -3,14 +3,10 @@ use std::collections::{HashMap, HashSet};
 
 pub trait EconomicAnalytics {
     fn calculate_core_stats(&self) -> CoreEconomicStats;
-
     fn macro_stats(&self) -> MacroStats;
-
-    fn market_view(&self, market_id: &MarketId) -> Option<MarketView>;
-
+    fn market_view(&self, market_id: &Symbol) -> Option<MarketView>;
     fn cpi_view(&self) -> InflationView;
-
-    fn all_market_views(&self) -> HashMap<String, MarketView>;
+    fn all_market_views(&self) -> HashMap<Symbol, MarketView>;
 }
 
 #[derive(Clone, Debug, Default)]
@@ -34,7 +30,7 @@ pub struct CoreEconomicStats {
 }
 
 impl EconomicAnalytics for SimState {
-    fn market_view(&self, market_id: &MarketId) -> Option<MarketView> {
+    fn market_view(&self, market_id: &Symbol) -> Option<MarketView> {
         self.history.market_ticks.get(market_id).map(|ticks| {
             if ticks.is_empty() {
                 return MarketView::default();
@@ -111,11 +107,11 @@ impl EconomicAnalytics for SimState {
         InflationView { cpi: current_cpi, inflation_rate }
     }
 
-    fn all_market_views(&self) -> HashMap<String, MarketView> {
+    fn all_market_views(&self) -> HashMap<Symbol, MarketView> {
         let mut views = HashMap::new();
         for (market_id, _) in &self.history.market_ticks {
             if let Some(market_view) = self.market_view(market_id) {
-                views.insert(market_id.to_string(), market_view);
+                views.insert(market_id.clone(), market_view);
             }
         }
         views
@@ -176,31 +172,31 @@ impl EconomicAnalytics for SimState {
 
     fn calculate_core_stats(&self) -> CoreEconomicStats {
         let fs = &self.financial_system;
-        let _last_tick = self.history.tick_records.back();
 
         let consumer_spending_daily: f64 = self
             .history
             .market_ticks
             .iter()
-            .filter(|(market_id, _)| matches!(market_id, MarketId::Goods(_)))
+            .filter(|(symbol, _)| {
+                fs.exchange.symbol_to_good.contains_key(symbol)
+            })
             .flat_map(|(_, ticks)| ticks.iter())
             .filter(|tick| tick.date == self.current_date)
             .map(|tick| tick.turnover)
             .sum();
 
-        let st = &fs.government.spending_targets;
-        let government_spending_proxy = st.transfers + st.purchases + st.investment + st.debt_service;
-        let gdp = consumer_spending_daily + 0.0 + government_spending_proxy + 0.0;
-        let cpi = self.cpi_view().cpi;
-
-        let ppi = 100.0; // Placeholder until goods catalog confirmed
-
         let job_openings: u32 = self
             .financial_system
             .exchange
-            .labour_markets
+            .markets
             .values()
-            .map(|lm| lm.job_offers.iter().map(|o| o.quantity).sum::<u32>())
+            .filter_map(|market| {
+                if let MarketType::Labour(lm) = market {
+                    Some(lm.job_offers.iter().map(|o| o.quantity).sum::<u32>())
+                } else {
+                    None
+                }
+            })
             .sum();
 
         let employed_count: usize = self.agents.firms.values().map(|f| f.employees.len()).sum();
@@ -229,23 +225,24 @@ impl EconomicAnalytics for SimState {
         let household_debt: f64 = self.agents.consumers.keys().map(|id| fs.get_total_liabilities(id)).sum();
         let corporate_debt: f64 = self.agents.firms.keys().map(|id| fs.get_total_liabilities(id)).sum();
         let government_debt = fs.get_total_liabilities(&fs.government.id);
+
         CoreEconomicStats {
-            gdp,
+            gdp: consumer_spending_daily + 0.0 + fs.government.spending_targets.purchases + 0.0,
             consumption: consumer_spending_daily,
-            cpi,
-            ppi,
+            cpi: self.cpi_view().cpi,
+            ppi: 100.0,
             unemployment_rate,
             labor_force_participation,
             payroll_proxy,
             avg_wage_rate,
             job_openings: job_openings as f64,
-            capacity_utilization: 0.0,  // Placeholder
-            industrial_production: 0.0, // Placeholder
-            credit_growth: 0.0,         // Placeholder
+            capacity_utilization: 0.0,
+            industrial_production: 0.0,
+            credit_growth: 0.0,
             household_debt,
             corporate_debt,
             government_debt,
-            bank_liabilities: 0.0, // Placeholder
+            bank_liabilities: 0.0,
         }
     }
 }

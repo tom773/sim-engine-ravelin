@@ -228,91 +228,98 @@ impl QueryService {
         let state = &engine.state;
         let mut summaries = vec![];
 
-        for (inst_id, market) in &state.financial_system.exchange.markets {
-            let market_id = MarketId::Financial(*inst_id);
-            let market_snapshot = market.snapshot();
+        for (symbol, market) in &state.financial_system.exchange.markets {
+            match market {
+                MarketType::Financial(fin_market) => {
+                    let inst_id = &fin_market.key;
 
-            let yield_last = market.book.last_price.and_then(|price| market.pricer.yield_from_price(inst_id, price));
+                    let yield_last =
+                        fin_market.book.last_price.and_then(|price| fin_market.pricer.yield_from_price(inst_id, price));
 
-            let view = state.market_view(&market_id).unwrap_or_default();
+                    let view = state.market_view(symbol).unwrap_or_default();
 
-            summaries.push(MarketSummaryDto {
-                market_id: market_id.to_string(),
-                market_type: "financial".to_string(),
-                name: state
-                    .financial_system
-                    .instruments
-                    .get(inst_id)
-                    .map_or("Unknown".to_string(), |i| i.type_as_string().to_string()),
-                last_price: view.last.and_then(Rate::from_f64),
-                mid_price: market.book.mid_price().map(|m| m.0),
-                best_bid: market.book.best_bid().map(|m| m.0),
-                best_ask: market.book.best_ask().map(|m| m.0),
-                spread: market.book.spread().map(|m| m.0),
-                volume: view.volume,
-                turnover: view.turnover,
-                depth: Some(market.book.depth_summary().into()),
-                yield_bid: market_snapshot.yield_bid.and_then(Rate::from_f64),
-                yield_ask: market_snapshot.yield_ask.and_then(Rate::from_f64),
-                yield_mid: market_snapshot.yield_mid.and_then(Rate::from_f64),
-                yield_last: yield_last.and_then(Rate::from_f64),
-            });
-        }
+                    summaries.push(MarketSummaryDto {
+                        market_id: symbol.to_string(),
+                        market_type: "financial".to_string(),
+                        name: state
+                            .financial_system
+                            .instruments
+                            .get(inst_id)
+                            .map_or("Unknown".to_string(), |i| i.type_as_string().to_string()),
+                        last_price: view.last.and_then(Rate::from_f64),
+                        mid_price: fin_market.book.mid_price().map(|m| m.0),
+                        best_bid: fin_market.book.best_bid().map(|m| m.0),
+                        best_ask: fin_market.book.best_ask().map(|m| m.0),
+                        spread: fin_market.book.spread().map(|m| m.0),
+                        volume: view.volume,
+                        turnover: view.turnover,
+                        depth: Some(fin_market.book.depth_summary().into()),
+                        yield_bid: fin_market
+                            .book
+                            .best_bid()
+                            .and_then(|px| fin_market.pricer.yield_from_price(inst_id, px))
+                            .and_then(Rate::from_f64),
+                        yield_ask: fin_market
+                            .book
+                            .best_ask()
+                            .and_then(|px| fin_market.pricer.yield_from_price(inst_id, px))
+                            .and_then(Rate::from_f64),
+                        yield_mid: fin_market
+                            .book
+                            .mid_price()
+                            .and_then(|px| fin_market.pricer.yield_from_price(inst_id, px))
+                            .and_then(Rate::from_f64),
+                        yield_last: yield_last.and_then(Rate::from_f64),
+                    });
+                }
+                MarketType::Goods(goods_market) => {
+                    let good_id = &goods_market.key;
+                    let view = state.market_view(symbol).unwrap_or_default();
+                    let depth_dto = goods_market.book.depth_summary().into();
 
-        for (good_id, market) in &state.financial_system.exchange.goods_markets {
-            let market_id = MarketId::Goods(*good_id);
-            let view = state.market_view(&market_id).unwrap_or_default();
-            let depth_summary = market.book.depth_summary();
-
-            let bid_levels =
-                depth_summary.bid_levels.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
-            let ask_levels =
-                depth_summary.ask_levels.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
-
-            let depth_dto = OrderBookDepthDto {
-                bid_levels,
-                ask_levels,
-                bid_size_at_best: depth_summary.bid_size_at_best,
-                ask_size_at_best: depth_summary.ask_size_at_best,
-            };
-
-            summaries.push(MarketSummaryDto {
-                market_id: market_id.to_string(),
-                market_type: "goods".to_string(),
-                name: state.financial_system.goods.goods.get(good_id).map_or("Unknown".to_string(), |g| g.name.clone()),
-                last_price: view.last.and_then(Rate::from_f64),
-                mid_price: market.book.mid_price().map(|m| m.0),
-                best_bid: depth_summary.best_bid.map(|m| m.0),
-                best_ask: depth_summary.best_ask.map(|m| m.0),
-                spread: market.book.spread().map(|m| m.0),
-                volume: view.volume,
-                turnover: view.turnover,
-                depth: Some(depth_dto),
-                yield_bid: None,
-                yield_ask: None,
-                yield_mid: None,
-                yield_last: None,
-            });
-        }
-
-        for (market_id, _market) in &state.financial_system.exchange.labour_markets {
-            summaries.push(MarketSummaryDto {
-                market_id: MarketId::Labour(*market_id).to_string(),
-                market_type: "labour".to_string(),
-                name: "General Labour Market".to_string(),
-                last_price: None,
-                mid_price: None,
-                best_bid: None,
-                best_ask: None,
-                spread: None,
-                volume: 0.0,
-                turnover: 0.0,
-                depth: None,
-                yield_bid: None,
-                yield_ask: None,
-                yield_mid: None,
-                yield_last: None,
-            });
+                    summaries.push(MarketSummaryDto {
+                        market_id: symbol.to_string(),
+                        market_type: "goods".to_string(),
+                        name: state
+                            .financial_system
+                            .goods
+                            .goods
+                            .get(good_id)
+                            .map_or("Unknown".to_string(), |g| g.name.clone()),
+                        last_price: view.last.and_then(Rate::from_f64),
+                        mid_price: goods_market.book.mid_price().map(|m| m.0),
+                        best_bid: goods_market.book.best_bid().map(|m| m.0),
+                        best_ask: goods_market.book.best_ask().map(|m| m.0),
+                        spread: goods_market.book.spread().map(|m| m.0),
+                        volume: view.volume,
+                        turnover: view.turnover,
+                        depth: Some(depth_dto),
+                        yield_bid: None,
+                        yield_ask: None,
+                        yield_mid: None,
+                        yield_last: None,
+                    });
+                }
+                MarketType::Labour(_labour_market) => {
+                    summaries.push(MarketSummaryDto {
+                        market_id: symbol.to_string(),
+                        market_type: "labour".to_string(),
+                        name: "General Labour Market".to_string(),
+                        last_price: None,
+                        mid_price: None,
+                        best_bid: None,
+                        best_ask: None,
+                        spread: None,
+                        volume: 0.0,
+                        turnover: 0.0,
+                        depth: None,
+                        yield_bid: None,
+                        yield_ask: None,
+                        yield_mid: None,
+                        yield_last: None,
+                    });
+                }
+            }
         }
 
         Ok(summaries)
@@ -332,36 +339,41 @@ impl QueryService {
     pub fn get_market_detail(&self, market_id_str: &str) -> QueryResult<MarketDetailDto> {
         let engine = self.get_engine_lock()?;
         let state = &engine.state;
-        let market_id: MarketId = market_id_str.parse().map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))?;
 
-        match market_id {
-            MarketId::Financial(inst_id) => {
-                let market = state
-                    .financial_system
-                    .exchange
-                    .markets
-                    .get(&inst_id)
-                    .ok_or((axum::http::StatusCode::NOT_FOUND, "Financial market not found".to_string()))?;
+        // Try to parse as Symbol
+        let symbol = Symbol(market_id_str.to_string());
+
+        let market = state
+            .financial_system
+            .exchange
+            .markets
+            .get(&symbol)
+            .ok_or((axum::http::StatusCode::NOT_FOUND, "Market not found".to_string()))?;
+
+        match market {
+            MarketType::Financial(fin_market) => {
                 let name = state
                     .financial_system
                     .instruments
-                    .get(&inst_id)
+                    .get(&fin_market.key)
                     .map_or("N/A".to_string(), |i| i.type_as_string().to_string());
-                Ok(MarketDetailDto { market_id: market_id_str.to_string(), name, order_book: market.book.clone() })
+                Ok(MarketDetailDto { market_id: market_id_str.to_string(), name, order_book: fin_market.book.clone() })
             }
-            MarketId::Goods(good_id) => {
-                let market = state
+            MarketType::Goods(goods_market) => {
+                let name = state
                     .financial_system
-                    .exchange
-                    .goods_markets
-                    .get(&good_id)
-                    .ok_or((axum::http::StatusCode::NOT_FOUND, "Goods market not found".to_string()))?;
-                let name =
-                    state.financial_system.goods.goods.get(&good_id).map_or("N/A".to_string(), |g| g.name.clone());
-                Ok(MarketDetailDto { market_id: market_id_str.to_string(), name, order_book: market.book.clone() })
+                    .goods
+                    .goods
+                    .get(&goods_market.key)
+                    .map_or("N/A".to_string(), |g| g.name.clone());
+                Ok(MarketDetailDto {
+                    market_id: market_id_str.to_string(),
+                    name,
+                    order_book: goods_market.book.clone(),
+                })
             }
-            MarketId::Labour(id) => Ok(MarketDetailDto {
-                market_id: MarketId::Labour(id).to_string(),
+            MarketType::Labour(_) => Ok(MarketDetailDto {
+                market_id: market_id_str.to_string(),
                 name: "Labour Market".to_string(),
                 order_book: OrderBook::default(),
             }),
@@ -371,12 +383,13 @@ impl QueryService {
     pub fn get_market_history(&self, market_id_str: &str) -> QueryResult<Vec<MarketTick>> {
         let engine = self.get_engine_lock()?;
         let state = &engine.state;
-        let market_id: MarketId = market_id_str.parse().map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))?;
+
+        let symbol = Symbol(market_id_str.to_string());
 
         let history = state
             .history
             .market_ticks
-            .get(&market_id)
+            .get(&symbol)
             .map(|deque| deque.iter().cloned().collect())
             .unwrap_or_else(Vec::new);
 
@@ -475,16 +488,23 @@ impl QueryService {
         let engine_lock = self.get_engine_lock()?;
         let state = &engine_lock.state;
 
-        let intentions: Vec<SimIntention> = state.history.tick_records.iter().flat_map(|r| r.intentions.clone())
-        .filter(|intent| matches!(intent, SimIntention::Monetary(m) if {
-            matches!(
-                m,
-                MonetaryIntention::ConductOMO { .. }
-                    | MonetaryIntention::SetPolicyRate { .. }
-                    | MonetaryIntention::AdjustReserveRequirement { .. }
-                    | MonetaryIntention::ProvideLiquidityFacility { .. }
-            )
-        })).collect();
+        let intentions: Vec<SimIntention> = state
+            .history
+            .tick_records
+            .iter()
+            .flat_map(|r| r.intentions.clone())
+            .filter(|intent| {
+                matches!(intent, SimIntention::Monetary(m) if {
+                    matches!(
+                        m,
+                        MonetaryIntention::ConductOMO { .. }
+                            | MonetaryIntention::SetPolicyRate { .. }
+                            | MonetaryIntention::AdjustReserveRequirement { .. }
+                            | MonetaryIntention::ProvideLiquidityFacility { .. }
+                    )
+                })
+            })
+            .collect();
 
         Ok(intentions)
     }
