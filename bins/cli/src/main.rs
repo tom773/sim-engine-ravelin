@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 mod bus;
 use bus::*;
+
 struct AppState {
     engine: Arc<parking_lot::RwLock<SimulationEngine>>,
     bus: EventsBus,
@@ -65,6 +66,7 @@ async fn main() {
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
+        
     let app = Router::new()
         .route("/api/live/stream", get(ws_upgrade))
         .route("/api/live/history/ticks", get(list_ticks))
@@ -83,27 +85,50 @@ async fn main() {
 
 fn api_v1_router() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/simulation/status", get(get_simulation_status))
-        .route("/simulation/tick", post(tick_handler))
-        .route("/agents", get(get_agents_list))
-        .route("/agents/{id}", get(get_agent_detail))
-        .route("/markets", get(get_markets_list))
-        .route("/markets/catalog", get(get_market_catalog))
+        .nest("/simulation", Router::new()
+            .route("/status", get(get_simulation_status))
+            .route("/tick", post(tick_handler)))
+        
+        .nest("/agents", Router::new()
+            .route("/", get(get_agents_list))
+            .route("/{id}", get(get_agent_detail)))
+        
+        .nest("/markets", Router::new()
+            .route("/", get(get_markets_list))
+            .route("/catalog", get(get_market_catalog))
+            .route("/infrastructure", get(get_infra))
+            .route("/{market_id}", get(get_market_detail))
+            .route("/{market_id}/history", get(get_market_history)))
+        
         .route("/instruments", get(get_instrument_registry))
-        .route("/markets/infrastructure", get(get_infra))
-        .route("/markets/{market_id}", get(get_market_detail))
-        .route("/markets/{market_id}/history", get(get_market_history))
-        .route("/markets/overview", get(get_market_overview))
-        .route("/markets/credit/registry", get(get_credit_registry))
         .route("/exchange", get(get_exchange))
+        .route("/dashboard", get(get_dashboard_bundle))  // NEW: consolidated bundle
+        .route("/pages/markets", get(get_markets_page))  // Keep for backward compat
+        .route("/cb/actions", get(get_cb_actions))
+        
         .route("/history/ticks", get(list_ticks))
         .route("/history/ticks/{tick_number}", get(get_tick_detail))
-        .route("/cb/actions", get(get_cb_actions))
+}
+
+async fn get_dashboard_bundle(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let query_service = QueryService::new(state.engine.clone());
+    match query_service.get_dashboard_bundle() {
+        Ok(data) => (StatusCode::OK, Json(data)).into_response(),
+        Err((status, msg)) => (status, msg).into_response(),
+    }
 }
 
 async fn get_simulation_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let query_service = QueryService::new(state.engine.clone());
     match query_service.get_status_data() {
+        Ok(data) => (StatusCode::OK, Json(data)).into_response(),
+        Err((status, msg)) => (status, msg).into_response(),
+    }
+}
+
+async fn get_markets_page(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let query_service = QueryService::new(state.engine.clone());
+    match query_service.get_markets_page_data() {
         Ok(data) => (StatusCode::OK, Json(data)).into_response(),
         Err((status, msg)) => (status, msg).into_response(),
     }
@@ -154,6 +179,7 @@ async fn get_agents_list(
         Err((status, msg)) => (status, msg).into_response(),
     }
 }
+
 async fn get_agent_detail(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
@@ -180,13 +206,8 @@ async fn get_market_catalog(State(state): State<Arc<AppState>>) -> impl IntoResp
         Err((status, msg)) => (status, msg).into_response(),
     }
 }
-async fn get_market_overview(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let query_service = QueryService::new(state.engine.clone());
-    match query_service.get_market_overview() {
-        Ok(data) => (StatusCode::OK, Json(data)).into_response(),
-        Err((status, msg)) => (status, msg).into_response(),
-    }
-}
+
+
 async fn get_market_detail(
     State(state): State<Arc<AppState>>,
     Path(market_id): Path<String>,
@@ -245,6 +266,7 @@ async fn list_ticks(State(state): State<Arc<AppState>>) -> Json<Vec<u32>> {
         .collect();
     Json(v)
 }
+
 async fn get_tick_events(
     State(state): State<Arc<AppState>>,
     Path(n): Path<u32>,
@@ -254,6 +276,7 @@ async fn get_tick_events(
         None => Err(StatusCode::NOT_FOUND),
     }
 }
+
 async fn get_cb_actions(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let query_service = QueryService::new(state.engine.clone());
     match query_service.get_cb_actions() {
@@ -261,6 +284,7 @@ async fn get_cb_actions(State(state): State<Arc<AppState>>) -> impl IntoResponse
         Err((status, msg)) => (status, msg).into_response(),
     }
 }
+
 async fn get_infra(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let query_service = QueryService::new(state.engine.clone());
     match query_service.get_financial_infrastructure_state() {
@@ -268,16 +292,12 @@ async fn get_infra(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         Err((status, msg)) => (status, msg).into_response(),
     }
 }
+
+
 async fn ws_upgrade(State(state): State<Arc<AppState>>, ws: WebSocketUpgrade) -> impl IntoResponse {
     ws.on_upgrade(move |socket| ws_conn(socket, state))
 }
-async fn get_credit_registry(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let query_service = QueryService::new(state.engine.clone());
-    match query_service.get_credit_registry() {
-        Ok(data) => (StatusCode::OK, Json(data)).into_response(),
-        Err((status, msg)) => (status, msg).into_response(),
-    }
-}
+
 async fn ws_conn(mut socket: WebSocket, state: Arc<AppState>) {
     for (tick, date, evs) in state.bus.latest_n(3) {
         let msg = serde_json::to_string(&ServerEvent::Tick {

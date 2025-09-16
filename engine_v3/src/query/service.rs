@@ -23,11 +23,6 @@ impl QueryService {
         Ok(self.engine.read())
     }
 
-    pub fn get_market_overview(&self) -> QueryResult<MarketOverviewDto> {
-        let engine = self.get_engine_lock()?;
-        Ok(MarketOverviewDto { instrument_registry: engine.state.financial_system.instruments.clone() })
-    }
-
     fn populate_balance_sheet(&self, agent_id: &AgentId, state: &SimState) -> PopulatedBalanceSheetDto {
         let all_assets_map = state.financial_system.get_agent_total_positions(agent_id);
 
@@ -66,6 +61,43 @@ impl QueryService {
         PopulatedBalanceSheetDto { assets, liabilities, income_statement: bs.income_statement.clone() }
     }
 
+    pub fn get_dashboard_bundle(&self) -> QueryResult<DashboardBundleDto> {
+        Ok(DashboardBundleDto {
+            status: self.get_status_data()?,
+            market_summaries: self.get_markets_summary()?,
+            instruments: self.get_instrument_registry()?,
+            cb_actions: self.get_cb_actions()?,
+        })
+    }
+
+    pub fn get_markets_page_data(&self) -> QueryResult<MarketsPageDto> {
+        Ok(MarketsPageDto {
+            infrastructure: self.get_financial_infrastructure_state()?,
+            omo_actions: self.get_cb_actions()?,
+            instruments: self.get_instrument_registry()?,
+            dashboard: self.get_status_data()?,
+            goods: self.get_catalog()?,
+            tape: self.get_exchange()?.tape.into_iter().map(|(k, v)| (k.0, v)).collect(),
+        })
+    }
+
+    fn collect_employment_contracts(
+        &self, state: &SimState, agents_map: &HashMap<AgentId, String>,
+    ) -> Vec<EmploymentRecordDto> {
+        state
+            .agents
+            .firms
+            .iter()
+            .flat_map(|(fid, firm)| {
+                let agents_map = agents_map.clone();
+                firm.employees.values().clone().map(move |c| EmploymentRecordDto {
+                    firm_id: *fid,
+                    firm_name: agents_map.get(fid).cloned().unwrap_or_else(|| "Firm".into()),
+                    contract: c.clone(),
+                })
+            })
+            .collect()
+    }
     pub fn get_status_data(&self) -> QueryResult<StatusDto> {
         let engine_lock = self.get_engine_lock()?;
         let state = &engine_lock.state;
@@ -77,6 +109,7 @@ impl QueryService {
             consumers: state.agents.consumers.len(),
             total: state.agents.banks.len() + state.agents.firms.len() + state.agents.consumers.len(),
         };
+
         let mut agents_map: HashMap<AgentId, String> = state
             .agents
             .all_agent_ids()
@@ -88,12 +121,14 @@ impl QueryService {
             .collect();
         agents_map.insert(state.financial_system.government.id.clone(), "Government".to_string());
         agents_map.insert(state.financial_system.central_bank.id.clone(), "Central Bank".to_string());
+
         let instruments_map: HashMap<InstrumentId, String> = state
             .financial_system
             .instruments
             .iter()
             .map(|(id, inst)| (id.clone(), inst.type_as_string().to_string()))
             .collect();
+
         let macro_stats_dto = MacroStatsDto {
             nominal_gdp_proxy: macro_stats.nominal_gdp_proxy,
             consumer_spending_daily: macro_stats.consumer_spending_daily,
@@ -108,20 +143,9 @@ impl QueryService {
             m2: macro_stats.m2,
             bank_reserves: macro_stats.bank_reserves,
         };
-        let am_cl = agents_map.clone();
-        let contracts: Vec<EmploymentRecordDto> = state
-            .agents
-            .firms
-            .iter()
-            .flat_map(|(fid, firm)| {
-                let agents_map = agents_map.clone();
-                firm.employees.values().clone().map(move |c| EmploymentRecordDto {
-                    firm_id: *fid,
-                    firm_name: agents_map.get(fid).cloned().unwrap_or_else(|| "Firm".into()),
-                    contract: c.clone(),
-                })
-            })
-            .collect();
+
+        let contracts = self.collect_employment_contracts(state, &agents_map);
+
         let labour_stats = LabourMarketStatsDto {
             employment: macro_stats.employment,
             unemployment: macro_stats.unemployment,
@@ -141,12 +165,14 @@ impl QueryService {
             discount_rate: Some(state.financial_system.central_bank.policy_rate_bps + dec!(20.0)),
             overnight_RRP: Some(state.financial_system.central_bank.policy_rate_bps + dec!(25.0)),
         };
+
         let monetary_stats_dto = MonetaryStatsDto {
             policy_rate: state.financial_system.central_bank.policy_rate_bps,
             reserve_requirement: Rate::from_f64(state.financial_system.central_bank.reserve_requirement)
                 .unwrap_or_default(),
             overnight_rates: on_rates,
         };
+
         Ok(StatusDto {
             current_date: state.current_date.format("%Y-%m-%d").to_string(),
             tick_number: state.ticknum,
@@ -155,14 +181,13 @@ impl QueryService {
             macro_stats: macro_stats_dto,
             monetary_stats: monetary_stats_dto,
             labor_force_stats: labour_stats,
-            maps: MapsDto { agents_map: am_cl.clone(), instruments_map },
+            maps: MapsDto { agents_map: agents_map.clone(), instruments_map },
         })
     }
 
-    pub fn get_agents_summary(&self, agent_type_filter: Option<String>) -> QueryResult<Vec<AgentSummaryDto>> {
+    pub fn get_agents_summary(&self, agent_type_filter: Option<String>) -> QueryResult<Vec<AgentDto>> {
         let engine = self.get_engine_lock()?;
         let state = &engine.state;
-        let _fs = &state.financial_system;
 
         let mut summaries = Vec::new();
         let filter_lower = agent_type_filter.as_deref().map(str::to_lowercase);
@@ -170,13 +195,14 @@ impl QueryService {
         let mut add_summary_for_agent = |id: &AgentId| {
             let (agent_type_str, name_opt) = engine.get_agent_info(id);
             let populated_bs = self.populate_balance_sheet(id, state);
-            summaries.push(AgentSummaryDto {
+            summaries.push(AgentDto {
                 id: id.0,
                 agent_type: agent_type_str,
                 name: name_opt.unwrap_or_else(|| "N/A".to_string()),
                 balance_sheet: populated_bs,
             });
         };
+
         if filter_lower.as_deref() == Some("bank") || filter_lower.is_none() {
             for id in state.agents.banks.keys() {
                 add_summary_for_agent(id);
@@ -192,7 +218,6 @@ impl QueryService {
                 add_summary_for_agent(id);
             }
         }
-
         if filter_lower.as_deref() == Some("government") || filter_lower.is_none() {
             add_summary_for_agent(&state.financial_system.government.id);
         }
@@ -203,7 +228,7 @@ impl QueryService {
         Ok(summaries)
     }
 
-    pub fn get_agent_detail(&self, agent_id: Uuid) -> QueryResult<AgentDetailDto> {
+    pub fn get_agent_detail(&self, agent_id: Uuid) -> QueryResult<AgentDto> {
         let engine = self.get_engine_lock()?;
         let state = &engine.state;
         let agent_id = AgentId(agent_id);
@@ -215,12 +240,24 @@ impl QueryService {
 
         let populated_bs = self.populate_balance_sheet(&agent_id, state);
 
-        Ok(AgentDetailDto {
+        Ok(AgentDto {
             id: agent_id.0,
             agent_type,
             name: name.unwrap_or_else(|| "N/A".to_string()),
             balance_sheet: populated_bs,
         })
+    }
+
+    fn calculate_yields(
+        &self, inst_id: &InstrumentId, book: &OrderBook, pricer: &dyn Pricer<FinancialProduct>,
+    ) -> (Option<Rate>, Option<Rate>, Option<Rate>, Option<Rate>) {
+        let yield_bid = book.best_bid().and_then(|px| pricer.yield_from_price(inst_id, px)).and_then(Rate::from_f64);
+        let yield_ask = book.best_ask().and_then(|px| pricer.yield_from_price(inst_id, px)).and_then(Rate::from_f64);
+        let yield_mid = book.mid_price().and_then(|px| pricer.yield_from_price(inst_id, px)).and_then(Rate::from_f64);
+        let yield_last =
+            book.last_price.and_then(|price| pricer.yield_from_price(inst_id, price)).and_then(Rate::from_f64);
+
+        (yield_bid, yield_ask, yield_mid, yield_last)
     }
 
     pub fn get_markets_summary(&self) -> QueryResult<Vec<MarketSummaryDto>> {
@@ -232,11 +269,10 @@ impl QueryService {
             match market {
                 MarketType::Financial(fin_market) => {
                     let inst_id = &fin_market.key;
-
-                    let yield_last =
-                        fin_market.book.last_price.and_then(|price| fin_market.pricer.yield_from_price(inst_id, price));
-
                     let view = state.market_view(symbol).unwrap_or_default();
+
+                    let (yield_bid, yield_ask, yield_mid, yield_last) =
+                        self.calculate_yields(inst_id, &fin_market.book, &*fin_market.pricer);
 
                     summaries.push(MarketSummaryDto {
                         market_id: symbol.to_string(),
@@ -254,22 +290,10 @@ impl QueryService {
                         volume: view.volume,
                         turnover: view.turnover,
                         depth: Some(fin_market.book.depth_summary().into()),
-                        yield_bid: fin_market
-                            .book
-                            .best_bid()
-                            .and_then(|px| fin_market.pricer.yield_from_price(inst_id, px))
-                            .and_then(Rate::from_f64),
-                        yield_ask: fin_market
-                            .book
-                            .best_ask()
-                            .and_then(|px| fin_market.pricer.yield_from_price(inst_id, px))
-                            .and_then(Rate::from_f64),
-                        yield_mid: fin_market
-                            .book
-                            .mid_price()
-                            .and_then(|px| fin_market.pricer.yield_from_price(inst_id, px))
-                            .and_then(Rate::from_f64),
-                        yield_last: yield_last.and_then(Rate::from_f64),
+                        yield_bid,
+                        yield_ask,
+                        yield_mid,
+                        yield_last,
                     });
                 }
                 MarketType::Goods(goods_market) => {
@@ -321,7 +345,6 @@ impl QueryService {
                 }
             }
         }
-
         Ok(summaries)
     }
 
@@ -332,15 +355,16 @@ impl QueryService {
             recipes: engine.state.financial_system.goods.recipes.values().cloned().collect(),
         })
     }
+
     pub fn get_instrument_registry(&self) -> QueryResult<InstrumentRegistryDto> {
         let engine = self.get_engine_lock()?;
         Ok(InstrumentRegistryDto { instruments: engine.state.financial_system.instruments.clone() })
     }
+
     pub fn get_market_detail(&self, market_id_str: &str) -> QueryResult<MarketDetailDto> {
         let engine = self.get_engine_lock()?;
         let state = &engine.state;
 
-        // Try to parse as Symbol
         let symbol = Symbol(market_id_str.to_string());
 
         let market = state
@@ -396,25 +420,6 @@ impl QueryService {
         Ok(history)
     }
 
-    pub fn get_ticks_summary(&self) -> QueryResult<Vec<TickSummaryDto>> {
-        let engine = self.get_engine_lock()?;
-        let summaries = engine
-            .state
-            .history
-            .tick_records
-            .iter()
-            .map(|record| TickSummaryDto {
-                tick_number: record.tick_number,
-                date: record.date.format("%Y-%m-%d").to_string(),
-                intentions: record.intentions.len(),
-                actions: record.actions.len(),
-                effects: record.effects.len(),
-                trades: record.trades.len(),
-            })
-            .collect();
-        Ok(summaries)
-    }
-
     pub fn get_tick_detail(&self, tick_number: u32) -> QueryResult<TickDetailDto> {
         let engine = self.get_engine_lock()?;
         let record = engine
@@ -435,12 +440,14 @@ impl QueryService {
             action_to_effect_indices: record.action_to_effect_indices.clone(),
         })
     }
+
     pub fn get_exchange(&self) -> QueryResult<ExchangeDto> {
         let engine = self.get_engine_lock()?;
         let exchange = &engine.state.financial_system.exchange;
         let exchange_data = Json(ExchangeDto::from(exchange));
         Ok(exchange_data.0)
     }
+
     pub fn get_financial_infrastructure_state(&self) -> QueryResult<FinancialInfrastructureDto> {
         let engine_lock = self.get_engine_lock()?;
         let state = &engine_lock.state;
@@ -466,22 +473,11 @@ impl QueryService {
             applications_by_bank: state.financial_system.credit_registry.applications_by_bank.clone(),
             credit_histories: state.financial_system.credit_registry.credit_histories.clone(),
         };
-        Ok(FinancialInfrastructureDto { csd: csd_dto, rtgs: rtgs_dto, cred_reg: cred_dto })
-    }
-    pub fn get_credit_registry(&self) -> QueryResult<CreditRegistryDto> {
-        let engine_lock = self.get_engine_lock()?;
-        let state = &engine_lock.state;
-        let reg = &state.financial_system.credit_registry.clone();
-        Ok({
-            CreditRegistryDto {
-                applications: reg.applications.clone(),
-                loans: reg.loans.clone(),
-                loans_by_borrower: reg.loans_by_borrower.clone(),
-                loans_by_lender: reg.loans_by_lender.clone(),
-                applications_by_bank: reg.applications_by_bank.clone(),
-                credit_histories: reg.credit_histories.clone(),
-            }
-        })
+        let on_markets = OvernightMarketsDto {
+            fedfunds_on: state.financial_system.funding_markets.fedfunds_on.clone(),
+            repo_gc1d: state.financial_system.funding_markets.repo_gc1d.clone(),
+        };
+        Ok(FinancialInfrastructureDto { csd: csd_dto, rtgs: rtgs_dto, cred_reg: cred_dto, overnight_markets: on_markets })
     }
 
     pub fn get_cb_actions(&self) -> QueryResult<Vec<SimIntention>> {

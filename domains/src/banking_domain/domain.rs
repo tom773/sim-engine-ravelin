@@ -17,18 +17,11 @@ impl Domain for BankingDomain {
         "Banking"
     }
 
-    fn resolve_intention(&self, intention: &SimIntention, context: &ResolutionContext) -> Option<ResolutionResult> {
+    fn resolve_intention(&self, intention: &SimIntention, _context: &ResolutionContext) -> Option<ResolutionResult> {
         let actions = match intention {
-            SimIntention::Banking(BankingIntention::LendExcessReserves { agent_id, amount, target_rate_bps }) => {
-                self.resolve_reserve_lending(*agent_id, *amount, *target_rate_bps, context.state)
-            }
-            SimIntention::Banking(BankingIntention::BorrowReserves { agent_id, amount, target_rate_bps }) => {
-                self.resolve_reserve_borrowing(*agent_id, *amount, *target_rate_bps, context.state)
-            }
             SimIntention::Banking(BankingIntention::RequestLoan { agent_id, bank_id, amount, purpose, collateral }) => {
                 self.resolve_loan_request(*agent_id, *bank_id, *amount, purpose.clone(), collateral.clone())
             }
-
             SimIntention::Banking(BankingIntention::ApproveLoan { bank_id, borrower_id, amount: _, terms }) => {
                 self.resolve_loan_approval(*bank_id, *borrower_id, terms.clone())
             }
@@ -44,11 +37,10 @@ impl Domain for BankingDomain {
 
     fn resolution_phase(&self, intention: &SimIntention) -> Option<ResolutionPhase> {
         match intention {
-            SimIntention::Banking(BankingIntention::LendExcessReserves { .. })
-            | SimIntention::Banking(BankingIntention::BorrowReserves { .. }) => Some(ResolutionPhase::Market),
             SimIntention::Banking(BankingIntention::RequestLoan { .. })
             | SimIntention::Banking(BankingIntention::ApproveLoan { .. })
             | SimIntention::Banking(BankingIntention::RejectLoan { .. }) => Some(ResolutionPhase::Independent),
+            SimIntention::Banking(BankingIntention::PostOvernightFundingQuote { .. }) => Some(ResolutionPhase::Market),
             _ => None,
         }
     }
@@ -64,9 +56,6 @@ impl Domain for BankingDomain {
         }
 
         match banking_action {
-            BankingAction::PostInterbankLendingOffer { .. } | BankingAction::PostInterbankBorrowingRequest { .. } => {
-                DomainResult::success(vec![])
-            }
             BankingAction::ExecuteInterbankLoan { lender_id, borrower_id, amount, rate_bps } => {
                 self.execute_interbank_loan(*lender_id, *borrower_id, *amount, *rate_bps, state)
             }
@@ -81,6 +70,7 @@ impl Domain for BankingDomain {
             BankingAction::OriginateLoan { lender_id, borrower_id, loan_terms, application_id } => {
                 self.execute_loan_origination(*lender_id, *borrower_id, loan_terms.clone(), *application_id, state)
             }
+            _ => DomainResult::empty()
         }
     }
 
@@ -90,25 +80,6 @@ impl Domain for BankingDomain {
 }
 
 impl BankingDomain {
-    fn resolve_reserve_lending(
-        &self, agent_id: AgentId, amount: f64, target_rate_bps: BasisPoints, _state: &SimState,
-    ) -> Vec<SimAction> {
-        vec![SimAction::Banking(BankingAction::PostInterbankLendingOffer {
-            lender_id: agent_id,
-            amount,
-            rate_bps: target_rate_bps,
-        })]
-    }
-
-    fn resolve_reserve_borrowing(
-        &self, agent_id: AgentId, amount: f64, target_rate_bps: BasisPoints, _state: &SimState,
-    ) -> Vec<SimAction> {
-        vec![SimAction::Banking(BankingAction::PostInterbankBorrowingRequest {
-            borrower_id: agent_id,
-            amount,
-            rate_bps: target_rate_bps,
-        })]
-    }
 
     fn validate(&self, action: &BankingAction, state: &SimState) -> Result<(), String> {
         match action {
@@ -250,13 +221,17 @@ impl BankingDomain {
     ) -> DomainResult {
         match decision {
             LoanDecision::Approve { terms } => {
-                let borrower_id = AgentId::default();
+                let borrower_id = state
+                    .financial_system
+                    .credit_registry
+                    .applications
+                    .get(&application_id)
+                    .map(|a| a.borrower_id)
+                    .unwrap_or_default();
 
                 self.execute_loan_origination(bank_id, borrower_id, terms, application_id, state)
             }
-            LoanDecision::Reject { reason: _ } => {
-                DomainResult::empty()
-            }
+            LoanDecision::Reject { reason: _ } => DomainResult::empty(),
             LoanDecision::CounterOffer { alternative_terms } => {
                 println!("🔄 Loan application {} - counter offer: ${:.0}", application_id, alternative_terms.principal);
                 DomainResult::empty()
@@ -375,7 +350,6 @@ impl BankingDomain {
             instrument_id: Some(loan.instrument_id),
             ref_id: Some(application_id),
         })));
-
 
         DomainResult::success(effects)
     }

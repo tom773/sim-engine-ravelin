@@ -64,9 +64,9 @@ fn handle_funding(
         let fs = &state.financial_system;
         let current_balance = fs.get_liquid_assets(&government.id);
         
-        let tga_target = 4_000_000.0;
+        let tga_target = 5_000_000.0;
         
-        if state.current_date.day() != 1 || current_balance > tga_target {
+        if state.current_date.day() == 2 || current_balance > tga_target {
             return;
         }
 

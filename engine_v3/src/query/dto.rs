@@ -3,6 +3,7 @@ use sim_core::{ prelude::*};
 use std::collections::HashMap;
 use uuid::Uuid;
 use serde_with::{serde_as, DisplayFromStr};
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AgentCounts {
     pub banks: usize,
@@ -39,23 +40,16 @@ pub struct StatusDto {
     pub maps: MapsDto,
 }
 
-pub type DashboardDto = StatusDto;
-
 #[derive(Serialize)]
-pub struct AgentSummaryDto {
+pub struct AgentDto {
     pub id: Uuid,
     pub agent_type: String,
     pub name: String,
     pub balance_sheet: PopulatedBalanceSheetDto,
 }
 
-#[derive(Serialize)]
-pub struct AgentDetailDto {
-    pub id: Uuid,
-    pub agent_type: String,
-    pub name: String,
-    pub balance_sheet: PopulatedBalanceSheetDto,
-}
+pub type AgentSummaryDto = AgentDto;
+pub type AgentDetailDto = AgentDto;
 
 #[derive(Serialize, Clone, Debug)]
 pub struct OrderBookDepthDto {
@@ -90,7 +84,6 @@ pub struct MarketSummaryDto {
     pub yield_last: Option<Rate>,
 }
 
-
 #[derive(Serialize)]
 pub struct CatalogDto {
     pub goods: Vec<Good>,
@@ -104,15 +97,6 @@ pub struct MarketDetailDto {
     pub order_book: OrderBook,
 }
 
-#[derive(Serialize)]
-pub struct TickSummaryDto {
-    pub tick_number: u32,
-    pub date: String,
-    pub intentions: usize,
-    pub actions: usize,
-    pub effects: usize,
-    pub trades: usize,
-}
 
 #[derive(Serialize)]
 pub struct TickDetailDto {
@@ -156,10 +140,6 @@ pub struct PopulatedBalanceSheetDto {
     pub income_statement: IncomeStatement,
 }
 
-#[derive(Serialize, Clone, Deserialize, Debug)]
-pub struct MarketOverviewDto {
-    pub instrument_registry: HashMap<InstrumentId, Instrument>,
-}
 
 #[derive(Serialize, Debug, Clone)]
 pub struct MarketIndexDto {
@@ -179,7 +159,7 @@ pub struct InstrumentRegistryDto {
 #[derive(Serialize, Clone, Debug)]
 pub struct ExchangeDto {
     #[serde_as(as = "HashMap<DisplayFromStr, _>")]
-    pub markets: HashMap<Symbol, MarketTypeDto>,  // Create a DTO for MarketType
+    pub markets: HashMap<Symbol, MarketTypeDto>,  
     
     pub index: MarketIndexDto,
     
@@ -194,7 +174,14 @@ pub enum MarketTypeDto {
     Labour { market: LabourMarket },
 }
 
-// Update the From implementation around line 220:
+#[derive(Serialize)]
+pub struct DashboardBundleDto {
+    pub status: StatusDto,
+    pub market_summaries: Vec<MarketSummaryDto>,
+    pub instruments: InstrumentRegistryDto,
+    pub cb_actions: Vec<SimIntention>,
+}
+
 impl From<&Exchange> for ExchangeDto {
     fn from(exchange: &Exchange) -> Self {
         let markets_dto = exchange
@@ -217,6 +204,7 @@ impl From<&Exchange> for ExchangeDto {
         }
     }
 }
+
 impl From<&MarketIndex> for MarketIndexDto {
     fn from(market_index: &MarketIndex) -> Self {
         let by_rating_and_tenor_dto = market_index
@@ -236,6 +224,21 @@ impl From<&MarketIndex> for MarketIndexDto {
     }
 }
 
+#[derive(Serialize)]
+pub struct MarketsPageDto {
+    pub infrastructure: FinancialInfrastructureDto,
+    pub omo_actions: Vec<SimIntention>,
+    pub instruments: InstrumentRegistryDto,
+    pub dashboard: StatusDto,
+    pub goods: CatalogDto,
+    pub tape: HashMap<String, Vec<TimedTrade>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OvernightMarketsDto {
+    pub fedfunds_on: Vec<ONQuote>,
+    pub repo_gc1d: Vec<ONQuote>,
+}
 
 #[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -261,6 +264,7 @@ pub struct FinancialInfrastructureDto {
     pub csd: CsdStateDto,
     pub rtgs: RtgsStateDto,
     pub cred_reg: CreditRegistryDto,
+    pub overnight_markets: OvernightMarketsDto,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -278,12 +282,14 @@ pub struct CreditRegistryDto {
     pub applications_by_bank: HashMap<AgentId, Vec<Uuid>>,
     pub credit_histories: HashMap<AgentId, CreditHistory>,
 }
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EmploymentRecordDto {
     pub firm_id: AgentId,
     pub firm_name: String,
     pub contract: EmploymentContract,
 }
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LabourMarketStatsDto {
     pub employment: usize,

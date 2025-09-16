@@ -53,6 +53,7 @@ impl SimulationEngine {
         );
         scheduler.register_handler(TickStep::Auction, DebtAuctionsHandler);
         scheduler.register_handler(TickStep::ClearMarkets, ClearMarketsHandler);
+        scheduler.register_handler(TickStep::ClearOvernightMarkets, ClearOvernightHandler);
         scheduler.register_handler(TickStep::SettleTrades, SettleTradesHandler);
         scheduler.register_handler(TickStep::ServiceCredit, CreditServicingHandler);
         scheduler.register_handler(TickStep::ServiceDeposits, DepositServicingHandler);

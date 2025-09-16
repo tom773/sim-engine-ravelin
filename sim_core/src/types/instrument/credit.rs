@@ -138,6 +138,13 @@ impl DebtInstrument {
             DebtInstrument::TradeCredit(t) => t.debtor,
         }
     }
+    pub fn as_bond(&self) -> Option<&BondDetails> {
+        if let DebtInstrument::Bond(b) = self {
+            Some(b)
+        } else {
+            None
+        }
+    }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LoanDetails {

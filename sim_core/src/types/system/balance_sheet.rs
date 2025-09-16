@@ -13,6 +13,16 @@ pub struct Position {
     pub cost_basis_per_unit: Money,
 }
 
+impl Position {
+    pub fn par(quantity: f64) -> Self {
+        Self {
+            quantity,
+            book_value_per_unit: Money::from(1 as i64),
+            cost_basis_per_unit: Money::from(1 as i64),
+        }
+    }
+}
+
 #[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct BalanceSheet {

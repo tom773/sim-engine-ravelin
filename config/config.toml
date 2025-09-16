@@ -218,9 +218,7 @@ id = "capital_ventures"
 name = "Capital Ventures Investment Fund"
 bank_id = "bank_b"
 initial_assets = [
-    { type = "Deposit", bank_id = "bank_b", amount = 500000.0 },
-    { type = "Bond", tenor = "T5Y", quantity = 10000 },
-    { type = "Bond", tenor = "T10Y", quantity = 5000 }
+    { type = "Deposit", bank_id = "bank_b", amount = 25000000.0 },
 ]
 initial_liabilities = []
 decision_model = { type = "InvestmentFirm", min_liquidity = 100000.0, quote_qty = 10000.0 }
@@ -243,7 +241,7 @@ bank_mix = { bank_a = 0.3, bank_b = 0.7 }
 recipe_name = "wheat_farming"
 deposit = { type = "log_normal", mu = 10.5, sigma = 0.8 }
 inventory = { good_slug = "wheat", quantity = { type = "pareto", xm = 100.0, alpha = 1.5 }, unit_cost = 5.0 }
-desired_markup = { type = "normal", mean = 0.15, stdev = 0.05, clamp = { min = 0.05, max = 0.30 } }
+desired_markup = { dist = { type = "normal", mean = 0.15, stdev = 0.05 }, clamp = { min = 0.05, max = 0.30 } }
 decision_model = { type = "ProductionFirm" }
 
 [[firm_groups]]
@@ -253,7 +251,7 @@ bank_mix = { bank_a = 0.5, bank_b = 0.5 }
 recipe_name = "bread_baking"
 deposit = { type = "log_normal", mu = 9.5, sigma = 1.0 }
 inventory = { good_slug = "bread", quantity = { type = "pareto", xm = 100.0, alpha = 2.0 }, unit_cost = 6.0 }
-desired_markup = { type = "normal", mean = 0.30, stdev = 0.08, clamp = { min = 0.15, max = 0.50 } }
+desired_markup = { dist = { type = "normal", mean = 0.30, stdev = 0.08 }, clamp = { min = 0.15, max = 0.50 } }
 decision_model = { type = "ProductionFirm" }
 
 # --- Consumers ---

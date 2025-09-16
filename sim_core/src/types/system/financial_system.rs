@@ -36,6 +36,7 @@ pub struct FinancialSystem {
     pub rtgs_policy: RtgsPolicy,
     #[serde(skip)]
     pub pricing_feeds: PricingFeeds,
+    pub funding_markets: OvernightFundingBooks,
 }
 #[derive(Clone, Default, Debug)]
 pub struct GoodsMetrics {
@@ -103,6 +104,7 @@ impl Default for FinancialSystem {
             rtgs: RtgsQueue::default(),
             rtgs_policy: RtgsPolicy::default(),
             pricing_feeds: PricingFeeds::default(),
+            funding_markets: OvernightFundingBooks::default(),
         }
     }
 }

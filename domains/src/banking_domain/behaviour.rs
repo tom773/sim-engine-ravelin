@@ -38,19 +38,20 @@ impl BasicBankDecisionModel {
         let mut seen_borrowers: HashSet<AgentId> = HashSet::new();
 
         for app_id in app_ids {
-            let Some(app) = fs.credit_registry.applications.get(&app_id) else { continue; };
+            let Some(app) = fs.credit_registry.applications.get(&app_id) else {
+                continue;
+            };
             if !matches!(app.status, ApplicationStatus::Pending) {
                 continue;
             }
             if !seen_borrowers.insert(app.borrower_id) {
-                continue; // already handled one app for this borrower in this pass
+                continue;
             }
 
-            // your existing “approve vs reject” logic …
+
             let decision = if let Some(borrower) = state.agents.consumers.get(&app.borrower_id) {
-                let dti = if borrower.income > 0.0 {
-                    fs.get_total_liabilities(&borrower.id) / borrower.income
-                } else { 1.0 };
+                let dti =
+                    if borrower.income > 0.0 { fs.get_total_liabilities(&borrower.id) / borrower.income } else { 1.0 };
                 if dti < 0.4 && borrower.income > 1000.0 {
                     LoanDecision::Approve {
                         terms: LoanTerms {
@@ -113,7 +114,7 @@ impl BasicBankDecisionModel {
             .sum::<f64>();
 
         let required_reserves = total_deposits * fs.central_bank.reserve_requirement;
-        let desired_buffer = total_deposits * 0.02; // 2% buffer
+        let desired_buffer = total_deposits * 0.02;
         let target_reserve_level = required_reserves + desired_buffer;
 
         let current_reserves = fs.get_bank_reserves(&bank.id).unwrap_or(0.0);
@@ -126,19 +127,35 @@ impl BasicBankDecisionModel {
         if reserve_surplus_or_shortfall < -1.0 {
             let amount_needed = -reserve_surplus_or_shortfall;
             let borrow_rate = target_rate_bps + Decimal::from_f64(acceptable_rate_range / 2.0).unwrap_or_default();
-            intentions.push(SimIntention::Banking(BankingIntention::BorrowReserves {
-                agent_id: bank.id,
-                amount: amount_needed,
-                target_rate_bps: borrow_rate,
+            intentions.push(SimIntention::Banking(BankingIntention::PostOvernightFundingQuote {
+                quote: ONQuote {
+                    venue: OvernightVenue::FedFundsON,
+                    agent: bank.id,
+                    side: ONQuoteSide::Borrow,
+                    notional: amount_needed,
+                    limit_rate_bps: borrow_rate,
+                    haircut: None,
+                    preferred_collateral: None,
+                    min_fill: 0.0,
+                    ts: 0,
+                },
             }));
         } else if reserve_surplus_or_shortfall > 1.0 {
             let amount_to_lend = reserve_surplus_or_shortfall * 0.75;
             if amount_to_lend > 100.0 {
                 let lend_rate = target_rate_bps - Decimal::from_f64(acceptable_rate_range / 2.0).unwrap_or_default();
-                intentions.push(SimIntention::Banking(BankingIntention::LendExcessReserves {
-                    agent_id: bank.id,
-                    amount: amount_to_lend,
-                    target_rate_bps: lend_rate,
+                intentions.push(SimIntention::Banking(BankingIntention::PostOvernightFundingQuote {
+                    quote: ONQuote {
+                        venue: OvernightVenue::FedFundsON,
+                        agent: bank.id,
+                        side: ONQuoteSide::Lend,
+                        notional: amount_to_lend,
+                        limit_rate_bps: lend_rate,
+                        haircut: None,
+                        preferred_collateral: None,
+                        min_fill: 0.0,
+                        ts: 0,
+                    },
                 }));
             }
         }

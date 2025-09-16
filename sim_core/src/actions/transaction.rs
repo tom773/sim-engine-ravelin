@@ -25,6 +25,9 @@ pub enum TransactionAction {
         market_id: LabourMarketId,
         offer: JobOffer,
     },
+    PostOvernightFundingQuote {
+        quote: ONQuote,
+    },
 }
 
 impl TransactionAction {
@@ -34,6 +37,7 @@ impl TransactionAction {
             TransactionAction::PostMarketOrder { .. } => "PostMarketOrder".to_string(),
             TransactionAction::PostJobApplication { .. } => "PostJobApplication".to_string(),
             TransactionAction::PostJobOffer { .. } => "PostJobOffer".to_string(),
+            TransactionAction::PostOvernightFundingQuote { .. } => "PostOvernightFundingQuote".to_string(),
         }
     }
 
@@ -43,10 +47,10 @@ impl TransactionAction {
             TransactionAction::PostMarketOrder { agent_id, .. } => *agent_id,
             TransactionAction::PostJobApplication { application, .. } => application.consumer_id,
             TransactionAction::PostJobOffer { offer, .. } => offer.firm_id,
+            TransactionAction::PostOvernightFundingQuote { quote } => quote.agent,
         }
     }
 }
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum TransactionIntention {
     PayWages {

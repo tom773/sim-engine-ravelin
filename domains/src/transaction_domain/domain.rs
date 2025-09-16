@@ -100,7 +100,6 @@ impl Domain for TransactionsDomain {
             }
 
             SimIntention::Consumption(ConsumptionIntention::SpendOnGood { agent_id, good_id, max_notional }) => {
-
                 let consumer = match context.state.agents.consumers.get(agent_id) {
                     Some(c) => c,
                     None => return Some(ResolutionResult::failure(vec!["Consumer not found".to_string()])),
@@ -169,6 +168,9 @@ impl Domain for TransactionsDomain {
                     },
                 })]
             }
+            SimIntention::Banking(BankingIntention::PostOvernightFundingQuote { quote }) => {
+                vec![SimAction::Transaction(TransactionAction::PostOvernightFundingQuote { quote: quote.clone() })]
+            }
 
             _ => return None,
         };
@@ -214,6 +216,12 @@ impl Domain for TransactionsDomain {
                 self.execute_job_application(*market_id, application.clone())
             }
             TransactionAction::PostJobOffer { market_id, offer } => self.execute_job_offer(*market_id, offer.clone()),
+            TransactionAction::PostOvernightFundingQuote { quote } => {
+                let mut quote_with_ts = quote.clone();
+                quote_with_ts.ts = state.ticknum as u64; // Set timestamp at execution
+                let effect = StateEffect::Market(MarketEffect::PostOvernightFundingQuote(quote_with_ts));
+                DomainResult::success(vec![effect])
+            }
         }
     }
 
@@ -346,17 +354,19 @@ impl Domain for TransactionsDomain {
                 unit_cost: trade.price.to_f64(),
             }));
 
-            let (_, buyer_bank) = state
-                .financial_system
-                .find_agent_liquid_account(&trade.buyer)
-                .ok_or_else(|| "Buyer has no liquid account".to_string())
-                .unwrap();
+            let (_, buyer_bank) = match state.financial_system.find_agent_liquid_account(&trade.buyer) {
+                Some(acc) => acc,
+                None => {
+                    return DomainResult::failure(vec![format!("Buyer {} has no liquid account", trade.buyer)]);
+                }
+            };
 
-            let (_, seller_bank) = state
-                .financial_system
-                .find_agent_liquid_account(&trade.seller)
-                .ok_or_else(|| "Seller has no liquid account".to_string())
-                .unwrap();
+            let (_, seller_bank) = match state.financial_system.find_agent_liquid_account(&trade.seller) {
+                Some(acc) => acc,
+                None => {
+                    return DomainResult::failure(vec![format!("Seller {} has no liquid account", trade.seller)]);
+                }
+            };
 
             let payment = PaymentInstruction {
                 id: Uuid::new_v4(),

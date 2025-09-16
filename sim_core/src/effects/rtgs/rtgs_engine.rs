@@ -438,17 +438,16 @@ fn apply_central_bank_payment(state: &mut SimState, pi: &PaymentInstruction) -> 
     let fs = &mut state.financial_system;
     let cb_id = fs.central_bank.id;
 
-    if !state.agents.banks.contains_key(&pi.payee) {
+    if !state.agents.banks.contains_key(&pi.payee) && pi.payee != fs.government.id {
         return Err(EffectError::InvalidState(format!(
             "Central Bank can only pay IORB to commercial banks. Payee: {}",
             pi.payee
         )));
     }
     let bank_id = pi.payee;
-
     let reserve_inst_id = fs
-        .find_bank_reserves_account(&bank_id)
-        .ok_or_else(|| EffectError::InvalidState(format!("Bank {:?} has no reserves account", bank_id)))?;
+        .find_agent_liquid_account(&bank_id)
+        .ok_or_else(|| EffectError::InvalidState(format!("Bank {:?} has no reserves account", bank_id)))?.0;
 
     let bank_bs = fs.balance_sheets.get_mut(&bank_id).ok_or(EffectError::AgentNotFound { id: bank_id })?;
 

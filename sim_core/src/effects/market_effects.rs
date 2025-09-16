@@ -14,6 +14,7 @@ pub enum MarketEffect {
     OpenDebtAuction { auction: DebtAuction },
     SubmitAuctionBid { auction_id: Uuid, bid: AuctionBid },
     CloseDebtAuction { auction_id: Uuid },
+    PostOvernightFundingQuote(ONQuote),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -34,6 +35,7 @@ impl MarketEffect {
             MarketEffect::OpenDebtAuction { .. } => "OpenDebtAuction",
             MarketEffect::SubmitAuctionBid { .. } => "SubmitAuctionBid",
             MarketEffect::CloseDebtAuction { .. } => "CloseDebtAuction",
+            MarketEffect::PostOvernightFundingQuote { .. } => "PostOvernightFundingOrder",
         }
     }
 }
@@ -137,6 +139,13 @@ impl StateEffectApplicator {
                 if let Some(auction) = state.financial_system.exchange.open_auctions.get_mut(auction_id) {
                     auction.status = AuctionStatus::Closed;
                 }
+                Ok(())
+            }
+            MarketEffect::PostOvernightFundingQuote(quote) => {
+                state
+                    .financial_system
+                    .funding_markets
+                    .post_quote(quote.clone());
                 Ok(())
             }
         }

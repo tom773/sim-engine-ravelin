@@ -66,16 +66,11 @@ impl TransactionContext {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum BankingIntention {
-    LendExcessReserves {
-        agent_id: AgentId,
-        amount: f64,
-        target_rate_bps: BasisPoints,
+
+    PostOvernightFundingQuote {
+        quote: ONQuote,
     },
-    BorrowReserves {
-        agent_id: AgentId,
-        amount: f64,
-        target_rate_bps: BasisPoints,
-    },
+
     MarketMakeTreasuries {
         agent_id: AgentId,
         maturity_date: NaiveDate,
@@ -119,8 +114,7 @@ pub enum BankingIntention {
 impl BankingIntention {
     pub fn name(&self) -> &'static str {
         match self {
-            BankingIntention::LendExcessReserves { .. } => "LendExcessReserves",
-            BankingIntention::BorrowReserves { .. } => "BorrowReserves",
+            BankingIntention::PostOvernightFundingQuote { .. } => "PostOvernightFundingQuote",
             BankingIntention::MarketMakeTreasuries { .. } => "MarketMakeTreasuries",
             BankingIntention::DepositFunds { .. } => "DepositFunds",
             BankingIntention::WithdrawFunds { .. } => "WithdrawFunds",
@@ -131,8 +125,7 @@ impl BankingIntention {
     }
     pub fn agent_id(&self) -> AgentId {
         match self {
-            BankingIntention::LendExcessReserves { agent_id, .. } => *agent_id,
-            BankingIntention::BorrowReserves { agent_id, .. } => *agent_id,
+            BankingIntention::PostOvernightFundingQuote { quote } => quote.agent,
             BankingIntention::MarketMakeTreasuries { agent_id, .. } => *agent_id,
             BankingIntention::DepositFunds { agent_id, .. } => *agent_id,
             BankingIntention::WithdrawFunds { agent_id, .. } => *agent_id,
