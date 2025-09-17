@@ -4,7 +4,7 @@ use rust_decimal::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
-
+use rust_decimal_macros::dec;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum LoanPurpose {
     BusinessExpansion,
@@ -27,6 +27,7 @@ pub struct LoanTerms {
     pub payment_frequency: PaymentFrequency,
     pub collateral_required: bool,
     pub loan_to_value_ratio: Option<f64>,
+    pub purpose: LoanPurpose,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -102,11 +103,19 @@ pub struct CreditHistory {
     pub current_debt_service: f64,
     pub payment_performance: f64,
 }
-
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ConsumerDebt {
+    ResidentialMortgage(LoanDetails),
+    AutoLoan(LoanDetails),
+    CreditCard(CreditLineDetails),
+    PersonalLoan(LoanDetails),
+    StudentLoan(LoanDetails),
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum DebtInstrument {
     Bond(BondDetails),
     Loan(LoanDetails),
+    Consumer(ConsumerDebt),
     CreditLine(CreditLineDetails),
     TradeCredit(TradeCreditDetails),
 }
@@ -116,6 +125,7 @@ impl DebtInstrument {
         match self {
             DebtInstrument::Bond(_) => Listability::Listed(VenueType::CentralLimitOrderBook),
             DebtInstrument::Loan(_) => Listability::Unlisted,
+            DebtInstrument::Consumer(_) => Listability::Unlisted,
             DebtInstrument::CreditLine(_) => Listability::Unlisted,
             DebtInstrument::TradeCredit(_) => Listability::Unlisted,
         }
@@ -125,6 +135,13 @@ impl DebtInstrument {
         match self {
             DebtInstrument::Bond(b) => b.issuer,
             DebtInstrument::Loan(l) => l.lender,
+            DebtInstrument::Consumer(c) => match c {
+                ConsumerDebt::ResidentialMortgage(l)
+                | ConsumerDebt::AutoLoan(l)
+                | ConsumerDebt::PersonalLoan(l) => l.lender,
+                | ConsumerDebt::CreditCard(cl) => cl.lender,
+                ConsumerDebt::StudentLoan(l) => l.lender,
+            },
             DebtInstrument::CreditLine(c) => c.lender,
             DebtInstrument::TradeCredit(t) => t.creditor,
         }
@@ -134,16 +151,20 @@ impl DebtInstrument {
         match self {
             DebtInstrument::Bond(b) => b.issuer,
             DebtInstrument::Loan(l) => l.borrower,
+            DebtInstrument::Consumer(c) => match c {
+                ConsumerDebt::ResidentialMortgage(l)
+                | ConsumerDebt::AutoLoan(l)
+                | ConsumerDebt::PersonalLoan(l) => l.borrower,
+                | ConsumerDebt::CreditCard(cl) => cl.borrower,
+                | ConsumerDebt::StudentLoan(l) => l.borrower,
+            },
             DebtInstrument::CreditLine(c) => c.borrower,
             DebtInstrument::TradeCredit(t) => t.debtor,
         }
     }
+
     pub fn as_bond(&self) -> Option<&BondDetails> {
-        if let DebtInstrument::Bond(b) = self {
-            Some(b)
-        } else {
-            None
-        }
+        if let DebtInstrument::Bond(b) = self { Some(b) } else { None }
     }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -153,7 +174,6 @@ pub struct LoanDetails {
     pub borrower: AgentId,
     pub loan_type: LoanType,
     pub facility_id: Option<Uuid>,
-    pub borrower_type: BorrowerType,
     pub principal: Money,
     pub outstanding_principal: Money,
     pub reference_rate: Option<RateIndex>,
@@ -183,6 +203,50 @@ pub struct LoanDetails {
     pub unamortized_fees: Money,
 }
 
+impl Default for LoanDetails {
+    fn default() -> Self {
+        let now = chrono::Utc::now().date_naive();
+        Self {
+            loan_id: Uuid::new_v4(),
+            lender: AgentId(Uuid::nil()),
+            borrower: AgentId(Uuid::nil()),
+            loan_type: LoanType::TermLoan,
+            facility_id: None,
+            principal: Money::ZERO,
+            outstanding_principal: Money::ZERO,
+            reference_rate: Some(RateIndex::Fixed),
+            spread_bps: dec!(500),
+            rate_floor_bps: None,
+            rate_cap_bps: None,
+            day_count: DayCount::ActAct,
+            compounding: Compounding::Simple,
+            payment_frequency: PaymentFrequency::Monthly,
+            origination_date: now,
+            maturity_date: now + chrono::Duration::days(365 * 5),
+            next_payment_date: now + chrono::Duration::days(30),
+            last_accrual_date: now,
+            amortization: Amortization::Annuity,
+            prepayment_terms: PrepaymentTerms {
+                allowed: true,
+                penalty_type: PrepaymentPenalty::None,
+                lockout_period_months: None,
+            },
+            collateral: Vec::new(),
+            covenants: Vec::new(),
+            credit_rating: Some(CreditRating::consumer_prime()),
+            impairment: ImpairmentState {
+                stage: ImpairmentStage::Stage1Performing,
+                provision_amount: Money::ZERO,
+                days_past_due: 0,
+                probability_of_default: 0.0,
+                loss_given_default: 0.0,
+                exposure_at_default: Money::ZERO,
+            },
+            accrued_interest: Money::ZERO,
+            unamortized_fees: Money::ZERO,
+        }
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SpCreditRating {
     AAA,
@@ -247,7 +311,31 @@ pub struct CreditLineDetails {
 
     pub drawn_loans: Vec<Uuid>,
 }
-
+impl Default for CreditLineDetails {
+    fn default() -> Self {
+        let now = chrono::Utc::now().date_naive();
+        Self {
+            facility_id: Uuid::new_v4(),
+            lender: AgentId(Uuid::nil()),
+            borrower: AgentId(Uuid::nil()),
+            facility_type: FacilityType::Revolver,
+            borrower_type: BorrowerType::Corporate,
+            commitment_amount: Money::from(1_000_000),
+            available_amount: Money::from(1_000_000),
+            drawn_amount: Money::ZERO,
+            undrawn_fee_bps: dec!(25),
+            reference_rate: Some(RateIndex::Fixed),
+            spread_bps: dec!(500),
+            commitment_date: now,
+            expiry_date: now + chrono::Duration::days(365),
+            draw_period_end: None,
+            collateral: Vec::new(),
+            covenants: Vec::new(),
+            credit_rating: Some(SpCreditRating::BBB),
+            drawn_loans: Vec::new(),
+        }
+    }
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TradeCreditDetails {
     pub creditor: AgentId,

@@ -51,10 +51,7 @@ impl FinancialSystem {
         let mut file = if tick == 0 {
             File::create(filepath)?
         } else {
-            OpenOptions::new()
-                .append(true)
-                .create(true)
-                .open(filepath)?
+            OpenOptions::new().append(true).create(true).open(filepath)?
         };
 
         if tick > 0 {
@@ -82,9 +79,7 @@ impl FinancialSystem {
             file.write_all(json.as_bytes())?;
             file.write_all(b"\n")?;
         } else {
-            let mut file = OpenOptions::new()
-                .append(true)
-                .open(filepath)?;
+            let mut file = OpenOptions::new().append(true).open(filepath)?;
             file.write_all(json.as_bytes())?;
             file.write_all(b"\n")?;
         }
@@ -97,12 +92,12 @@ impl FinancialSystem {
         use std::io::Write;
 
         let mut snapshot = serde_json::json!({});
-        
+
         for (agent_id, balance_sheet) in &self.balance_sheets {
             let agent_key = format!("{:.6}", agent_id.0.to_string());
-            
+
             let mut agent_data = serde_json::json!({});
-            
+
             let assets: Vec<_> = balance_sheet
                 .assets
                 .iter()
@@ -117,11 +112,11 @@ impl FinancialSystem {
                     ]
                 })
                 .collect();
-            
+
             if !assets.is_empty() {
                 agent_data["a"] = serde_json::json!(assets);
             }
-            
+
             let liabilities: Vec<_> = balance_sheet
                 .liabilities
                 .iter()
@@ -136,11 +131,11 @@ impl FinancialSystem {
                     ]
                 })
                 .collect();
-            
+
             if !liabilities.is_empty() {
                 agent_data["l"] = serde_json::json!(liabilities);
             }
-            
+
             if let Some(csd_account) = self.clearing_house.csd.custody_accounts.get(agent_id) {
                 let securities: Vec<_> = csd_account
                     .holdings
@@ -156,32 +151,32 @@ impl FinancialSystem {
                         ]
                     })
                     .collect();
-                
+
                 if !securities.is_empty() {
                     agent_data["s"] = serde_json::json!(securities);
                 }
             }
-            
+
             let is = &balance_sheet.income_statement;
             if is.net_income.to_f64().abs() > 0.01 {
                 agent_data["i"] = serde_json::json!({
                     "n": format!("{:.2}", is.net_income.to_f64())
                 });
             }
-            
+
             if !agent_data.as_object().unwrap().is_empty() {
                 snapshot[agent_key] = agent_data;
             }
         }
-        
+
         let line = serde_json::json!({
             "t": tick,
             "d": snapshot
         });
-        
+
         if tick == 0 {
             let mut file = File::create(filepath)?;
-            
+
             let legend_json = serde_json::json!({
                 "_legend": true,
                 "format": "Balance Sheet NDJSON",
@@ -189,7 +184,7 @@ impl FinancialSystem {
                     "t": "tick number",
                     "d": "data by agent (6-char id prefix)",
                     "a": "assets [[type:id, qty, book_val]]",
-                    "l": "liabilities [[type:id, qty, book_val]]", 
+                    "l": "liabilities [[type:id, qty, book_val]]",
                     "s": "securities [[type:id, qty, face_val]]",
                     "i": "income {n: net_income}"
                 },
@@ -215,14 +210,14 @@ impl FinancialSystem {
                     "RP": "Repo"
                 }
             });
-            
+
             writeln!(file, "{}", serde_json::to_string(&legend_json)?)?;
             writeln!(file, "{}", serde_json::to_string(&line)?)?;
         } else {
             let mut file = OpenOptions::new().append(true).open(filepath)?;
             writeln!(file, "{}", serde_json::to_string(&line)?)?;
         }
-        
+
         Ok(())
     }
 
@@ -291,9 +286,7 @@ impl FinancialSystem {
     }
 
     fn create_compact_position_from_csd(
-        &self, 
-        inst_id: &InstrumentId, 
-        holding: &SecurityHolding,
+        &self, inst_id: &InstrumentId, holding: &SecurityHolding,
     ) -> Option<CompactPosition> {
         let inst = self.instruments.get(inst_id)?;
         let type_code = self.get_instrument_type_code(inst);
@@ -328,6 +321,13 @@ impl FinancialSystem {
                     BondType::Government => "GB",
                     BondType::InterbankLoan => "IB",
                 },
+                DebtInstrument::Consumer(c) => match c {
+                    ConsumerDebt::ResidentialMortgage(_)
+                    | ConsumerDebt::AutoLoan(_)
+                    | ConsumerDebt::PersonalLoan(_) => "LN",
+                    | ConsumerDebt::CreditCard(_) => "CL",
+                    ConsumerDebt::StudentLoan(_) => "LN",
+                },
                 DebtInstrument::Loan(_) => "LN",
                 DebtInstrument::CreditLine(_) => "CL",
                 DebtInstrument::TradeCredit(_) => "TC",
@@ -347,7 +347,7 @@ impl FinancialSystem {
         use serde_json::json;
 
         let mut snapshot = json!({});
-        
+
         for (agent_id, balance_sheet) in &self.balance_sheets {
             let agent_key = &agent_id.0.to_string()[0..6];
 
@@ -406,7 +406,7 @@ impl FinancialSystem {
                         ])
                     })
                     .collect();
-                
+
                 if !securities.is_empty() {
                     agent_data["s"] = json!(securities);
                 }
@@ -429,7 +429,7 @@ impl FinancialSystem {
                 snapshot[agent_key] = agent_data;
             }
         }
-        
+
         snapshot["t"] = json!(tick);
         snapshot
     }
@@ -464,6 +464,7 @@ Instrument Type Codes:
   TC: Trade Credit        INV: Inventory
   PRO: Property           EQ: Equity
   DER: Derivative         ST: Structured Tranche
-  RP: Repo"#.to_string()
+  RP: Repo"#
+            .to_string()
     }
 }

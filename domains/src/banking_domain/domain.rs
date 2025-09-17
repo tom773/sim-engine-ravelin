@@ -70,7 +70,7 @@ impl Domain for BankingDomain {
             BankingAction::OriginateLoan { lender_id, borrower_id, loan_terms, application_id } => {
                 self.execute_loan_origination(*lender_id, *borrower_id, loan_terms.clone(), *application_id, state)
             }
-            _ => DomainResult::empty()
+            _ => DomainResult::empty(),
         }
     }
 
@@ -80,7 +80,6 @@ impl Domain for BankingDomain {
 }
 
 impl BankingDomain {
-
     fn validate(&self, action: &BankingAction, state: &SimState) -> Result<(), String> {
         match action {
             BankingAction::PostInterbankLendingOffer { lender_id, amount, .. } => {
@@ -239,6 +238,8 @@ impl BankingDomain {
         }
     }
 
+    // domains/src/banking_domain/domain.rs
+
     fn execute_loan_origination(
         &self, lender_id: AgentId, borrower_id: AgentId, loan_terms: LoanTerms, application_id: Uuid, state: &SimState,
     ) -> DomainResult {
@@ -258,27 +259,28 @@ impl BankingDomain {
             PaymentFrequency::InterestOnly => Amortization::InterestOnly,
             _ => Amortization::Annuity,
         };
-        let borrower_type = if state.agents.firms.contains_key(&borrower_id) {
-            BorrowerType::Corporate
+
+        // Determine if the borrower is a consumer from the agent registry
+        let is_consumer = state.agents.consumers.contains_key(&borrower_id);
+
+        let credit_rating = if is_consumer {
+            Some(CreditRating::Consumer(ConsumerCreditRating::Subprime))
         } else {
-            BorrowerType::Individual
+            Some(CreditRating::Corporate(SpCreditRating::BBB))
         };
-        let credit_rating = match borrower_type {
-            BorrowerType::Corporate => Some(CreditRating::Corporate(SpCreditRating::BBB)),
-            BorrowerType::Individual => Some(CreditRating::Consumer(ConsumerCreditRating::Subprime)),
-        };
+
         let loan_details = LoanDetails {
             loan_id: Uuid::new_v4(),
             lender: lender_id,
             borrower: borrower_id,
-            borrower_type,
+            // borrower_type field is removed
             loan_type: LoanType::TermLoan,
             facility_id: None,
 
             principal,
             outstanding_principal: principal,
-            reference_rate: Some(RateIndex::Fixed), // fixed for now
-            spread_bps: loan_terms.annual_rate_bps, // interpret as all-in fixed spread
+            reference_rate: Some(RateIndex::Fixed),
+            spread_bps: loan_terms.annual_rate_bps,
             rate_floor_bps: None,
             rate_cap_bps: None,
 
@@ -331,7 +333,11 @@ impl BankingDomain {
         .build();
 
         let mut effects = vec![
-            StateEffect::Credit(CreditEffect::RegisterLoan { loan: loan.clone() }),
+            StateEffect::Credit(CreditEffect::RegisterLoan {
+                loan: loan.clone(),
+                is_consumer: is_consumer, // Pass the borrower type to the effect
+                purpose: loan_terms.purpose.clone()
+            }),
             StateEffect::Financial(FinancialEffect::CreateInstrument {
                 instrument: deposit_instrument,
                 creditor: borrower_id, // borrower has the deposit asset

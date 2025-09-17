@@ -170,6 +170,28 @@ fn derive_instrument_symbol(inst: &Instrument) -> Symbol {
                 let d = t.due_date.format("%Y%m%d");
                 Symbol(format!("TCR_{}_{}", short_agent(t.debtor), d))
             }
+            DebtInstrument::Consumer(c) => match c {
+                ConsumerDebt::ResidentialMortgage(l) => {
+                    let d = l.maturity_date.format("%Y%m%d");
+                    Symbol(format!("MTG_{}_{}", short_agent(l.borrower), d))
+                }
+                ConsumerDebt::AutoLoan(l) => {
+                    let d = l.maturity_date.format("%Y%m%d");
+                    Symbol(format!("AUTO_{}_{}", short_agent(l.borrower), d))
+                }
+                ConsumerDebt::PersonalLoan(l) => {
+                    let d = l.maturity_date.format("%Y%m%d");
+                    Symbol(format!("PLN_{}_{}", short_agent(l.borrower), d))
+                }
+                ConsumerDebt::CreditCard(c) => {
+                    let d = c.expiry_date.format("%Y%m%d");
+                    Symbol(format!("CARD_{}_{}", short_agent(c.borrower), d))
+                }
+                ConsumerDebt::StudentLoan(l) => {
+                    let d = l.maturity_date.format("%Y%m%d");
+                    Symbol(format!("STUD_{}_{}", short_agent(l.borrower), d))
+                }
+            },
         },
         InstrumentType::Equity(e) => Symbol(format!("EQ_{}", short_agent(e.issuer))),
         InstrumentType::Cash(c) => {

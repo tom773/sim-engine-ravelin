@@ -26,11 +26,7 @@ pub struct Instrument {
 }
 
 impl Instrument {
-    pub fn new(
-        id: InstrumentId,
-        instrument_type: InstrumentType,
-        instrument_market: InstrumentMarket,
-    ) -> Self {
+    pub fn new(id: InstrumentId, instrument_type: InstrumentType, instrument_market: InstrumentMarket) -> Self {
         let listability = match &instrument_type {
             InstrumentType::Cash(details) => match details.cash_type {
                 CashType::DemandDeposit | CashType::SavingsDeposit => Listability::Unlisted,
@@ -45,24 +41,7 @@ impl Instrument {
             _ => Listability::Listed(VenueType::CentralLimitOrderBook),
         };
 
-        Self {
-            id,
-            instrument_type,
-            instrument_market,
-            listability,
-        }
-    }
-
-    pub fn face_value(&self) -> Option<Money> {
-        match &self.instrument_type {
-            InstrumentType::Debt(debt) => match debt {
-                DebtInstrument::Bond(d) => Some(d.face_value),
-                DebtInstrument::Loan(d) => Some(d.principal),
-                _ => None,
-            },
-            InstrumentType::StructuredTranche(d) => Some(d.face_value),
-            _ => None,
-        }
+        Self { id, instrument_type, instrument_market, listability }
     }
 
     pub fn with_listability(mut self, listability: Listability) -> Self {
@@ -73,7 +52,26 @@ impl Instrument {
     pub fn should_create_order_book(&self) -> bool {
         matches!(self.listability, Listability::Listed(VenueType::CentralLimitOrderBook))
     }
-    
+
+    pub fn face_value(&self) -> Option<Money> {
+        match &self.instrument_type {
+            InstrumentType::Debt(debt) => match debt {
+                DebtInstrument::Bond(d) => Some(d.face_value),
+                DebtInstrument::Loan(d) => Some(d.principal),
+                DebtInstrument::Consumer(c) => match c {
+                    ConsumerDebt::ResidentialMortgage(l)
+                    | ConsumerDebt::AutoLoan(l)
+                    | ConsumerDebt::PersonalLoan(l) => Some(l.principal),
+                    | ConsumerDebt::CreditCard(cl) => Some(cl.commitment_amount),
+                    | ConsumerDebt::StudentLoan(l) => Some(l.principal),
+                },
+                _ => None,
+            },
+            InstrumentType::StructuredTranche(d) => Some(d.face_value),
+            _ => None,
+        }
+    }
+
     pub fn type_as_string(&self) -> &'static str {
         match &self.instrument_type {
             InstrumentType::Cash(details) => match details.cash_type {
@@ -92,6 +90,13 @@ impl Instrument {
                     BondType::InterbankLoan => "Interbank Loan",
                 },
                 DebtInstrument::Loan(_) => "Loan",
+                DebtInstrument::Consumer(c) => match c {
+                    ConsumerDebt::ResidentialMortgage(_) => "Residential Mortgage",
+                    ConsumerDebt::AutoLoan(_) => "Auto Loan",
+                    ConsumerDebt::PersonalLoan(_) => "Personal Loan",
+                    ConsumerDebt::CreditCard(_) => "Credit Card",
+                    ConsumerDebt::StudentLoan(_) => "Student Loan",
+                },
                 DebtInstrument::CreditLine(_) => "Credit Facility",
                 DebtInstrument::TradeCredit(_) => "Trade Credit",
             },
@@ -124,14 +129,14 @@ impl InstrumentType {
             _ => None,
         }
     }
-    
+
     pub fn as_loan(&self) -> Option<&LoanDetails> {
         match self {
             InstrumentType::Debt(DebtInstrument::Loan(l)) => Some(l),
             _ => None,
         }
     }
-    
+
     pub fn as_debt(&self) -> Option<&DebtInstrument> {
         match self {
             InstrumentType::Debt(d) => Some(d),
@@ -172,6 +177,7 @@ pub enum InstrumentMarket {
     MoneyMarket(MoneyMarketSegment),
     CapitalMarket(CapitalMarketSegment),
     DerivativesMarket(DerivativesMarketSegment),
+    Unlisted
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -303,16 +309,8 @@ pub struct RepoDetails {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum RealAssetType {
-    Inventory {
-        owner: AgentId,
-        goods: HashMap<GoodId, InventoryItem>,
-    },
-    Property {
-        owner: AgentId,
-        address: String,
-        sq_ft: u32,
-        market_value: Money,
-    },
+    Inventory { owner: AgentId, goods: HashMap<GoodId, InventoryItem> },
+    Property { owner: AgentId, address: String, sq_ft: u32, market_value: Money },
 }
 
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]

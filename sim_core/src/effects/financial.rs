@@ -172,7 +172,7 @@ impl StateEffectApplicator {
                         instrument_id
                     )));
                 }
-                DebtInstrument::Loan(_) | DebtInstrument::CreditLine(_) | DebtInstrument::TradeCredit(_) => {}
+                DebtInstrument::Loan(_) | DebtInstrument::CreditLine(_) | DebtInstrument::Consumer(_) | DebtInstrument::TradeCredit(_) => {}
             },
             InstrumentType::Equity(_) | InstrumentType::StructuredTranche(_) | InstrumentType::Derivative(_) => {
                 return Err(EffectError::FinancialSystemError(format!(

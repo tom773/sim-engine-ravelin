@@ -6,32 +6,32 @@ iterations = 365  # Run for a year
 seed = 42        # Reproducible runs
 
 # Raw
-[[goods]] 
-id="wheat" 
-name="Wheat" 
-unit="bushel" 
-category="RawMaterial"  
+[[goods]]
+id="wheat"
+name="Wheat"
+unit="bushel"
+category="RawMaterial"
 cpi_weight=0.00
 
-[[goods]] 
-id="copper_ore" 
-name="Copper" 
-unit="ton" 
-category="RawMaterial"  
+[[goods]]
+id="copper_ore"
+name="Copper"
+unit="ton"
+category="RawMaterial"
 cpi_weight=0.00
 
-[[goods]] 
-id="iron_ore" 
-name="Iron Ore" 
-unit="ton" 
-category="RawMaterial"  
+[[goods]]
+id="iron_ore"
+name="Iron Ore"
+unit="ton"
+category="RawMaterial"
 cpi_weight=0.00
 
-[[goods]] 
-id="oil" 
-name="Crude Oil" 
-unit="Barrel" 
-category="RawMaterial"  
+[[goods]]
+id="oil"
+name="Crude Oil"
+unit="Barrel"
+category="RawMaterial"
 cpi_weight=0.00
 
 # Intermediate
@@ -64,11 +64,11 @@ category="IntermediateGood"
 cpi_weight=0.00
 
 # Consumer
-[[goods]] 
-id="bread" 
-name="Bread" 
-unit="loaf"   
-category="ConsumerGood" 
+[[goods]]
+id="bread"
+name="Bread"
+unit="loaf"
+category="ConsumerGood"
 cpi_weight=0.4
 
 [[goods]]
@@ -211,17 +211,17 @@ initial_assets = [
   # Primary govvies via seed sale → issuance + DvP (requires patch)
   { type = "Bond", tenor = "T2Y", quantity = 4_300 }   # ≈ $4.3m face @ $1k
 ]
-initial_liabilities = []
+initial_liabilities = [] # No initial liabilities
 reserves = { type = "ratio_of_deposits", ratio = 0.15, noise = 0.00 } # keep noise off while calibrating
 
 [[banks]]
-id="bank_b" 
+id="bank_b"
 name="First National Bank"
 initial_assets = [
   { type = "Reserves", amount = 17_500_000.0 },
   { type = "Bond", tenor = "T5Y", quantity = 22_000 }  # ≈ $22m
 ]
-initial_liabilities = []
+initial_liabilities = [] # No initial liabilities
 reserves = { type = "ratio_of_deposits", ratio = 0.20, noise = 0.00 }
 
 # --- Firms ---
@@ -232,39 +232,20 @@ name = "Alpha Manufacturing Co."
 bank_id = "bank_a"
 initial_assets = [
   { type = "Deposit", bank_id = "bank_a", amount = 2_500_000.0 }, # working cash
-  { type = "Deposit", bank_id = "bank_a", amount = 7_000_000.0 }  # loan proceeds (see liability below)
 ]
-initial_liabilities = [
-  { type = "Loan", creditor_id = "bank_a", principal = 7_000_000.0, rate_bps = 700, maturity_days = 1825 }
-]
+initial_liabilities = [] # No initial liabilities
 decision_model = { type = "ProductionFirm" }
 
-# Beta Retail borrows from bank_b, but parks proceeds at bank_a
+# Beta Retail parks proceeds at bank_a
 [[firms]]
 id = "beta_retail"
 name = "Beta Retail Group"
 bank_id = "bank_a"  # 'home' bank for operating deposits (so deposits will hit bank_a)
 initial_assets = [
-  { type = "Deposit", bank_id = "bank_a", amount = 3_000_000.0 }  # loan proceeds
+  { type = "Deposit", bank_id = "bank_a", amount = 3_000_000.0 }
 ]
-initial_liabilities = [
-  { type = "Loan", creditor_id = "bank_b", principal = 3_000_000.0, rate_bps = 650, maturity_days = 1825 }
-]
+initial_liabilities = [] # No initial liabilities
 decision_model = { type = "ProductionFirm" }
-
-# --- Consumers ---
-
-[[consumers]]
-id = "homebuyer_1"
-bank_id = "bank_a"
-income = 140_000.0
-initial_assets = [
-  { type = "Deposit", bank_id = "bank_a", amount = 500_000.0 }   # loan proceeds
-]
-initial_liabilities = [
-  { type = "Loan", creditor_id = "bank_a", principal = 500_000.0, rate_bps = 850, maturity_days = 10950 }
-]
-consumption_basket = { bread = 1.0 }
 
 # --- Firm Groups ---
 
@@ -291,9 +272,31 @@ decision_model = { type = "ProductionFirm" }
 # --- Consumer Groups ---
 
 [[consumer_groups]]
-id_prefix="HH" 
-count=10 
+id_prefix="HH"
+count=10
 bank_mix = { bank_a = 0.5, bank_b = 0.5 }
 income = { type = "normal", mean = 60_000.0, stdev = 10_000.0 }
 deposit = { type = "pct_of_income", pct = 0.10 }
 consumption_basket = { bread = 0.1, electronics = 0.05, diesel = 0.02, car = 0.005, toys = 0.03 }
+
+[[consumer_groups]]
+id_prefix = "mortgage_holders"
+count = 2
+bank_mix = { bank_a = 0.8, bank_b = 0.2 }
+income = { type = "log_normal", mu = 12.0, sigma = 0.5 } # Higher income
+deposit = { type = "pct_of_income", pct = 0.05 }
+consumption_basket = { bread = 0.05, electronics = 0.1, car = 0.01, diesel = 0.05 }
+initial_liabilities = [
+    { type = "Mortgage", creditor_id = "bank_a", principal = { type = "normal", mean = 750000.0, stdev = 150000.0}, rate_bps = 650, maturity_days = 10950 }
+]
+
+[[consumer_groups]]
+id_prefix = "credit_card_users"
+count = 5
+bank_mix = { bank_a = 0.4, bank_b = 0.6 }
+income = { type = "normal", mean = 75000.0, stdev = 15000.0 }
+deposit = { type = "pct_of_income", pct = 0.08 }
+consumption_basket = { bread = 0.15, electronics = 0.08, toys = 0.05, diesel = 0.03 }
+initial_liabilities = [
+    { type = "CreditCard", creditor_id = "bank_b", principal = { type = "log_normal", mu = 8.0, sigma = 0.7 }, rate_bps = 2100, maturity_days = 3650 }
+]

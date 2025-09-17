@@ -73,7 +73,9 @@ pub struct Scenario {
     goods: Vec<GoodConfig>,
     recipes: Vec<RecipeConfig>,
     banks: Vec<BankConfig>,
+    #[serde(default)]
     firms: Vec<FirmConfig>,
+    #[serde(default)]
     consumers: Vec<ConsumerConfig>,
     #[serde(default)]
     consumer_groups: Vec<ConsumerGroup>,
@@ -232,6 +234,22 @@ pub enum LiabilityConfig {
         #[serde(default)]
         maturity_days: u32,
     },
+    Mortgage {
+        creditor_id: String,
+        principal: Distribution,
+        #[serde(default)]
+        rate_bps: BasisPoints,
+        #[serde(default)]
+        maturity_days: u32,
+    },
+    CreditCard {
+        creditor_id: String,
+        principal: Distribution,
+        #[serde(default)]
+        rate_bps: BasisPoints,
+        #[serde(default)]
+        maturity_days: u32,
+    },
 }
 
 impl Scenario {
@@ -303,6 +321,7 @@ impl Scenario {
         (generated_consumers, generated_firms)
     }
 
+
     pub fn initialize_engine(&self) -> SimulationEngine {
         let mut state = SimState::default();
         state.config.iterations = self.config.iterations;
@@ -357,29 +376,32 @@ impl Scenario {
 
         let mut agent_ids: HashMap<String, AgentId> = HashMap::new();
         let mut factory = factory::AgentFactory::new(&mut state, &mut rng);
+        
+        let mut pending_credit_effects = Vec::new();
 
         factory.initialize_treasury_general_account().expect("TGA init failed");
         let mut bond_instruments_by_tenor = std::collections::HashMap::new();
 
-        // Create banks without seed_sales
-        for b in &self.banks {
-            let bank = factory.create_bank(b, cb_id, &mut bond_instruments_by_tenor);
-            agent_ids.insert(b.id.clone(), bank.id);
+        // --- Create all agents first to populate agent_ids map ---
+
+        for b_config in &self.banks {
+            let bank = factory.create_bank(b_config, cb_id, &mut bond_instruments_by_tenor);
+            agent_ids.insert(b_config.id.clone(), bank.id);
         }
 
-        // Create consumers without collecting seed_sales
-        for (i, c) in all_consumers.iter().enumerate() {
-            let bank_id = *agent_ids.get(&c.bank_id).expect("unknown bank id");
-            let consumer =
-                factory.create_consumer(c, bank_id, cb_id, &agent_ids, i, &mut bond_instruments_by_tenor);
-            agent_ids.insert(c.id.clone(), consumer.id);
+        for (i, c_config) in all_consumers.iter().enumerate() {
+            let bank_id = *agent_ids.get(&c_config.bank_id).expect("unknown bank id for consumer");
+            let consumer = factory.create_consumer(c_config, bank_id, cb_id, &agent_ids, i, &mut bond_instruments_by_tenor);
+            agent_ids.insert(c_config.id.clone(), consumer.id);
         }
 
-        // Create firms without collecting seed_sales
-        for f in &all_firms {
-            let bank_id = *agent_ids.get(&f.bank_id).expect("unknown bank id");
-            let firm = factory.create_firm(f, bank_id, cb_id, &agent_ids, &mut bond_instruments_by_tenor);
-            for a in &f.initial_assets {
+        for f_config in &all_firms {
+            let bank_id = *agent_ids.get(&f_config.bank_id).expect("unknown bank id for firm");
+            let firm = factory.create_firm(f_config, bank_id, cb_id, &agent_ids, &mut bond_instruments_by_tenor);
+            agent_ids.insert(f_config.id.clone(), firm.id);
+            
+            // Handle inventory asset creation here as it's specific to firms
+            for a in &f_config.initial_assets {
                 if let AssetConfig::Inventory { good_slug, quantity, unit_cost } = a {
                     let gid = *good_ids.get(good_slug).expect("inventory good unknown");
                     factory.state.financial_system.add_to_inventory(
@@ -387,21 +409,56 @@ impl Scenario {
                         &gid,
                         *quantity,
                         Money::from_f64(*unit_cost).unwrap_or(Money::ZERO),
-                    )
+                    );
                 }
             }
-            agent_ids.insert(f.id.clone(), firm.id);
         }
 
-        // Add reserves based on deposits
+        // --- Now create liabilities, since all agent IDs are known ---
+
+        for b_config in &self.banks {
+            let bank_id = agent_ids.get(&b_config.id).unwrap();
+            for l in &b_config.initial_liabilities {
+                if let Some(effect) = factory.create_liability_for_agent(*bank_id, l, cb_id, &agent_ids).unwrap() {
+                    pending_credit_effects.push(effect);
+                }
+            }
+        }
+
+        for c_config in &all_consumers {
+            let consumer_id = agent_ids.get(&c_config.id).unwrap();
+            for l in &c_config.initial_liabilities {
+                if let Some(effect) = factory.create_liability_for_agent(*consumer_id, l, cb_id, &agent_ids).unwrap() {
+                    pending_credit_effects.push(effect);
+                }
+            }
+        }
+
+        for f_config in &all_firms {
+            let firm_id = agent_ids.get(&f_config.id).unwrap();
+            for l in &f_config.initial_liabilities {
+                if let Some(effect) = factory.create_liability_for_agent(*firm_id, l, cb_id, &agent_ids).unwrap() {
+                    pending_credit_effects.push(effect);
+                }
+            }
+        }
+
+        // --- Apply all pending credit effects ---
+
+        for effect in pending_credit_effects {
+            StateEffectApplicator::apply_to_state(&mut factory.state, &effect)
+                .expect("Failed to apply initial credit effect");
+        }
+        
+        // --- Seed reserves and finalize state ---
+
         for b_config in &self.banks {
             if let Some(bank_id) = agent_ids.get(&b_config.id) {
                 if let Some(reserves_config) = &b_config.reserves {
                     let total_deposits = factory.state.financial_system.get_bank_deposits(bank_id);
-                    let mut rng_cl = rand::rng();
                     let reserves_to_create = match reserves_config {
                         ReservesConfig::RatioOfDeposits { ratio, noise } => {
-                            let noisy_ratio = ratio + (rng_cl.random::<f64>() - 0.5) * 2.0 * noise;
+                            let noisy_ratio = ratio + (rand::random::<f64>() - 0.5) * 2.0 * noise;
                             total_deposits * noisy_ratio.max(0.0)
                         }
                     };
@@ -418,10 +475,6 @@ impl Scenario {
             }
         }
 
-        // NOTE: The entire bond issuance and settlement block has been removed
-        // Bonds are now directly credited during asset creation
-
-        // Create equity for government if needed
         {
             let gbs = factory.state.financial_system.balance_sheets.get(&gov_id).expect("gov BS");
             let tot_a: Money = gbs.assets.values().map(|p| p.book_value_per_unit * p.quantity).sum();

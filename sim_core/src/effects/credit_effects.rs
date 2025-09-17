@@ -11,6 +11,8 @@ pub enum CreditEffect {
 
     RegisterLoan {
         loan: Loan,
+        is_consumer: bool,
+        purpose: LoanPurpose,
     },
 
     UpdateFacilityUtilization {
@@ -89,16 +91,27 @@ impl StateEffectApplicator {
                 Ok(())
             }
 
-            CreditEffect::RegisterLoan { loan } => {
+            CreditEffect::RegisterLoan { loan, is_consumer, purpose } => {
                 let fs = &mut state.financial_system;
                 let cr = &mut fs.credit_registry;
 
                 cr.register_loan(loan.clone()).map_err(EffectError::FinancialSystemError)?;
 
+                let debt_instrument = if *is_consumer {
+                    let consumer_loan = match purpose {
+                        LoanPurpose::RealEstate => ConsumerDebt::ResidentialMortgage(loan.details.clone()),
+                        LoanPurpose::PersonalConsumption => ConsumerDebt::PersonalLoan(loan.details.clone()),
+                        _ => ConsumerDebt::PersonalLoan(loan.details.clone()), // Default for now
+                    };
+                    DebtInstrument::Consumer(consumer_loan)
+                } else {
+                    DebtInstrument::Loan(loan.details.clone())
+                };
+
                 let inst = Instrument {
                     id: loan.instrument_id,
-                    instrument_type: InstrumentType::Debt(DebtInstrument::Loan(loan.details.clone())),
-                    instrument_market: InstrumentMarket::MoneyMarket(MoneyMarketSegment::CorporateShortTerm),
+                    instrument_type: InstrumentType::Debt(debt_instrument),
+                    instrument_market: InstrumentMarket::Unlisted,
                     listability: Listability::Unlisted,
                 };
                 fs.instruments.insert(loan.instrument_id, inst);

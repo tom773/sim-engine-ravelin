@@ -54,6 +54,33 @@ impl Instrument {
                     instrument_type: "TradeCredit".to_string(),
                     subtype: format!("{:?}", d.status),
                 },
+                DebtInstrument::Consumer(c) => match c {
+                    ConsumerDebt::ResidentialMortgage(l) => ConsolidationKey {
+                        issuer: l.lender,
+                        instrument_type: "ResidentialMortgage".to_string(),
+                        subtype: format!("{:?}_{:?}", l.loan_type, l.loan_id),
+                    },
+                    ConsumerDebt::AutoLoan(l) => ConsolidationKey {
+                        issuer: l.lender,
+                        instrument_type: "AutoLoan".to_string(),
+                        subtype: format!("{:?}_{:?}", l.loan_type, l.loan_id),
+                    },
+                    ConsumerDebt::CreditCard(cl) => ConsolidationKey {
+                        issuer: cl.lender,
+                        instrument_type: "CreditCard".to_string(),
+                        subtype: format!("{:?}_{:?}", cl.facility_type, cl.facility_id),
+                    },
+                    ConsumerDebt::PersonalLoan(l) => ConsolidationKey {
+                        issuer: l.lender,
+                        instrument_type: "PersonalLoan".to_string(),
+                        subtype: format!("{:?}_{:?}", l.loan_type, l.loan_id),
+                    },
+                    ConsumerDebt::StudentLoan(l) => ConsolidationKey {
+                        issuer: l.lender,
+                        instrument_type: "StudentLoan".to_string(),
+                        subtype: format!("{:?}_{:?}", l.loan_type, l.loan_id),
+                    },
+                },
             },
             InstrumentType::RealAsset(d) => {
                 let (owner, subtype) = match d {
@@ -150,15 +177,12 @@ impl FinancialSystem {
         book_value_per_unit: f64,
     ) -> Result<(), String> {
         if let Some(inst) = self.instruments.get(instrument_id) {
-            match inst.instrument_type {
-                InstrumentType::Debt(_)
+            match &inst.instrument_type {
+                InstrumentType::Debt(DebtInstrument::Bond(_))
                 | InstrumentType::Equity(_)
                 | InstrumentType::StructuredTranche(_)
                 | InstrumentType::Derivative(_) => {
-                    return Err(format!(
-                        "Security {} must use CSD, not balance sheets. Use CreateInstrument effect.",
-                        instrument_id
-                    ));
+                    return Err(format!("Security {} must use CSD…", instrument_id));
                 }
                 _ => {}
             }
@@ -229,6 +253,21 @@ impl FinancialSystem {
                     info.maturity_date = Some(d.due_date);
                     Some(d.creditor)
                 }
+                DebtInstrument::Consumer(c) => match c {
+                    ConsumerDebt::ResidentialMortgage(l)
+                    | ConsumerDebt::AutoLoan(l)
+                    | ConsumerDebt::PersonalLoan(l)
+                    | ConsumerDebt::StudentLoan(l) => {
+                        info.face_value = Some(l.principal);
+                        info.maturity_date = Some(l.maturity_date);
+                        Some(l.lender)
+                    }
+                    ConsumerDebt::CreditCard(cl) => {
+                        info.face_value = Some(cl.commitment_amount);
+                        info.maturity_date = Some(cl.expiry_date);
+                        Some(cl.lender)
+                    }
+                },
             },
             InstrumentType::Equity(d) => Some(d.issuer),
             InstrumentType::Repo(d) => Some(d.borrower),
@@ -340,7 +379,7 @@ impl FinancialSystem {
                 bs.assets
                     .iter()
                     .map(|(id, pos)| {
-                        // This call is now valid
+
                         let price = self.get_market_price(id).unwrap_or(pos.book_value_per_unit);
                         price.to_f64() * pos.quantity
                     })
@@ -355,7 +394,7 @@ impl FinancialSystem {
             .iter()
             .map(|(id, qty)| {
                 let price = self
-                    // This call is now valid
+
                     .get_market_price(id)
                     .or_else(|| self.instruments.get(id).and_then(|i| i.face_value()))
                     .unwrap_or(Money::ZERO);
@@ -373,7 +412,7 @@ impl FinancialSystem {
                 bs.liabilities
                     .iter()
                     .map(|(id, pos)| {
-                        // This call is now valid
+
                         let price = self.get_market_price(id).unwrap_or(pos.book_value_per_unit);
                         price.to_f64() * pos.quantity
                     })
@@ -391,7 +430,7 @@ impl FinancialSystem {
                     .filter_map(|(id, pos)| {
                         self.instruments.get(id).and_then(|inst| {
                             if let InstrumentType::Cash(_) = &inst.instrument_type {
-                                Some(pos.quantity) // Cash has a price of 1.0
+                                Some(pos.quantity)
                             } else {
                                 None
                             }
@@ -414,7 +453,7 @@ impl FinancialSystem {
                 let default_penalty = h.total_defaults as f64 * 0.2;
                 (repayment_rate - default_penalty).max(0.0).min(1.0)
             }
-            _ => 0.5, // Default score for new borrowers
+            _ => 0.5,
         }
     }
 

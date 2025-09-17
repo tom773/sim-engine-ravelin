@@ -61,6 +61,7 @@ impl BasicBankDecisionModel {
                             payment_frequency: PaymentFrequency::Monthly,
                             collateral_required: false,
                             loan_to_value_ratio: None,
+                            purpose: app.purpose.clone(),
                         },
                     }
                 } else {

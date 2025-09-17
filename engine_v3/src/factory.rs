@@ -11,7 +11,7 @@ use sim_core::prelude::*;
 fn is_security(inst: &Instrument) -> bool {
     matches!(
         inst.instrument_type,
-        InstrumentType::Debt(_)
+        InstrumentType::Debt(DebtInstrument::Bond(_))
             | InstrumentType::Equity(_)
             | InstrumentType::StructuredTranche(_)
             | InstrumentType::Derivative(_)
@@ -156,7 +156,7 @@ impl<'a> AgentFactory<'a> {
         gbs.liabilities.insert(
             bond_id,
             Position {
-                quantity: (initial_balance /1000.0),
+                quantity: (initial_balance / 1000.0),
                 book_value_per_unit: Money::from(1000),
                 cost_basis_per_unit: Money::from(1000),
             },
@@ -177,9 +177,6 @@ impl<'a> AgentFactory<'a> {
         for a in &config.initial_assets {
             self.create_asset_for_agent(bank.id, a, cb_id, &std::collections::HashMap::new(), bond_instruments)
                 .expect("Failed to create initial asset for bank");
-        }
-        for l in &config.initial_liabilities {
-            self.create_liability_for_agent(bank.id, l, cb_id, &std::collections::HashMap::new()).unwrap();
         }
 
         bank
@@ -202,9 +199,6 @@ impl<'a> AgentFactory<'a> {
             self.create_asset_for_agent(consumer.id, a, cb_id, agent_ids, bond_instruments)
                 .expect("Failed to create initial asset for consumer");
         }
-        for l in &config.initial_liabilities {
-            self.create_liability_for_agent(consumer.id, l, cb_id, agent_ids).unwrap();
-        }
         self.state.agents.consumers.insert(consumer.id, consumer.clone());
         consumer
     }
@@ -226,9 +220,6 @@ impl<'a> AgentFactory<'a> {
                 self.create_asset_for_agent(firm.id, a, cb_id, agent_ids, bond_instruments)
                     .expect("Failed to create initial asset for firm");
             }
-        }
-        for l in &config.initial_liabilities {
-            self.create_liability_for_agent(firm.id, l, cb_id, agent_ids).unwrap();
         }
 
         self.state.agents.firms.insert(firm.id, firm.clone());
@@ -293,7 +284,7 @@ impl<'a> AgentFactory<'a> {
         let cb_bs = self.state.financial_system.balance_sheets.get_mut(&cb_id).unwrap();
         let tga_pos = cb_bs.liabilities.get_mut(&tga_id.0).ok_or("CB missing TGA liability")?;
         tga_pos.quantity -= amount;
-        
+
         let r_liab = cb_bs.liabilities.entry(reserves_inst_id).or_insert_with(Default::default);
         r_liab.quantity += amount;
         r_liab.book_value_per_unit = Money::ONE;
@@ -354,10 +345,11 @@ impl<'a> AgentFactory<'a> {
         Ok(())
     }
 
+    // FIX: Changed return type to Result<Option<StateEffect>, String>
     pub fn create_liability_for_agent(
         &mut self, agent_id: AgentId, liability: &LiabilityConfig, _cb_id: AgentId,
         agent_ids: &HashMap<String, AgentId>,
-    ) -> Result<(), String> {
+    ) -> Result<Option<StateEffect>, String> {
         match liability {
             LiabilityConfig::Deposit { creditor_id, amount, .. } => {
                 if self.state.agents.banks.contains_key(&agent_id) {
@@ -367,7 +359,8 @@ impl<'a> AgentFactory<'a> {
                         .iter()
                         .find_map(|(k, v)| if *v == agent_id { Some(k.clone()) } else { None })
                         .ok_or_else(|| "Bank agent not present in id map".to_string())?;
-                    self.seed_deposit(depositor_id, &bank_key, *amount, agent_ids, SeedMode::RtgsFromTreasury)
+                    self.seed_deposit(depositor_id, &bank_key, *amount, agent_ids, SeedMode::RtgsFromTreasury)?;
+                    Ok(None)
                 } else {
                     Err("Deposit liability configured for non-bank agent".to_string())
                 }
@@ -377,24 +370,98 @@ impl<'a> AgentFactory<'a> {
                     *agent_ids.get(creditor_id).ok_or_else(|| format!("Creditor ID {} not found", creditor_id))?;
                 let issue_date = self.state.current_date;
                 let maturity_date = issue_date + Duration::days(*maturity_days as i64);
-                let loan_instrument = Instrument::bond(
-                    InstrumentId(Uuid::new_v4()),
-                    agent_id,
-                    BondType::Corporate,
-                    Money::from(*principal as u64),
-                    issue_date,
+
+                let instrument_id = InstrumentId(Uuid::new_v4());
+                let details = LoanDetails {
+                    loan_id: Uuid::new_v4(),
+                    lender: creditor_agent_id,
+                    borrower: agent_id,
+                    loan_type: LoanType::TermLoan,
+                    principal: Money::from_f64(*principal).unwrap(),
+                    outstanding_principal: Money::from_f64(*principal).unwrap(),
+                    spread_bps: *rate_bps,
+                    origination_date: issue_date,
                     maturity_date,
-                )
-                .coupon_bps(*rate_bps)
-                .frequency(12)
-                .rating(CreditRating::Corporate(SpCreditRating::BBB))
-                .build()
-                .map_err(|e| format!("Failed to build loan instrument: {}", e))?;
-                self.create_and_register_instrument(creditor_agent_id, agent_id, loan_instrument, 1.0, *principal)
+                    ..Default::default()
+                };
+
+                let loan_instrument = Instrument::loan(instrument_id, details.clone());
+                self.state.financial_system.instruments.insert(instrument_id, loan_instrument);
+
+                let loan = Loan { instrument_id, details, status: LoanStatus::Current, servicing_history: Vec::new() };
+
+                Ok(Some(StateEffect::Credit(CreditEffect::RegisterLoan {
+                    loan,
+                    is_consumer: false,
+                    purpose: LoanPurpose::BusinessExpansion,
+                })))
+            }
+            LiabilityConfig::Mortgage { creditor_id, principal, rate_bps, maturity_days } => {
+                let creditor_agent_id =
+                    *agent_ids.get(creditor_id).ok_or_else(|| format!("Creditor ID {} not found", creditor_id))?;
+                let issue_date = self.state.current_date;
+                let maturity_date = issue_date + Duration::days(*maturity_days as i64);
+
+                let principal_amount = principal.sample(self.rng);
+
+                let instrument_id = InstrumentId(Uuid::new_v4());
+                let details = LoanDetails {
+                    loan_id: Uuid::new_v4(),
+                    lender: creditor_agent_id,
+                    borrower: agent_id,
+                    loan_type: LoanType::MortgageLoan,
+                    principal: Money::from_f64(principal_amount).unwrap(),
+                    outstanding_principal: Money::from_f64(principal_amount).unwrap(),
+                    spread_bps: *rate_bps,
+                    origination_date: issue_date,
+                    maturity_date,
+                    ..Default::default()
+                };
+
+                let loan_instrument = Instrument::loan(instrument_id, details.clone());
+                self.state.financial_system.instruments.insert(instrument_id, loan_instrument);
+
+                let loan = Loan { instrument_id, details, status: LoanStatus::Current, servicing_history: Vec::new() };
+
+                Ok(Some(StateEffect::Credit(CreditEffect::RegisterLoan {
+                    loan,
+                    is_consumer: true,
+                    purpose: LoanPurpose::RealEstate,
+                })))
+            }
+            LiabilityConfig::CreditCard { creditor_id, principal, rate_bps, maturity_days } => {
+                let creditor_agent_id =
+                    *agent_ids.get(creditor_id).ok_or_else(|| format!("Creditor ID {} not found", creditor_id))?;
+                let issue_date = self.state.current_date;
+                let maturity_date = issue_date + Duration::days(*maturity_days as i64);
+
+                let limit_amount = principal.sample(self.rng);
+                let commitment_money = Money::from_f64(limit_amount).unwrap();
+                let instrument_id = InstrumentId(Uuid::new_v4());
+
+                let details = CreditLineDetails {
+                    lender: creditor_agent_id,
+                    borrower: agent_id,
+                    commitment_amount: commitment_money,
+                    available_amount: commitment_money,
+                    drawn_amount: Money::ZERO,
+                    spread_bps: *rate_bps,
+                    expiry_date: maturity_date,
+                    commitment_date: issue_date,
+                    borrower_type: BorrowerType::Individual,
+                    ..Default::default()
+                };
+
+                let credit_card_instrument = Instrument::consumer_credit_card(instrument_id, details.clone());
+                self.state.financial_system.instruments.insert(instrument_id, credit_card_instrument);
+
+                let facility = CreditFacility { instrument_id, details, status: FacilityStatus::Active };
+                self.state.financial_system.credit_registry.register_facility(facility)?;
+
+                Ok(None)
             }
         }
     }
-
     pub fn create_asset_for_agent(
         &mut self, agent_id: AgentId, asset: &AssetConfig, cb_id: AgentId, agent_ids: &HashMap<String, AgentId>,
         bond_instruments: &mut HashMap<String, InstrumentId>,
@@ -439,6 +506,7 @@ impl<'a> AgentFactory<'a> {
                             maturity,
                         )
                         .zero_coupon_rate_bps()
+                        .rating(CreditRating::Government(SpCreditRating::AAA))
                     } else {
                         Instrument::bond(
                             InstrumentId(Uuid::new_v4()),
@@ -449,6 +517,7 @@ impl<'a> AgentFactory<'a> {
                             maturity,
                         )
                         .coupon_bps(coupon_bps)
+                        .rating(CreditRating::Government(SpCreditRating::AAA))
                     };
 
                     let inst = builder.build().unwrap();
