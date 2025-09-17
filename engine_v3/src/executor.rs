@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 pub struct SimulationEngine {
+    pub initial_state: Option<SimState>,
     pub state: SimState,
     pub domain_registry: DomainRegistry,
     pub decision_models: HashMap<AgentId, Box<dyn DecisionModel>>,
@@ -20,6 +21,7 @@ pub struct SimulationEngine {
 impl SimulationEngine {
     pub fn new(state: SimState) -> Self {
         Self {
+            initial_state: None,
             state,
             domain_registry: DomainRegistry::new(),
             decision_models: HashMap::new(),
@@ -30,12 +32,24 @@ impl SimulationEngine {
     }
 
     pub fn new_with_scheduler(state: SimState) -> Self {
+        let initial_state = state.clone();
         let mut engine = Self::new(state);
+        engine.initial_state = Some(initial_state);
         let scheduler = engine.create_scheduler();
         engine.scheduler = scheduler;
         engine
     }
-
+    pub fn reset(&mut self) -> Result<(), String> {
+        if let Some(ref initial) = self.initial_state {
+            self.state = initial.clone();
+            self.event_log.clear();
+            self.scheduler_metrics = SchedulerMetrics::new();
+            // Re-register decision models if needed
+            Ok(())
+        } else {
+            Err("No initial state snapshot available".to_string())
+        }
+    }
     fn create_scheduler(&self) -> TickScheduler {
         let mut scheduler = TickScheduler::new();
         scheduler.register_handler(TickStep::Upkeep, UpkeepHandler);

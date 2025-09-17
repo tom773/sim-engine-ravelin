@@ -1,17 +1,16 @@
-use sim_core::SimEvent; // your enum
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
-use std::{collections::VecDeque, sync::{Arc, Mutex}};
+use sim_core::SimEvent; // your enum
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex},
+};
 use tokio::sync::broadcast;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ServerEvent {
-    Tick {
-        tick: u32,
-        date: NaiveDate,
-        events: Vec<SimEvent>,
-    },
+    Tick { tick: u32, date: NaiveDate, events: Vec<SimEvent> },
     Heartbeat { tick: u32, date: NaiveDate },
 }
 
@@ -32,7 +31,9 @@ impl EventsBus {
         {
             let mut h = self.history.lock().unwrap();
             h.push_back((tick, date, events.clone()));
-            while h.len() > self.cap { h.pop_front(); }
+            while h.len() > self.cap {
+                h.pop_front();
+            }
         }
         let _ = self.tx.send(ServerEvent::Tick { tick, date, events: Arc::unwrap_or_clone(events) });
     }
@@ -41,6 +42,9 @@ impl EventsBus {
         h.iter().rev().take(n).cloned().collect::<Vec<_>>().into_iter().rev().collect()
     }
     pub fn get(&self, tick: u32) -> Option<Arc<Vec<SimEvent>>> {
-        self.history.lock().unwrap().iter().find(|(t,_,_)| *t == tick).map(|(_,_,v)| v.clone())
+        self.history.lock().unwrap().iter().find(|(t, _, _)| *t == tick).map(|(_, _, v)| v.clone())
+    }
+    pub fn clear(&self) {
+        self.history.lock().unwrap().clear();
     }
 }

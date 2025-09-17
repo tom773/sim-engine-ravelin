@@ -1,11 +1,11 @@
 use crate::*;
-use rand::{rngs::StdRng, SeedableRng, Rng};
+use domains::prelude::*;
 use rand::distr::{Distribution as RandDist, weighted::WeightedIndex};
-use rand_distr::{Normal, LogNormal, Pareto};
+use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand_distr::{LogNormal, Normal, Pareto};
 use serde::Deserialize;
 use std::collections::HashMap;
 use uuid::Uuid;
-use domains::prelude::*;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct ClampRange {
@@ -87,7 +87,9 @@ pub struct ScenarioConfig {
     #[serde(default = "default_seed")]
     pub seed: u64,
 }
-fn default_seed() -> u64 { 42 }
+fn default_seed() -> u64 {
+    42
+}
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct GoodConfig {
@@ -112,11 +114,19 @@ pub struct RecipeConfig {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[serde(tag = "type")]
+pub enum ReservesConfig {
+    #[serde(rename = "ratio_of_deposits")]
+    RatioOfDeposits { ratio: f64, noise: f64 },
+}
+
+#[derive(Debug, Deserialize, Clone)]
 pub struct BankConfig {
     pub id: String,
     pub name: String,
     pub initial_assets: Vec<AssetConfig>,
     pub initial_liabilities: Vec<LiabilityConfig>,
+    pub reserves: Option<ReservesConfig>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -208,12 +218,19 @@ pub enum AssetConfig {
 #[derive(Debug, Deserialize, Clone)]
 #[serde(tag = "type")]
 pub enum LiabilityConfig {
-    Deposit { creditor_id: String, amount: f64, #[serde(default)] rate_bps: BasisPoints },
+    Deposit {
+        creditor_id: String,
+        amount: f64,
+        #[serde(default)]
+        rate_bps: BasisPoints,
+    },
     Loan {
         creditor_id: String,
         principal: f64,
-        #[serde(default)] rate_bps: BasisPoints,
-        #[serde(default)] maturity_days: u32,
+        #[serde(default)]
+        rate_bps: BasisPoints,
+        #[serde(default)]
+        maturity_days: u32,
     },
 }
 
@@ -222,10 +239,7 @@ impl Scenario {
         toml::from_str::<Scenario>(s)
     }
 
-    fn expand_groups(
-        &self,
-        rng: &mut StdRng,
-    ) -> (Vec<ConsumerConfig>, Vec<FirmConfig>) {
+    fn expand_groups(&self, rng: &mut StdRng) -> (Vec<ConsumerConfig>, Vec<FirmConfig>) {
         let mut generated_consumers = Vec::new();
         for group in &self.consumer_groups {
             let bank_ids: Vec<String> = group.bank_mix.keys().cloned().collect();
@@ -261,7 +275,8 @@ impl Scenario {
             for i in 0..group.count {
                 let bank_choice = &bank_ids[chooser.sample(rng)];
                 let deposit_amt = group.deposit.sample(rng);
-                let mut initial_assets = vec![AssetConfig::Deposit { bank_id: bank_choice.clone(), amount: deposit_amt }];
+                let mut initial_assets =
+                    vec![AssetConfig::Deposit { bank_id: bank_choice.clone(), amount: deposit_amt }];
 
                 if let Some(inv) = &group.inventory {
                     initial_assets.push(AssetConfig::Inventory {
@@ -318,10 +333,14 @@ impl Scenario {
         }
         for r in &self.recipes {
             let rid = RecipeId(r.id.clone());
-            let inputs = r.inputs.iter()
+            let inputs = r
+                .inputs
+                .iter()
                 .map(|x| RecipeIO { good_id: *good_ids.get(&x.good_id).expect("bad good_id"), quantity: x.quantity })
                 .collect();
-            let outputs = r.outputs.iter()
+            let outputs = r
+                .outputs
+                .iter()
                 .map(|x| RecipeIO { good_id: *good_ids.get(&x.good_id).expect("bad good_id"), quantity: x.quantity })
                 .collect();
             state.financial_system.goods.recipes.insert(
@@ -337,74 +356,72 @@ impl Scenario {
         all_firms.append(&mut more_firms);
 
         let mut agent_ids: HashMap<String, AgentId> = HashMap::new();
-        let mut factory = AgentFactory::new(&mut state, &mut rng);
+        let mut factory = factory::AgentFactory::new(&mut state, &mut rng);
 
         factory.initialize_treasury_general_account().expect("TGA init failed");
+        let mut bond_instruments_by_tenor = std::collections::HashMap::new();
 
+        // Create banks without seed_sales
         for b in &self.banks {
-            let bank = factory.create_bank(b, cb_id);
+            let bank = factory.create_bank(b, cb_id, &mut bond_instruments_by_tenor);
             agent_ids.insert(b.id.clone(), bank.id);
         }
 
-        let mut bond_instruments_by_tenor: HashMap<String, InstrumentId> = HashMap::new();
-        let mut seed_sales: Vec<factory::SeedSale> = Vec::new();
-
+        // Create consumers without collecting seed_sales
         for (i, c) in all_consumers.iter().enumerate() {
             let bank_id = *agent_ids.get(&c.bank_id).expect("unknown bank id");
-            let (consumer, sales) = factory.create_consumer(c, bank_id, cb_id, &agent_ids, i, &mut bond_instruments_by_tenor);
+            let consumer =
+                factory.create_consumer(c, bank_id, cb_id, &agent_ids, i, &mut bond_instruments_by_tenor);
             agent_ids.insert(c.id.clone(), consumer.id);
-            seed_sales.extend(sales);
         }
 
+        // Create firms without collecting seed_sales
         for f in &all_firms {
             let bank_id = *agent_ids.get(&f.bank_id).expect("unknown bank id");
-            let (firm, sales) = factory.create_firm(f, bank_id, cb_id, &agent_ids, &mut bond_instruments_by_tenor);
+            let firm = factory.create_firm(f, bank_id, cb_id, &agent_ids, &mut bond_instruments_by_tenor);
             for a in &f.initial_assets {
                 if let AssetConfig::Inventory { good_slug, quantity, unit_cost } = a {
                     let gid = *good_ids.get(good_slug).expect("inventory good unknown");
-                    factory.state.financial_system.add_to_inventory(&firm.id, &gid, *quantity, Money::from_f64(*unit_cost).unwrap_or(Money::ZERO))
+                    factory.state.financial_system.add_to_inventory(
+                        &firm.id,
+                        &gid,
+                        *quantity,
+                        Money::from_f64(*unit_cost).unwrap_or(Money::ZERO),
+                    )
                 }
             }
             agent_ids.insert(f.id.clone(), firm.id);
-            seed_sales.extend(sales);
         }
 
-        if !bond_instruments_by_tenor.is_empty() {
-            let mut by_tenor: HashMap<String, factory::BondIssuance> = HashMap::new();
-            for (tenor, inst_id) in &bond_instruments_by_tenor {
-                if let Some(inst) = factory.state.financial_system.instruments.get(inst_id) {
-                    if let InstrumentType::Debt(DebtInstrument::Bond(_)) = &inst.instrument_type {
-                        by_tenor
-                            .entry(tenor.clone())
-                            .and_modify(|iss| iss.total_quantity += 0.0)
-                            .or_insert(factory::BondIssuance { instrument: inst.clone(), total_quantity: 0.0 });
+        // Add reserves based on deposits
+        for b_config in &self.banks {
+            if let Some(bank_id) = agent_ids.get(&b_config.id) {
+                if let Some(reserves_config) = &b_config.reserves {
+                    let total_deposits = factory.state.financial_system.get_bank_deposits(bank_id);
+                    let mut rng_cl = rand::rng();
+                    let reserves_to_create = match reserves_config {
+                        ReservesConfig::RatioOfDeposits { ratio, noise } => {
+                            let noisy_ratio = ratio + (rng_cl.random::<f64>() - 0.5) * 2.0 * noise;
+                            total_deposits * noisy_ratio.max(0.0)
+                        }
+                    };
+
+                    if reserves_to_create > 0.0 {
+                        factory.seed_reserves_to_bank_from_tga(*bank_id, reserves_to_create).unwrap_or_else(|e| {
+                            tracing::warn!("TGA->bank reserves seed failed: {} (falling back to CB creation)", e);
+                            factory
+                                .seed_reserves_via_cb_creation(*bank_id, reserves_to_create)
+                                .expect("Final reserve creation failed");
+                        });
                     }
                 }
             }
-            for s in &seed_sales {
-                if let Some(inst) = factory.state.financial_system.instruments.get(&s.instrument_id) {
-                    if let InstrumentType::Debt(DebtInstrument::Bond(_)) = &inst.instrument_type {
-                        let tenor = factory.state
-                            .financial_system
-                            .exchange
-                            .inst_to_symbol
-                            .get(&s.instrument_id)
-                            .map(|sym| sym.0.clone())
-                            .unwrap_or_else(|| "GOV_BOND".to_string());
-                        by_tenor.entry(tenor)
-                            .and_modify(|iss| iss.total_quantity += s.quantity)
-                            .or_insert(factory::BondIssuance { instrument: inst.clone(), total_quantity: s.quantity });
-                    }
-                }
-            }
-
-            let issuances: Vec<factory::BondIssuance> = by_tenor.into_values().collect();
-            if !issuances.is_empty() {
-                factory::issue_government_bonds(factory.state, &issuances).expect("issue gov bonds");
-            }
-            factory::settle_seeded_primary_sales(factory.state, &seed_sales).expect("settle seed DvP");
         }
 
+        // NOTE: The entire bond issuance and settlement block has been removed
+        // Bonds are now directly credited during asset creation
+
+        // Create equity for government if needed
         {
             let gbs = factory.state.financial_system.balance_sheets.get(&gov_id).expect("gov BS");
             let tot_a: Money = gbs.assets.values().map(|p| p.book_value_per_unit * p.quantity).sum();
@@ -420,9 +437,9 @@ impl Scenario {
                 let id = eq.id;
                 factory.state.financial_system.instruments.insert(id, eq);
                 let gbs_mut = factory.state.financial_system.balance_sheets.get_mut(&gov_id).unwrap();
-                gbs_mut.liabilities.insert(id, Position {
-                    quantity: 1.0, book_value_per_unit: nw, cost_basis_per_unit: nw
-                });
+                gbs_mut
+                    .liabilities
+                    .insert(id, Position { quantity: 1.0, book_value_per_unit: nw, cost_basis_per_unit: nw });
             }
         }
 
@@ -433,15 +450,27 @@ impl Scenario {
             factory.state.financial_system.exchange.ensure_listed(iid, &inst);
         }
 
-        //factory.state.financial_system.validate_accounting_identity()
-        //    .expect("system-wide accounting identity failed after seeding");
-
         let mut engine = SimulationEngine::new_with_scheduler(std::mem::take(&mut factory.state));
         let mut decisions: HashMap<AgentId, Box<dyn DecisionModel>> = HashMap::new();
         decisions.insert(gov_id, Box::new(BasicGovernmentDecisionModel::default()));
         for f in &all_firms {
             if let Some(id) = agent_ids.get(&f.id) {
                 decisions.insert(*id, f.decision_model.clone().into_decision_model());
+            }
+        }
+        for (bank_id, _bank) in engine.state.agents.banks.iter() {
+            decisions.insert(*bank_id, Box::new(BasicBankDecisionModel::default()));
+        }
+
+        for c in &all_consumers {
+            if let Some(cid) = agent_ids.get(&c.id) {
+                let basket: std::collections::HashMap<GoodId, f64> = c
+                    .consumption_basket
+                    .iter()
+                    .filter_map(|(slug, w)| good_ids.get(slug).copied().map(|gid| (gid, *w)))
+                    .collect();
+
+                decisions.insert(*cid, Box::new(SimpleConsumerDecisionModel { mpc: 0.7, consumption_basket: basket }));
             }
         }
         engine.decision_models = decisions;

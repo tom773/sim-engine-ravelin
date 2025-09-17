@@ -26,3 +26,4 @@ rust_decimal_macros = { workspace = true }
 tracing = "0.1.41"
 dashmap = "6.1.0"
 parking_lot.workspace = true
+serde_json.workspace = true

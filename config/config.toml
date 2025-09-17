@@ -200,40 +200,74 @@ outputs = [{ good_id = "car", quantity = 1.0 }]
 labour_hours = 150.0
 
 # --- Banks ---
+
 [[banks]]
 id = "bank_a"
 name = "Community Savings Bank"
-initial_assets = [{ type = "Reserves", amount = 0.0 }]
+initial_assets = [
+  # Pay for Treasuries at DvP; also sets equity level
+  { type = "Reserves", amount = 4_100_000.0 },
+
+  # Primary govvies via seed sale → issuance + DvP (requires patch)
+  { type = "Bond", tenor = "T2Y", quantity = 4_300 }   # ≈ $4.3m face @ $1k
+]
 initial_liabilities = []
+reserves = { type = "ratio_of_deposits", ratio = 0.15, noise = 0.00 } # keep noise off while calibrating
 
 [[banks]]
 id="bank_b" 
 name="First National Bank"
-initial_assets = [{ type = "Reserves", amount = 0.0 }]
-initial_liabilities = []
-
-# --- Individual Firms ---
-[[firms]]
-id = "capital_ventures"
-name = "Capital Ventures Investment Fund"
-bank_id = "bank_b"
 initial_assets = [
-    { type = "Deposit", bank_id = "bank_b", amount = 25000000.0 },
+  { type = "Reserves", amount = 17_500_000.0 },
+  { type = "Bond", tenor = "T5Y", quantity = 22_000 }  # ≈ $22m
 ]
 initial_liabilities = []
-decision_model = { type = "InvestmentFirm", min_liquidity = 100000.0, quote_qty = 10000.0 }
+reserves = { type = "ratio_of_deposits", ratio = 0.20, noise = 0.00 }
 
+# --- Firms ---
 
-# --- Individual Consumers (dummy to satisfy parser) ---
-[[consumers]]
-id = "dummy_consumer"
+[[firms]]
+id = "alpha_mfg"
+name = "Alpha Manufacturing Co."
 bank_id = "bank_a"
-income = 1.0
-initial_assets = []
-initial_liabilities = []
+initial_assets = [
+  { type = "Deposit", bank_id = "bank_a", amount = 2_500_000.0 }, # working cash
+  { type = "Deposit", bank_id = "bank_a", amount = 7_000_000.0 }  # loan proceeds (see liability below)
+]
+initial_liabilities = [
+  { type = "Loan", creditor_id = "bank_a", principal = 7_000_000.0, rate_bps = 700, maturity_days = 1825 }
+]
+decision_model = { type = "ProductionFirm" }
+
+# Beta Retail borrows from bank_b, but parks proceeds at bank_a
+[[firms]]
+id = "beta_retail"
+name = "Beta Retail Group"
+bank_id = "bank_a"  # 'home' bank for operating deposits (so deposits will hit bank_a)
+initial_assets = [
+  { type = "Deposit", bank_id = "bank_a", amount = 3_000_000.0 }  # loan proceeds
+]
+initial_liabilities = [
+  { type = "Loan", creditor_id = "bank_b", principal = 3_000_000.0, rate_bps = 650, maturity_days = 1825 }
+]
+decision_model = { type = "ProductionFirm" }
+
+# --- Consumers ---
+
+[[consumers]]
+id = "homebuyer_1"
+bank_id = "bank_a"
+income = 140_000.0
+initial_assets = [
+  { type = "Deposit", bank_id = "bank_a", amount = 500_000.0 }   # loan proceeds
+]
+initial_liabilities = [
+  { type = "Loan", creditor_id = "bank_a", principal = 500_000.0, rate_bps = 850, maturity_days = 10950 }
+]
 consumption_basket = { bread = 1.0 }
 
 # --- Firm Groups ---
+
 [[firm_groups]]
 id_prefix = "wheat_farm_"
 count = 1
@@ -254,7 +288,8 @@ inventory = { good_slug = "bread", quantity = { type = "pareto", xm = 100.0, alp
 desired_markup = { dist = { type = "normal", mean = 0.30, stdev = 0.08 }, clamp = { min = 0.15, max = 0.50 } }
 decision_model = { type = "ProductionFirm" }
 
-# --- Consumers ---
+# --- Consumer Groups ---
+
 [[consumer_groups]]
 id_prefix="HH" 
 count=10 

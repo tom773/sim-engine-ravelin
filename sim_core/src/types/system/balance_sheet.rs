@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use std::collections::HashMap;
 
+
+
 #[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
 pub struct Position {
@@ -174,10 +176,10 @@ impl BalanceSheet {
                     InstrumentType::Cash(c) => match c.cash_type {
                         CashType::CentralBankReserves => 0.0,
                         CashType::TreasuryGeneralAccount => 0.0,
-                        _ => 0.2, // Regular deposits have some risk
+                        _ => 0.2,
                     },
-                    InstrumentType::RealAsset(_) => 1.0, // Full risk weight
-                    _ => continue,                       // Securities handled below
+                    InstrumentType::RealAsset(_) => 1.0,
+                    _ => continue,
                 };
 
                 let market_value =

@@ -24,6 +24,7 @@ use bus::*;
 struct AppState {
     engine: Arc<parking_lot::RwLock<SimulationEngine>>,
     bus: EventsBus,
+    scenario: Arc<Scenario>,
 }
 
 #[derive(Serialize)]
@@ -42,8 +43,8 @@ struct AgentQuery {
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
-    let scenario = Scenario::from_toml_str(include_str!("../../../config/config.toml"))
-        .expect("Failed to load scenario");
+    let scenario =
+        Scenario::from_toml_str(include_str!("../../../config/config.toml")).expect("Failed to load scenario");
     let engine = Arc::new(parking_lot::RwLock::new(scenario.initialize_engine()));
 
     let bus = EventsBus::new(500); // keep last 500 ticks
@@ -57,16 +58,10 @@ async fn main() {
 
         bus.push_tick(tick, date, events);
     }
-    let app_state = Arc::new(AppState {
-        engine: engine.clone(),
-        bus: bus.clone(),
-    });
+    let app_state = Arc::new(AppState { engine: engine.clone(), bus: bus.clone(), scenario: Arc::new(scenario) });
 
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
-        
+    let cors = CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any);
+
     let app = Router::new()
         .route("/api/live/stream", get(ws_upgrade))
         .route("/api/live/history/ticks", get(list_ticks))
@@ -78,34 +73,33 @@ async fn main() {
     let addr = SocketAddr::from(([127, 0, 0, 1], 8060));
     println!("Axum server listening on http://127.0.0.1:8060");
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app.into_make_service())
-        .await
-        .unwrap();
+    axum::serve(listener, app.into_make_service()).await.unwrap();
 }
 
 fn api_v1_router() -> Router<Arc<AppState>> {
     Router::new()
-        .nest("/simulation", Router::new()
+        .nest(
+            "/simulation",
+            Router::new()
             .route("/status", get(get_simulation_status))
-            .route("/tick", post(tick_handler)))
-        
-        .nest("/agents", Router::new()
-            .route("/", get(get_agents_list))
-            .route("/{id}", get(get_agent_detail)))
-        
-        .nest("/markets", Router::new()
-            .route("/", get(get_markets_list))
-            .route("/catalog", get(get_market_catalog))
-            .route("/infrastructure", get(get_infra))
-            .route("/{market_id}", get(get_market_detail))
-            .route("/{market_id}/history", get(get_market_history)))
-        
+            .route("/tick", post(tick_handler))
+            .route("/reset", post(reset_simulation))
+        )
+        .nest("/agents", Router::new().route("/", get(get_agents_list)).route("/{id}", get(get_agent_detail)))
+        .nest(
+            "/markets",
+            Router::new()
+                .route("/", get(get_markets_list))
+                .route("/catalog", get(get_market_catalog))
+                .route("/infrastructure", get(get_infra))
+                .route("/{market_id}", get(get_market_detail))
+                .route("/{market_id}/history", get(get_market_history)),
+        )
         .route("/instruments", get(get_instrument_registry))
         .route("/exchange", get(get_exchange))
-        .route("/dashboard", get(get_dashboard_bundle))  // NEW: consolidated bundle
-        .route("/pages/markets", get(get_markets_page))  // Keep for backward compat
+        .route("/dashboard", get(get_dashboard_bundle)) // NEW: consolidated bundle
+        .route("/pages/markets", get(get_markets_page)) // Keep for backward compat
         .route("/cb/actions", get(get_cb_actions))
-        
         .route("/history/ticks", get(list_ticks))
         .route("/history/ticks/{tick_number}", get(get_tick_detail))
 }
@@ -169,10 +163,7 @@ async fn tick_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         .into_response()
 }
 
-async fn get_agents_list(
-    State(state): State<Arc<AppState>>,
-    Query(query): Query<AgentQuery>,
-) -> impl IntoResponse {
+async fn get_agents_list(State(state): State<Arc<AppState>>, Query(query): Query<AgentQuery>) -> impl IntoResponse {
     let query_service = QueryService::new(state.engine.clone());
     match query_service.get_agents_summary(query.agent_type) {
         Ok(data) => (StatusCode::OK, Json(data)).into_response(),
@@ -180,10 +171,7 @@ async fn get_agents_list(
     }
 }
 
-async fn get_agent_detail(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<Uuid>,
-) -> impl IntoResponse {
+async fn get_agent_detail(State(state): State<Arc<AppState>>, Path(id): Path<Uuid>) -> impl IntoResponse {
     let query_service = QueryService::new(state.engine.clone());
     match query_service.get_agent_detail(id) {
         Ok(data) => (StatusCode::OK, Json(data)).into_response(),
@@ -207,11 +195,7 @@ async fn get_market_catalog(State(state): State<Arc<AppState>>) -> impl IntoResp
     }
 }
 
-
-async fn get_market_detail(
-    State(state): State<Arc<AppState>>,
-    Path(market_id): Path<String>,
-) -> impl IntoResponse {
+async fn get_market_detail(State(state): State<Arc<AppState>>, Path(market_id): Path<String>) -> impl IntoResponse {
     let query_service = QueryService::new(state.engine.clone());
     match query_service.get_market_detail(&market_id) {
         Ok(data) => (StatusCode::OK, Json(data)).into_response(),
@@ -219,10 +203,7 @@ async fn get_market_detail(
     }
 }
 
-async fn get_market_history(
-    State(state): State<Arc<AppState>>,
-    Path(market_id): Path<String>,
-) -> impl IntoResponse {
+async fn get_market_history(State(state): State<Arc<AppState>>, Path(market_id): Path<String>) -> impl IntoResponse {
     let query_service = QueryService::new(state.engine.clone());
     match query_service.get_market_history(&market_id) {
         Ok(data) => (StatusCode::OK, Json(data)).into_response(),
@@ -230,10 +211,7 @@ async fn get_market_history(
     }
 }
 
-async fn get_tick_detail(
-    State(state): State<Arc<AppState>>,
-    Path(tick_number): Path<u32>,
-) -> impl IntoResponse {
+async fn get_tick_detail(State(state): State<Arc<AppState>>, Path(tick_number): Path<u32>) -> impl IntoResponse {
     let query_service = QueryService::new(state.engine.clone());
     match query_service.get_tick_detail(tick_number) {
         Ok(data) => (StatusCode::OK, Json(data)).into_response(),
@@ -258,18 +236,12 @@ async fn get_instrument_registry(State(state): State<Arc<AppState>>) -> impl Int
 }
 
 async fn list_ticks(State(state): State<Arc<AppState>>) -> Json<Vec<u32>> {
-    let v = state
-        .bus
-        .latest_n(500)
-        .into_iter()
-        .map(|(t, _, _)| t)
-        .collect();
+    let v = state.bus.latest_n(500).into_iter().map(|(t, _, _)| t).collect();
     Json(v)
 }
 
 async fn get_tick_events(
-    State(state): State<Arc<AppState>>,
-    Path(n): Path<u32>,
+    State(state): State<Arc<AppState>>, Path(n): Path<u32>,
 ) -> Result<Json<Vec<SimEvent>>, StatusCode> {
     match state.bus.get(n) {
         Some(v) => Ok(Json(Arc::unwrap_or_clone(v))),
@@ -293,19 +265,13 @@ async fn get_infra(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     }
 }
 
-
 async fn ws_upgrade(State(state): State<Arc<AppState>>, ws: WebSocketUpgrade) -> impl IntoResponse {
     ws.on_upgrade(move |socket| ws_conn(socket, state))
 }
 
 async fn ws_conn(mut socket: WebSocket, state: Arc<AppState>) {
     for (tick, date, evs) in state.bus.latest_n(3) {
-        let msg = serde_json::to_string(&ServerEvent::Tick {
-            tick,
-            date,
-            events: Arc::unwrap_or_clone(evs),
-        })
-        .unwrap();
+        let msg = serde_json::to_string(&ServerEvent::Tick { tick, date, events: Arc::unwrap_or_clone(evs) }).unwrap();
         if socket.send(Message::Text(msg.into())).await.is_err() {
             return;
         }
@@ -322,4 +288,30 @@ async fn ws_conn(mut socket: WebSocket, state: Arc<AppState>) {
             else => break,
         }
     }
+}
+async fn reset_simulation(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let new_engine = state.scenario.initialize_engine();
+    
+    let mut eng = state.engine.write();
+    *eng = new_engine;
+    
+    state.bus.clear();
+    
+    let tick = eng.state.ticknum;
+    let date = eng.state.current_date;
+    let mut rng = StdRng::from_os_rng();
+    let (_res, events) = eng.run_tick(&mut rng);
+    
+    drop(eng);
+    state.bus.push_tick(tick, date, events);
+    
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "message": "Simulation reset successfully",
+            "tick_number": 0,
+            "current_date": state.engine.read().state.current_date.format("%Y-%m-%d").to_string()
+        })),
+    )
+    .into_response()
 }
