@@ -263,7 +263,7 @@ impl BankingDomain {
         // Determine if the borrower is a consumer from the agent registry
         let is_consumer = state.agents.consumers.contains_key(&borrower_id);
 
-        let credit_rating = if is_consumer {
+        let rating = if is_consumer {
             Some(CreditRating::Consumer(ConsumerCreditRating::Subprime))
         } else {
             Some(CreditRating::Corporate(SpCreditRating::BBB))
@@ -302,7 +302,7 @@ impl BankingDomain {
 
             collateral: vec![],
             covenants: vec![],
-            credit_rating,
+            rating,
             impairment: ImpairmentState {
                 stage: ImpairmentStage::Stage1Performing,
                 provision_amount: Money::ZERO,

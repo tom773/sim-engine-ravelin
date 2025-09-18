@@ -195,7 +195,7 @@ pub struct LoanDetails {
 
     pub collateral: Vec<LienId>,
     pub covenants: Vec<Covenant>,
-    pub credit_rating: Option<CreditRating>,
+    pub rating: Option<CreditRating>,
 
     pub impairment: ImpairmentState,
 
@@ -233,7 +233,7 @@ impl Default for LoanDetails {
             },
             collateral: Vec::new(),
             covenants: Vec::new(),
-            credit_rating: Some(CreditRating::consumer_prime()),
+            rating: Some(CreditRating::consumer_prime()),
             impairment: ImpairmentState {
                 stage: ImpairmentStage::Stage1Performing,
                 provision_amount: Money::ZERO,

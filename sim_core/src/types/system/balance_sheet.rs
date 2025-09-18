@@ -208,7 +208,7 @@ impl BalanceSheet {
                         },
                         BondType::InterbankLoan => 0.2,
                     },
-                    InstrumentType::Debt(DebtInstrument::Loan(l)) => match l.credit_rating {
+                    InstrumentType::Debt(DebtInstrument::Loan(l)) => match l.rating {
                         Some(CreditRating::Corporate(SpCreditRating::AAA))
                         | Some(CreditRating::Corporate(SpCreditRating::AA)) => 0.5,
                         Some(CreditRating::Corporate(SpCreditRating::A))

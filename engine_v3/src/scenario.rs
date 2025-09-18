@@ -184,6 +184,10 @@ pub struct ConsumerGroup {
     pub consumption_basket: HashMap<String, f64>,
     #[serde(default)]
     pub archetype: Option<String>,
+    #[serde(default)]
+    pub initial_assets: Vec<AssetConfig>,
+    #[serde(default)]
+    pub initial_liabilities: Vec<LiabilityConfig>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -263,7 +267,8 @@ impl Scenario {
             let bank_ids: Vec<String> = group.bank_mix.keys().cloned().collect();
             let weights: Vec<f64> = group.bank_mix.values().copied().collect();
             let chooser = WeightedIndex::new(&weights).unwrap();
-
+            let l_cfg = group.initial_liabilities.clone();
+            
             for i in 0..group.count {
                 let bank_choice = &bank_ids[chooser.sample(rng)];
                 let income = group.income.sample(rng);
@@ -272,13 +277,12 @@ impl Scenario {
                     d => d.sample(rng),
                 };
                 let deposit_amt = (income * deposit_ratio).max(0.0);
-
                 generated_consumers.push(ConsumerConfig {
                     id: format!("{}{:04}", group.id_prefix, i),
                     bank_id: bank_choice.clone(),
                     income,
                     initial_assets: vec![AssetConfig::Deposit { bank_id: bank_choice.clone(), amount: deposit_amt }],
-                    initial_liabilities: vec![],
+                    initial_liabilities: l_cfg.clone(),
                     consumption_basket: group.consumption_basket.clone(),
                 });
             }
@@ -321,12 +325,9 @@ impl Scenario {
         (generated_consumers, generated_firms)
     }
 
-
     pub fn initialize_engine(&self) -> SimulationEngine {
         let mut state = SimState::default();
         state.config.iterations = self.config.iterations;
-        let cb_id = state.financial_system.central_bank.id;
-        let gov_id = state.financial_system.government.id;
         let mut rng = StdRng::seed_from_u64(self.config.seed);
 
         let mut good_ids: HashMap<String, GoodId> = HashMap::new();
@@ -348,23 +349,26 @@ impl Scenario {
                     cpi_weight: g.cpi_weight,
                 },
             );
-            state.financial_system.exchange.ensure_goods_market(gid, &g.name);
         }
         for r in &self.recipes {
             let rid = RecipeId(r.id.clone());
-            let inputs = r
-                .inputs
-                .iter()
-                .map(|x| RecipeIO { good_id: *good_ids.get(&x.good_id).expect("bad good_id"), quantity: x.quantity })
-                .collect();
-            let outputs = r
-                .outputs
-                .iter()
-                .map(|x| RecipeIO { good_id: *good_ids.get(&x.good_id).expect("bad good_id"), quantity: x.quantity })
-                .collect();
             state.financial_system.goods.recipes.insert(
                 rid.clone(),
-                ProductionRecipe { id: rid, name: r.name.clone(), inputs, outputs, labour_hours: r.labour_hours },
+                ProductionRecipe {
+                    id: rid,
+                    name: r.name.clone(),
+                    inputs: r
+                        .inputs
+                        .iter()
+                        .map(|x| RecipeIO { good_id: *good_ids.get(&x.good_id).unwrap(), quantity: x.quantity })
+                        .collect(),
+                    outputs: r
+                        .outputs
+                        .iter()
+                        .map(|x| RecipeIO { good_id: *good_ids.get(&x.good_id).unwrap(), quantity: x.quantity })
+                        .collect(),
+                    labour_hours: r.labour_hours,
+                },
             );
         }
 
@@ -374,138 +378,30 @@ impl Scenario {
         all_consumers.append(&mut more_consumers);
         all_firms.append(&mut more_firms);
 
-        let mut agent_ids: HashMap<String, AgentId> = HashMap::new();
-        let mut factory = factory::AgentFactory::new(&mut state, &mut rng);
-        
-        let mut pending_credit_effects = Vec::new();
+        let mut factory = AgentFactory::new(&mut state, &mut rng);
 
-        factory.initialize_treasury_general_account().expect("TGA init failed");
-        let mut bond_instruments_by_tenor = std::collections::HashMap::new();
+        factory.create_agent_entities(&self.banks, &all_consumers, &all_firms);
 
-        // --- Create all agents first to populate agent_ids map ---
+        factory.create_balance_sheet_skeletons();
 
-        for b_config in &self.banks {
-            let bank = factory.create_bank(b_config, cb_id, &mut bond_instruments_by_tenor);
-            agent_ids.insert(b_config.id.clone(), bank.id);
+        factory.initialize_treasury_general_account(50_000_000.0);
+
+        // FIX: Pass the complete expanded lists, not the original (mostly empty) ones
+        factory.populate_positions(&self.banks, &all_consumers, &all_firms, &good_ids);
+
+        let agent_ids = factory.get_agent_id_map().clone();
+
+        state.financial_system.exchange.ensure_labour_market(LabourMarketId(Uuid::new_v4()), "General");
+        state.financial_system.attach_default_pricing_feeds(state.current_date);
+        for (iid, inst) in state.financial_system.instruments.clone() {
+            state.financial_system.exchange.ensure_listed(iid, &inst);
         }
 
-        for (i, c_config) in all_consumers.iter().enumerate() {
-            let bank_id = *agent_ids.get(&c_config.bank_id).expect("unknown bank id for consumer");
-            let consumer = factory.create_consumer(c_config, bank_id, cb_id, &agent_ids, i, &mut bond_instruments_by_tenor);
-            agent_ids.insert(c_config.id.clone(), consumer.id);
-        }
-
-        for f_config in &all_firms {
-            let bank_id = *agent_ids.get(&f_config.bank_id).expect("unknown bank id for firm");
-            let firm = factory.create_firm(f_config, bank_id, cb_id, &agent_ids, &mut bond_instruments_by_tenor);
-            agent_ids.insert(f_config.id.clone(), firm.id);
-            
-            // Handle inventory asset creation here as it's specific to firms
-            for a in &f_config.initial_assets {
-                if let AssetConfig::Inventory { good_slug, quantity, unit_cost } = a {
-                    let gid = *good_ids.get(good_slug).expect("inventory good unknown");
-                    factory.state.financial_system.add_to_inventory(
-                        &firm.id,
-                        &gid,
-                        *quantity,
-                        Money::from_f64(*unit_cost).unwrap_or(Money::ZERO),
-                    );
-                }
-            }
-        }
-
-        // --- Now create liabilities, since all agent IDs are known ---
-
-        for b_config in &self.banks {
-            let bank_id = agent_ids.get(&b_config.id).unwrap();
-            for l in &b_config.initial_liabilities {
-                if let Some(effect) = factory.create_liability_for_agent(*bank_id, l, cb_id, &agent_ids).unwrap() {
-                    pending_credit_effects.push(effect);
-                }
-            }
-        }
-
-        for c_config in &all_consumers {
-            let consumer_id = agent_ids.get(&c_config.id).unwrap();
-            for l in &c_config.initial_liabilities {
-                if let Some(effect) = factory.create_liability_for_agent(*consumer_id, l, cb_id, &agent_ids).unwrap() {
-                    pending_credit_effects.push(effect);
-                }
-            }
-        }
-
-        for f_config in &all_firms {
-            let firm_id = agent_ids.get(&f_config.id).unwrap();
-            for l in &f_config.initial_liabilities {
-                if let Some(effect) = factory.create_liability_for_agent(*firm_id, l, cb_id, &agent_ids).unwrap() {
-                    pending_credit_effects.push(effect);
-                }
-            }
-        }
-
-        // --- Apply all pending credit effects ---
-
-        for effect in pending_credit_effects {
-            StateEffectApplicator::apply_to_state(&mut factory.state, &effect)
-                .expect("Failed to apply initial credit effect");
-        }
-        
-        // --- Seed reserves and finalize state ---
-
-        for b_config in &self.banks {
-            if let Some(bank_id) = agent_ids.get(&b_config.id) {
-                if let Some(reserves_config) = &b_config.reserves {
-                    let total_deposits = factory.state.financial_system.get_bank_deposits(bank_id);
-                    let reserves_to_create = match reserves_config {
-                        ReservesConfig::RatioOfDeposits { ratio, noise } => {
-                            let noisy_ratio = ratio + (rand::random::<f64>() - 0.5) * 2.0 * noise;
-                            total_deposits * noisy_ratio.max(0.0)
-                        }
-                    };
-
-                    if reserves_to_create > 0.0 {
-                        factory.seed_reserves_to_bank_from_tga(*bank_id, reserves_to_create).unwrap_or_else(|e| {
-                            tracing::warn!("TGA->bank reserves seed failed: {} (falling back to CB creation)", e);
-                            factory
-                                .seed_reserves_via_cb_creation(*bank_id, reserves_to_create)
-                                .expect("Final reserve creation failed");
-                        });
-                    }
-                }
-            }
-        }
-
-        {
-            let gbs = factory.state.financial_system.balance_sheets.get(&gov_id).expect("gov BS");
-            let tot_a: Money = gbs.assets.values().map(|p| p.book_value_per_unit * p.quantity).sum();
-            let tot_l: Money = gbs.liabilities.values().map(|p| p.book_value_per_unit * p.quantity).sum();
-            let nw = tot_a - tot_l;
-            if nw.to_f64().abs() > 1e-6 {
-                let eq = Instrument {
-                    id: InstrumentId(Uuid::new_v4()),
-                    instrument_type: InstrumentType::Equity(EquityDetails { issuer: gov_id, outstanding_shares: 1 }),
-                    instrument_market: InstrumentMarket::CapitalMarket(CapitalMarketSegment::Equity),
-                    listability: Listability::Unlisted,
-                };
-                let id = eq.id;
-                factory.state.financial_system.instruments.insert(id, eq);
-                let gbs_mut = factory.state.financial_system.balance_sheets.get_mut(&gov_id).unwrap();
-                gbs_mut
-                    .liabilities
-                    .insert(id, Position { quantity: 1.0, book_value_per_unit: nw, cost_basis_per_unit: nw });
-            }
-        }
-
-        factory.state.financial_system.exchange.ensure_labour_market(LabourMarketId(Uuid::new_v4()), "General");
-        factory.state.financial_system.attach_default_pricing_feeds(factory.state.current_date);
-
-        for (iid, inst) in factory.state.financial_system.instruments.clone() {
-            factory.state.financial_system.exchange.ensure_listed(iid, &inst);
-        }
-
-        let mut engine = SimulationEngine::new_with_scheduler(std::mem::take(&mut factory.state));
+        let mut engine = SimulationEngine::new_with_scheduler(state);
         let mut decisions: HashMap<AgentId, Box<dyn DecisionModel>> = HashMap::new();
-        decisions.insert(gov_id, Box::new(BasicGovernmentDecisionModel::default()));
+
+        decisions
+            .insert(engine.state.financial_system.government.id, Box::new(BasicGovernmentDecisionModel::default()));
         for f in &all_firms {
             if let Some(id) = agent_ids.get(&f.id) {
                 decisions.insert(*id, f.decision_model.clone().into_decision_model());
@@ -514,7 +410,6 @@ impl Scenario {
         for (bank_id, _bank) in engine.state.agents.banks.iter() {
             decisions.insert(*bank_id, Box::new(BasicBankDecisionModel::default()));
         }
-
         for c in &all_consumers {
             if let Some(cid) = agent_ids.get(&c.id) {
                 let basket: std::collections::HashMap<GoodId, f64> = c
@@ -522,7 +417,6 @@ impl Scenario {
                     .iter()
                     .filter_map(|(slug, w)| good_ids.get(slug).copied().map(|gid| (gid, *w)))
                     .collect();
-
                 decisions.insert(*cid, Box::new(SimpleConsumerDecisionModel { mpc: 0.7, consumption_basket: basket }));
             }
         }
