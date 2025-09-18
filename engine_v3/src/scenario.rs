@@ -268,7 +268,7 @@ impl Scenario {
             let weights: Vec<f64> = group.bank_mix.values().copied().collect();
             let chooser = WeightedIndex::new(&weights).unwrap();
             let l_cfg = group.initial_liabilities.clone();
-            
+
             for i in 0..group.count {
                 let bank_choice = &bank_ids[chooser.sample(rng)];
                 let income = group.income.sample(rng);
@@ -325,6 +325,7 @@ impl Scenario {
         (generated_consumers, generated_firms)
     }
 
+
     pub fn initialize_engine(&self) -> SimulationEngine {
         let mut state = SimState::default();
         state.config.iterations = self.config.iterations;
@@ -350,6 +351,7 @@ impl Scenario {
                 },
             );
         }
+
         for r in &self.recipes {
             let rid = RecipeId(r.id.clone());
             state.financial_system.goods.recipes.insert(
@@ -381,18 +383,15 @@ impl Scenario {
         let mut factory = AgentFactory::new(&mut state, &mut rng);
 
         factory.create_agent_entities(&self.banks, &all_consumers, &all_firms);
-
         factory.create_balance_sheet_skeletons();
-
         factory.initialize_treasury_general_account(50_000_000.0);
 
-        // FIX: Pass the complete expanded lists, not the original (mostly empty) ones
+        factory.setup_market_infrastructure();
+
         factory.populate_positions(&self.banks, &all_consumers, &all_firms, &good_ids);
 
         let agent_ids = factory.get_agent_id_map().clone();
 
-        state.financial_system.exchange.ensure_labour_market(LabourMarketId(Uuid::new_v4()), "General");
-        state.financial_system.attach_default_pricing_feeds(state.current_date);
         for (iid, inst) in state.financial_system.instruments.clone() {
             state.financial_system.exchange.ensure_listed(iid, &inst);
         }
@@ -402,14 +401,17 @@ impl Scenario {
 
         decisions
             .insert(engine.state.financial_system.government.id, Box::new(BasicGovernmentDecisionModel::default()));
+
         for f in &all_firms {
             if let Some(id) = agent_ids.get(&f.id) {
                 decisions.insert(*id, f.decision_model.clone().into_decision_model());
             }
         }
+
         for (bank_id, _bank) in engine.state.agents.banks.iter() {
             decisions.insert(*bank_id, Box::new(BasicBankDecisionModel::default()));
         }
+
         for c in &all_consumers {
             if let Some(cid) = agent_ids.get(&c.id) {
                 let basket: std::collections::HashMap<GoodId, f64> = c
@@ -420,6 +422,7 @@ impl Scenario {
                 decisions.insert(*cid, Box::new(SimpleConsumerDecisionModel { mpc: 0.7, consumption_basket: basket }));
             }
         }
+
         engine.decision_models = decisions;
         engine
     }

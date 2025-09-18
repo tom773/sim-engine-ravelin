@@ -10,8 +10,7 @@ pub struct AgentFactory<'a> {
     pub state: &'a mut SimState,
     pub rng: &'a mut StdRng,
     agent_ids: HashMap<String, AgentId>,
-    instrument_ids: HashMap<String, InstrumentId>,
-    pending_effects: Vec<StateEffect>, // Collect effects to apply
+    pending_effects: Vec<StateEffect>,
 }
 
 impl<'a> AgentFactory<'a> {
@@ -20,7 +19,6 @@ impl<'a> AgentFactory<'a> {
             state, 
             rng, 
             agent_ids: HashMap::new(), 
-            instrument_ids: HashMap::new(),
             pending_effects: Vec::new(),
         }
     }
@@ -63,6 +61,15 @@ impl<'a> AgentFactory<'a> {
             self.agent_ids.insert(config.id.clone(), firm.id);
             self.state.agents.firms.insert(firm.id, firm);
         }
+    }
+    
+    pub fn setup_market_infrastructure(&mut self) {
+        let current_date = self.state.current_date;
+        self.state.financial_system.attach_default_pricing_feeds(current_date);
+        self.state.financial_system.exchange.ensure_labour_market(
+            LabourMarketId(Uuid::new_v4()), 
+            "General"
+        );
     }
 
     pub fn create_balance_sheet_skeletons(&mut self) {
@@ -120,42 +127,23 @@ impl<'a> AgentFactory<'a> {
                 let cb_id = self.state.financial_system.central_bank.id;
                 let instrument = self.get_or_create_reserves_instrument();
                 
-                let owner_bs = self.state.financial_system.balance_sheets.get_mut(&owner_id).unwrap();
-                owner_bs.assets.insert(instrument.id, Position { 
-                    quantity: *amount, 
-                    book_value_per_unit: Money::ONE, 
-                    cost_basis_per_unit: Money::ONE 
-                });
-                
-                let cb_bs = self.state.financial_system.balance_sheets.get_mut(&cb_id).unwrap();
-                cb_bs.liabilities.insert(instrument.id, Position {
+                self.pending_effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument {
+                    instrument: instrument.clone(),
+                    creditor: owner_id,
+                    debtor: cb_id,
                     quantity: *amount,
-                    book_value_per_unit: Money::ONE,
-                    cost_basis_per_unit: Money::ONE
-                });
+                }));
             }
             AssetConfig::Bond { tenor, quantity } => {
                 let gov_id = self.state.financial_system.government.id;
                 let instrument = self.get_or_create_bond_instrument(tenor, gov_id);
                 
-                self.state.financial_system.clearing_house.csd.register_security(
-                    instrument.id, 
-                    &instrument, 
-                    self.state.current_date
-                ).unwrap();
-                
-                self.state.financial_system.clearing_house.csd.credit_securities(
-                    owner_id, 
-                    instrument.id, 
-                    *quantity as f64
-                ).unwrap();
-                
-                let gov_bs = self.state.financial_system.balance_sheets.get_mut(&gov_id).unwrap();
-                gov_bs.liabilities.insert(instrument.id, Position {
+                self.pending_effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument {
+                    instrument: instrument.clone(),
+                    creditor: owner_id,
+                    debtor: gov_id,
                     quantity: *quantity as f64,
-                    book_value_per_unit: Money::from(1000),
-                    cost_basis_per_unit: Money::from(1000),
-                });
+                }));
             }
             AssetConfig::Inventory { good_slug, quantity, unit_cost } => {
                 let good_id = *good_ids.get(good_slug).unwrap();
@@ -233,7 +221,13 @@ impl<'a> AgentFactory<'a> {
             rating: Some(CreditRating::consumer_prime()),
             ..Default::default()
         };
-        let loan = Loan { instrument_id: InstrumentId(uuid::Uuid::new_v4()), details: loan_details, status: LoanStatus::Current, servicing_history: vec![] };
+        let loan = Loan { 
+            instrument_id: InstrumentId(uuid::Uuid::new_v4()), 
+            details: loan_details, 
+            status: LoanStatus::Current, 
+            servicing_history: vec![] 
+        };
+        
         self.pending_effects.push(StateEffect::Credit(CreditEffect::RegisterLoan {
             loan: loan.clone(),
             is_consumer,
@@ -256,26 +250,18 @@ impl<'a> AgentFactory<'a> {
 
         let tga_instrument = self.get_or_create_tga_instrument();
 
-        let gov_bs = self.state.financial_system.balance_sheets.get_mut(&gov_id).unwrap();
-        gov_bs.assets.insert(tga_instrument.id, Position {
+        self.pending_effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument {
+            instrument: tga_instrument.clone(),
+            creditor: gov_id,
+            debtor: cb_id,
             quantity: initial_balance,
-            book_value_per_unit: Money::ONE,
-            cost_basis_per_unit: Money::ONE,
-        });
-
-        let cb_bs = self.state.financial_system.balance_sheets.get_mut(&cb_id).unwrap();
-        cb_bs.liabilities.insert(tga_instrument.id, Position {
-            quantity: initial_balance,
-            book_value_per_unit: Money::ONE,
-            cost_basis_per_unit: Money::ONE,
-        });
+        }));
+        
+        self.apply_pending_effects();
     }
 
+    
     fn get_or_create_deposit_instrument(&mut self, bank_id: AgentId) -> Instrument {
-        let key = format!("DEPOSIT_{}", bank_id);
-        if let Some(inst_id) = self.instrument_ids.get(&key) {
-            return self.state.financial_system.instruments.get(inst_id).unwrap().clone();
-        }
         let deposit = Instrument::cash(
             InstrumentId(Uuid::new_v4()),
             bank_id,
@@ -283,16 +269,10 @@ impl<'a> AgentFactory<'a> {
             Currency::USD,
             dec!(25.0)
         ).build();
-        self.instrument_ids.insert(key, deposit.id);
-        self.state.financial_system.instruments.insert(deposit.id, deposit.clone());
         deposit
     }
-    // TODO merge with above
+    
     fn get_or_create_reserves_instrument(&mut self) -> Instrument {
-        let key = "RESERVES".to_string();
-        if let Some(inst_id) = self.instrument_ids.get(&key) {
-            return self.state.financial_system.instruments.get(inst_id).unwrap().clone();
-        }
         let cb_id = self.state.financial_system.central_bank.id;
         let reserves = Instrument::cash(
             InstrumentId(Uuid::new_v4()),
@@ -301,16 +281,10 @@ impl<'a> AgentFactory<'a> {
             Currency::USD,
             self.state.financial_system.central_bank.policy_rate_bps
         ).build();
-        self.instrument_ids.insert(key, reserves.id);
-        self.state.financial_system.instruments.insert(reserves.id, reserves.clone());
         reserves
     }
 
     fn get_or_create_tga_instrument(&mut self) -> Instrument {
-        let key = "TGA".to_string();
-        if let Some(inst_id) = self.instrument_ids.get(&key) {
-            return self.state.financial_system.instruments.get(inst_id).unwrap().clone();
-        }
         let cb_id = self.state.financial_system.central_bank.id;
         let tga = Instrument::cash(
             InstrumentId(Uuid::new_v4()),
@@ -319,16 +293,10 @@ impl<'a> AgentFactory<'a> {
             Currency::USD,
             dec!(0.0)
         ).build();
-        self.instrument_ids.insert(key, tga.id);
-        self.state.financial_system.instruments.insert(tga.id, tga.clone());
         tga
     }
 
-    fn get_or_create_bond_instrument(&mut self, tenor: &str, issuer_id: AgentId) -> Instrument {
-        let key = format!("BOND_{}_{}", tenor, issuer_id);
-        if let Some(inst_id) = self.instrument_ids.get(&key) {
-            return self.state.financial_system.instruments.get(inst_id).unwrap().clone();
-        }
+    fn get_or_create_bond_instrument(&mut self, _tenor: &str, issuer_id: AgentId) -> Instrument {
         let issue = self.state.current_date;
         let maturity = issue + Duration::days(365 * 2);
         let bond = Instrument::bond(
@@ -338,10 +306,12 @@ impl<'a> AgentFactory<'a> {
             Money::from(1000),
             issue,
             maturity
-        ).coupon_bps(dec!(250.0)).rating(CreditRating::government_aaa()).auto_market().build().unwrap();
+        ).coupon_bps(dec!(250.0))
+         .rating(CreditRating::government_aaa())
+         .auto_market()
+         .build()
+         .unwrap();
 
-        self.instrument_ids.insert(key, bond.id);
-        self.state.financial_system.instruments.insert(bond.id, bond.clone());
         bond
     }
 
