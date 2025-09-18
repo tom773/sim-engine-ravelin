@@ -205,24 +205,20 @@ labour_hours = 150.0
 id = "bank_a"
 name = "Community Savings Bank"
 initial_assets = [
-  # Pay for Treasuries at DvP; also sets equity level
-  { type = "Reserves", amount = 4_100_000.0 },
-
   # Primary govvies via seed sale → issuance + DvP (requires patch)
   { type = "Bond", tenor = "T2Y", quantity = 4_300 }   # ≈ $4.3m face @ $1k
 ]
 initial_liabilities = [] # No initial liabilities
-reserves = { type = "ratio_of_deposits", ratio = 0.15, noise = 0.00 } # keep noise off while calibrating
+reserves = { type = "ratio_of_liabilities", min_ratio = 0.10, max_ratio = 0.12 }
 
 [[banks]]
 id="bank_b"
 name="First National Bank"
 initial_assets = [
-  { type = "Reserves", amount = 17_500_000.0 },
   { type = "Bond", tenor = "T5Y", quantity = 22_000 }  # ≈ $22m
 ]
 initial_liabilities = [] # No initial liabilities
-reserves = { type = "ratio_of_deposits", ratio = 0.20, noise = 0.00 }
+reserves = { type = "ratio_of_liabilities", min_ratio = 0.10, max_ratio = 0.12 }
 
 # --- Firms ---
 

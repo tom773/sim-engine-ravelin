@@ -1,10 +1,10 @@
 use crate::prelude::*;
 use chrono::NaiveDate;
 use rust_decimal::prelude::*;
+use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
-use rust_decimal_macros::dec;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum LoanPurpose {
     BusinessExpansion,
@@ -136,10 +136,10 @@ impl DebtInstrument {
             DebtInstrument::Bond(b) => b.issuer,
             DebtInstrument::Loan(l) => l.lender,
             DebtInstrument::Consumer(c) => match c {
-                ConsumerDebt::ResidentialMortgage(l)
-                | ConsumerDebt::AutoLoan(l)
-                | ConsumerDebt::PersonalLoan(l) => l.lender,
-                | ConsumerDebt::CreditCard(cl) => cl.lender,
+                ConsumerDebt::ResidentialMortgage(l) | ConsumerDebt::AutoLoan(l) | ConsumerDebt::PersonalLoan(l) => {
+                    l.lender
+                }
+                ConsumerDebt::CreditCard(cl) => cl.lender,
                 ConsumerDebt::StudentLoan(l) => l.lender,
             },
             DebtInstrument::CreditLine(c) => c.lender,
@@ -152,11 +152,11 @@ impl DebtInstrument {
             DebtInstrument::Bond(b) => b.issuer,
             DebtInstrument::Loan(l) => l.borrower,
             DebtInstrument::Consumer(c) => match c {
-                ConsumerDebt::ResidentialMortgage(l)
-                | ConsumerDebt::AutoLoan(l)
-                | ConsumerDebt::PersonalLoan(l) => l.borrower,
-                | ConsumerDebt::CreditCard(cl) => cl.borrower,
-                | ConsumerDebt::StudentLoan(l) => l.borrower,
+                ConsumerDebt::ResidentialMortgage(l) | ConsumerDebt::AutoLoan(l) | ConsumerDebt::PersonalLoan(l) => {
+                    l.borrower
+                }
+                ConsumerDebt::CreditCard(cl) => cl.borrower,
+                ConsumerDebt::StudentLoan(l) => l.borrower,
             },
             DebtInstrument::CreditLine(c) => c.borrower,
             DebtInstrument::TradeCredit(t) => t.debtor,
@@ -457,27 +457,11 @@ pub struct Lien {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum CollateralType {
-    Securities {
-        instrument_id: InstrumentId,
-        quantity: f64,
-        haircut: f64,
-    },
-    RealEstate {
-        property_id: Uuid,
-        valuation: Money,
-        ltv_limit: f64,
-    },
-    Receivables {
-        debtor: AgentId,
-        amount: Money,
-    },
-    Cash {
-        amount: Money,
-    },
-    Other {
-        description: String,
-        value: Money,
-    },
+    Securities { instrument_id: InstrumentId, quantity: f64, haircut: f64 },
+    RealEstate { property_id: Uuid, valuation: Money, ltv_limit: f64 },
+    Receivables { debtor: AgentId, amount: Money },
+    Cash { amount: Money },
+    Other { description: String, value: Money },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

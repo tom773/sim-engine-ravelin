@@ -5,10 +5,10 @@ use uuid::Uuid;
 pub type PaymentId = Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum PaymentPriority { 
-    Urgent, 
-    Normal, 
-    Low 
+pub enum PaymentPriority {
+    Urgent,
+    Normal,
+    Low,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -47,9 +47,9 @@ pub struct RtgsPolicy {
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-pub enum RtgsMode { 
+pub enum RtgsMode {
     PureRTGS,
-    LsmNetting
+    LsmNetting,
 }
 
 impl Default for RtgsPolicy {

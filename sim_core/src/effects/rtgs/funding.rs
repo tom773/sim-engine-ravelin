@@ -31,7 +31,6 @@ pub fn can_use_daylight_credit(state: &SimState, pi: &PaymentInstruction) -> Res
         None => return Ok(false),
     };
 
-
     let from_bank_reserves = match state.financial_system.find_bank_reserves_account(&pi.from_bank) {
         Some(reserves_id) => reserves_id,
         None => return Ok(false),
@@ -43,7 +42,6 @@ pub fn can_use_daylight_credit(state: &SimState, pi: &PaymentInstruction) -> Res
     };
 
     let current_reserves = balance_sheet.assets.get(&from_bank_reserves).map(|pos| pos.quantity).unwrap_or(0.0);
-
 
     Ok(current_reserves + daylight_policy.per_bank_limit >= pi.amount)
 }

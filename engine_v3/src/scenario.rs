@@ -1,3 +1,4 @@
+use crate::factory::DEFAULT_TGA_BALANCE;
 use crate::*;
 use domains::prelude::*;
 use rand::distr::{Distribution as RandDist, weighted::WeightedIndex};
@@ -120,6 +121,8 @@ pub struct RecipeConfig {
 pub enum ReservesConfig {
     #[serde(rename = "ratio_of_deposits")]
     RatioOfDeposits { ratio: f64, noise: f64 },
+    #[serde(rename = "ratio_of_liabilities")]
+    RatioOfLiabilities { min_ratio: f64, max_ratio: f64 },
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -325,7 +328,6 @@ impl Scenario {
         (generated_consumers, generated_firms)
     }
 
-
     pub fn initialize_engine(&self) -> SimulationEngine {
         let mut state = SimState::default();
         state.config.iterations = self.config.iterations;
@@ -384,11 +386,11 @@ impl Scenario {
 
         factory.create_agent_entities(&self.banks, &all_consumers, &all_firms);
         factory.create_balance_sheet_skeletons();
-        factory.initialize_treasury_general_account(50_000_000.0);
+        factory.initialize_treasury_general_account(DEFAULT_TGA_BALANCE);
 
         factory.setup_market_infrastructure();
-
-        factory.populate_positions(&self.banks, &all_consumers, &all_firms, &good_ids);
+        let total_reserves = factory.populate_positions(&self.banks, &all_consumers, &all_firms, &good_ids);
+        factory.seed_central_bank_portfolio(total_reserves + DEFAULT_TGA_BALANCE);
 
         let agent_ids = factory.get_agent_id_map().clone();
 

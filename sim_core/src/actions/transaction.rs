@@ -53,11 +53,7 @@ impl TransactionAction {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum TransactionIntention {
-    PayWages {
-        employer: AgentId,
-        employee: AgentId,
-        amount: f64,
-    },
+    PayWages { employer: AgentId, employee: AgentId, amount: f64 },
 }
 
 impl TransactionIntention {

@@ -60,8 +60,6 @@ pub struct YieldCurve {
     pub points: BTreeMap<NotNan<f64>, f64>,
 }
 
-
-
 #[derive(Clone, Default, Debug)]
 pub struct PricingFeeds {
     pub policy_rate_bps: Arc<RwLock<f64>>,
@@ -120,10 +118,7 @@ impl FinancialSystem {
             current_date: Arc::new(RwLock::new(now)),
         };
         // Use the instrument registry to re-inject financial pricers as well.
-        self.exchange.attach_pricing_feeds_with_registry(
-            self.pricing_feeds.clone(),
-            &self.instruments,
-        );
+        self.exchange.attach_pricing_feeds_with_registry(self.pricing_feeds.clone(), &self.instruments);
     }
     fn find_inventory_instrument_mut(&mut self, agent_id: &AgentId) -> Option<&mut Instrument> {
         let bs = self.balance_sheets.get(agent_id)?;

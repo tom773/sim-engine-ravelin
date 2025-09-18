@@ -25,38 +25,12 @@ impl ProductionAction {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ProductionIntention {
-    PurchaseInputs {
-        agent_id: AgentId,
-        good_id: GoodId,
-        quantity: f64,
-        max_price: f64,
-    },
-    PostGoodToMarket {
-        agent_id: AgentId,
-        good_id: GoodId,
-        quantity: f64,
-        ask_price: f64,
-    },
-    Produce {
-        agent_id: AgentId,
-        recipe_id: RecipeId,
-        batches: u32,
-    },
-    ApplyForJob {
-        agent_id: AgentId,
-        market_id: LabourMarketId,
-        application: JobApplication,
-    },
-    HireWorkers {
-        agent_id: AgentId,
-        count: u32,
-        wage_rate: f64,
-        max_wage: f64,
-    },
-    FireWorkers {
-        agent_id: AgentId,
-        employee_ids: Vec<AgentId>,
-    },
+    PurchaseInputs { agent_id: AgentId, good_id: GoodId, quantity: f64, max_price: f64 },
+    PostGoodToMarket { agent_id: AgentId, good_id: GoodId, quantity: f64, ask_price: f64 },
+    Produce { agent_id: AgentId, recipe_id: RecipeId, batches: u32 },
+    ApplyForJob { agent_id: AgentId, market_id: LabourMarketId, application: JobApplication },
+    HireWorkers { agent_id: AgentId, count: u32, wage_rate: f64, max_wage: f64 },
+    FireWorkers { agent_id: AgentId, employee_ids: Vec<AgentId> },
 }
 
 impl ProductionIntention {

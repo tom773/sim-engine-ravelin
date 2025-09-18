@@ -26,7 +26,7 @@ impl QueryService {
     fn populate_balance_sheet(&self, agent_id: &AgentId, state: &SimState) -> PopulatedBalanceSheetDto {
         let all_assets_map = state.financial_system.get_agent_total_positions(agent_id);
 
-        let assets = all_assets_map
+        let assets: Vec<PopulatedPositionDto> = all_assets_map
             .iter()
             .filter_map(|(id, pos)| {
                 state.financial_system.instruments.get(id).map(|inst| {
@@ -58,7 +58,38 @@ impl QueryService {
             })
             .collect();
 
-        PopulatedBalanceSheetDto { assets, liabilities, income_statement: bs.income_statement.clone() }
+        let total_assets: f64 =
+            assets.iter().map(|p| p.position.quantity * p.position.book_value_per_unit.to_f64()).sum();
+
+        let total_liabilities: f64 =
+            bs.liabilities.iter().map(|(_, pos)| pos.quantity * pos.book_value_per_unit.to_f64()).sum();
+
+        let net_worth = total_assets - total_liabilities;
+
+        let equity = if net_worth.abs() > 1e-2 {
+            let unit_money = Money::from(1_i64);
+            let position =
+                Position { quantity: net_worth, book_value_per_unit: unit_money, cost_basis_per_unit: unit_money };
+            let instrument = Instrument::new(
+                InstrumentId(Uuid::new_v4()),
+                InstrumentType::Equity(EquityDetails { issuer: *agent_id, outstanding_shares: 1 }),
+                InstrumentMarket::CapitalMarket(CapitalMarketSegment::Equity),
+            );
+
+            Some(PopulatedPositionDto { position, instrument, market_price: None })
+        } else {
+            None
+        };
+
+        PopulatedBalanceSheetDto {
+            assets,
+            liabilities,
+            equity,
+            income_statement: bs.income_statement.clone(),
+            total_assets,
+            total_liabilities,
+            net_worth,
+        }
     }
 
     pub fn get_dashboard_bundle(&self) -> QueryResult<DashboardBundleDto> {
@@ -477,7 +508,12 @@ impl QueryService {
             fedfunds_on: state.financial_system.funding_markets.fedfunds_on.clone(),
             repo_gc1d: state.financial_system.funding_markets.repo_gc1d.clone(),
         };
-        Ok(FinancialInfrastructureDto { csd: csd_dto, rtgs: rtgs_dto, cred_reg: cred_dto, overnight_markets: on_markets })
+        Ok(FinancialInfrastructureDto {
+            csd: csd_dto,
+            rtgs: rtgs_dto,
+            cred_reg: cred_dto,
+            overnight_markets: on_markets,
+        })
     }
 
     pub fn get_cb_actions(&self) -> QueryResult<Vec<SimIntention>> {

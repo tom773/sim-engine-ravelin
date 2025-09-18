@@ -76,14 +76,12 @@ impl TickScheduler {
     pub fn register_handler<H: StepHandler + Send + Sync + 'static>(&mut self, step: TickStep, handler: H) {
         self.step_handlers.insert(step, Box::new(handler));
     }
-    
+
     pub fn handler_count(&self) -> usize {
         self.step_handlers.len()
     }
 
-    pub fn execute_tick(
-        &self, engine: &mut SimulationEngine, rng: &mut dyn rand::RngCore,
-    ) -> TickExecutionResult {
+    pub fn execute_tick(&self, engine: &mut SimulationEngine, rng: &mut dyn rand::RngCore) -> TickExecutionResult {
         let start_time = Instant::now();
         let mut context = StepContext::new(engine.state.ticknum);
         let mut failed_steps = Vec::new();
@@ -101,14 +99,19 @@ impl TickScheduler {
                         failed_steps.push((step, error.clone()));
 
                         if step.should_abort_on_failure() {
-                            println!("[SCHEDULER] Aborting tick {} due to critical failure in {:?}: {}", engine.state.ticknum, step, error);
+                            println!(
+                                "[SCHEDULER] Aborting tick {} due to critical failure in {:?}: {}",
+                                engine.state.ticknum, step, error
+                            );
                             break;
                         }
                     }
                 } else {
                     let error = format!("No handler registered for step {:?}", step);
                     failed_steps.push((step, error));
-                    if step.should_abort_on_failure() { break; }
+                    if step.should_abort_on_failure() {
+                        break;
+                    }
                 }
             }
 
@@ -141,7 +144,7 @@ impl TickScheduler {
         }
         Ok(())
     }
-    
+
     pub fn print_execution_plan(&self) {
         println!("=== Tick Execution Plan ===");
         for (i, layer) in self.layers.iter().enumerate() {

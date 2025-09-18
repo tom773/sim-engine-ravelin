@@ -758,14 +758,14 @@ impl StepHandler for DebtAuctionsHandler {
 pub struct ClearOvernightHandler;
 
 impl StepHandler for ClearOvernightHandler {
-  fn execute(
-          &self, engine: &mut crate::executor::SimulationEngine, _context: &mut super::StepContext,
-          _rng: &mut dyn rand::RngCore,
-      ) -> StepResult {
+    fn execute(
+        &self, engine: &mut crate::executor::SimulationEngine, _context: &mut super::StepContext,
+        _rng: &mut dyn rand::RngCore,
+    ) -> StepResult {
         execute_step(|| {
             let initial_fedfunds = engine.state.financial_system.funding_markets.fedfunds_on.len();
             let initial_repo = engine.state.financial_system.funding_markets.repo_gc1d.len();
-    
+
             tracing::info!("Clearing overnight funding markets: {} fedfunds, {} repos", initial_fedfunds, initial_repo);
             Ok(serde_json::json!({
                 "fedfunds_cleared": initial_fedfunds,
@@ -773,5 +773,5 @@ impl StepHandler for ClearOvernightHandler {
                 "repos_cleared": initial_repo,
             }))
         })
-  }
+    }
 }

@@ -1,10 +1,13 @@
-use crate::scenario::{AssetConfig, BankConfig, ConsumerConfig, FirmConfig, LiabilityConfig};
+use crate::scenario::{AssetConfig, BankConfig, ConsumerConfig, FirmConfig, LiabilityConfig, ReservesConfig};
+use chrono::Duration;
+use rand::distr::Uniform;
 use rand::prelude::*;
 use rust_decimal_macros::dec;
+use sim_core::prelude::*;
 use std::collections::HashMap;
 use uuid::Uuid;
-use chrono::Duration;
-use sim_core::prelude::*;
+
+pub const DEFAULT_TGA_BALANCE: f64 = 15_000_000.0;
 
 pub struct AgentFactory<'a> {
     pub state: &'a mut SimState,
@@ -15,20 +18,10 @@ pub struct AgentFactory<'a> {
 
 impl<'a> AgentFactory<'a> {
     pub fn new(state: &'a mut SimState, rng: &'a mut StdRng) -> Self {
-        Self { 
-            state, 
-            rng, 
-            agent_ids: HashMap::new(), 
-            pending_effects: Vec::new(),
-        }
+        Self { state, rng, agent_ids: HashMap::new(), pending_effects: Vec::new() }
     }
 
-    pub fn create_agent_entities(
-        &mut self,
-        banks: &[BankConfig],
-        consumers: &[ConsumerConfig],
-        firms: &[FirmConfig],
-    ) {
+    pub fn create_agent_entities(&mut self, banks: &[BankConfig], consumers: &[ConsumerConfig], firms: &[FirmConfig]) {
         for config in banks {
             let bank = Bank::new(config.name.clone(), dec!(200.0), dec!(-70.0));
             self.agent_ids.insert(config.id.clone(), bank.id);
@@ -37,13 +30,10 @@ impl<'a> AgentFactory<'a> {
 
         for (i, config) in consumers.iter().enumerate() {
             let bank_id = *self.agent_ids.get(&config.bank_id).expect("Bank ID not found for consumer");
-            let personality = *[
-                PersonalityArchetype::Balanced,
-                PersonalityArchetype::Saver,
-                PersonalityArchetype::Spender,
-            ]
-            .choose(self.rng)
-            .unwrap();
+            let personality =
+                *[PersonalityArchetype::Balanced, PersonalityArchetype::Saver, PersonalityArchetype::Spender]
+                    .choose(self.rng)
+                    .unwrap();
             let is_golden = i == 0;
             let mut consumer = Consumer::new(self.rng.random_range(25..65), bank_id, personality, is_golden);
             consumer.income = config.income;
@@ -62,14 +52,11 @@ impl<'a> AgentFactory<'a> {
             self.state.agents.firms.insert(firm.id, firm);
         }
     }
-    
+
     pub fn setup_market_infrastructure(&mut self) {
         let current_date = self.state.current_date;
         self.state.financial_system.attach_default_pricing_feeds(current_date);
-        self.state.financial_system.exchange.ensure_labour_market(
-            LabourMarketId(Uuid::new_v4()), 
-            "General"
-        );
+        self.state.financial_system.exchange.ensure_labour_market(LabourMarketId(Uuid::new_v4()), "General");
     }
 
     pub fn create_balance_sheet_skeletons(&mut self) {
@@ -83,12 +70,9 @@ impl<'a> AgentFactory<'a> {
     }
 
     pub fn populate_positions(
-        &mut self,
-        banks: &[BankConfig],
-        consumers: &[ConsumerConfig],
-        firms: &[FirmConfig],
+        &mut self, banks: &[BankConfig], consumers: &[ConsumerConfig], firms: &[FirmConfig],
         good_ids: &HashMap<String, GoodId>,
-    ) {
+    ) -> f64 {
         let all_configs: Vec<(&String, &Vec<AssetConfig>, &Vec<LiabilityConfig>)> = banks
             .iter()
             .map(|c| (&c.id, &c.initial_assets, &c.initial_liabilities))
@@ -108,6 +92,8 @@ impl<'a> AgentFactory<'a> {
         }
 
         self.apply_pending_effects();
+
+        self.allocate_bank_reserves(banks)
     }
 
     fn populate_asset(&mut self, owner_id: AgentId, asset_config: &AssetConfig, good_ids: &HashMap<String, GoodId>) {
@@ -115,7 +101,7 @@ impl<'a> AgentFactory<'a> {
             AssetConfig::Deposit { bank_id, amount } => {
                 let bank_agent_id = *self.agent_ids.get(bank_id).unwrap();
                 let instrument = self.get_or_create_deposit_instrument(bank_agent_id);
-                
+
                 self.pending_effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument {
                     instrument: instrument.clone(),
                     creditor: owner_id,
@@ -126,7 +112,7 @@ impl<'a> AgentFactory<'a> {
             AssetConfig::Reserves { amount } => {
                 let cb_id = self.state.financial_system.central_bank.id;
                 let instrument = self.get_or_create_reserves_instrument();
-                
+
                 self.pending_effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument {
                     instrument: instrument.clone(),
                     creditor: owner_id,
@@ -137,7 +123,7 @@ impl<'a> AgentFactory<'a> {
             AssetConfig::Bond { tenor, quantity } => {
                 let gov_id = self.state.financial_system.government.id;
                 let instrument = self.get_or_create_bond_instrument(tenor, gov_id);
-                
+
                 self.pending_effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument {
                     instrument: instrument.clone(),
                     creditor: owner_id,
@@ -163,12 +149,12 @@ impl<'a> AgentFactory<'a> {
             LiabilityConfig::Loan { creditor_id, principal, rate_bps, maturity_days } => {
                 let creditor_agent_id = *self.agent_ids.get(creditor_id).unwrap();
                 self.create_loan_via_effects(
-                    owner_id, 
-                    creditor_agent_id, 
-                    *principal, 
-                    *rate_bps, 
+                    owner_id,
+                    creditor_agent_id,
+                    *principal,
+                    *rate_bps,
                     *maturity_days,
-                    LoanPurpose::WorkingCapital
+                    LoanPurpose::WorkingCapital,
                 );
             }
             LiabilityConfig::Mortgage { creditor_id, principal, rate_bps, maturity_days } => {
@@ -180,7 +166,7 @@ impl<'a> AgentFactory<'a> {
                     p,
                     *rate_bps,
                     *maturity_days,
-                    LoanPurpose::RealEstate
+                    LoanPurpose::RealEstate,
                 );
             }
             _ => {}
@@ -188,18 +174,13 @@ impl<'a> AgentFactory<'a> {
     }
 
     fn create_loan_via_effects(
-        &mut self,
-        borrower: AgentId,
-        lender: AgentId,
-        principal: f64,
-        rate_bps: BasisPoints,
-        maturity_days: u32,
+        &mut self, borrower: AgentId, lender: AgentId, principal: f64, rate_bps: BasisPoints, maturity_days: u32,
         purpose: LoanPurpose,
     ) {
         let issue_date = self.state.current_date;
         let maturity_date = issue_date + Duration::days(maturity_days as i64);
         let is_consumer = self.state.agents.consumers.contains_key(&borrower);
-        
+
         let loan_details = LoanDetails {
             loan_id: Uuid::new_v4(),
             lender,
@@ -221,13 +202,13 @@ impl<'a> AgentFactory<'a> {
             rating: Some(CreditRating::consumer_prime()),
             ..Default::default()
         };
-        let loan = Loan { 
-            instrument_id: InstrumentId(uuid::Uuid::new_v4()), 
-            details: loan_details, 
-            status: LoanStatus::Current, 
-            servicing_history: vec![] 
+        let loan = Loan {
+            instrument_id: InstrumentId(uuid::Uuid::new_v4()),
+            details: loan_details,
+            status: LoanStatus::Current,
+            servicing_history: vec![],
         };
-        
+
         self.pending_effects.push(StateEffect::Credit(CreditEffect::RegisterLoan {
             loan: loan.clone(),
             is_consumer,
@@ -256,22 +237,46 @@ impl<'a> AgentFactory<'a> {
             debtor: cb_id,
             quantity: initial_balance,
         }));
-        
+
         self.apply_pending_effects();
     }
 
-    
+    pub fn seed_central_bank_portfolio(&mut self, face_amount: f64) {
+        if face_amount <= 0.0 {
+            return;
+        }
+
+        let cb_id = self.state.financial_system.central_bank.id;
+        let gov_id = self.state.financial_system.government.id;
+        let bond = self.get_or_create_bond_instrument("CB_BALANCE", gov_id);
+
+        let face_value = bond.face_value().map(|m| m.to_f64()).unwrap_or(1_000.0);
+        if face_value <= 0.0 {
+            return;
+        }
+
+        let quantity = (face_amount / face_value).round();
+        if quantity <= 0.0 {
+            return;
+        }
+
+        self.pending_effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument {
+            instrument: bond,
+            creditor: cb_id,
+            debtor: gov_id,
+            quantity,
+        }));
+
+        self.apply_pending_effects();
+    }
+
     fn get_or_create_deposit_instrument(&mut self, bank_id: AgentId) -> Instrument {
-        let deposit = Instrument::cash(
-            InstrumentId(Uuid::new_v4()),
-            bank_id,
-            CashType::DemandDeposit,
-            Currency::USD,
-            dec!(25.0)
-        ).build();
+        let deposit =
+            Instrument::cash(InstrumentId(Uuid::new_v4()), bank_id, CashType::DemandDeposit, Currency::USD, dec!(25.0))
+                .build();
         deposit
     }
-    
+
     fn get_or_create_reserves_instrument(&mut self) -> Instrument {
         let cb_id = self.state.financial_system.central_bank.id;
         let reserves = Instrument::cash(
@@ -279,8 +284,9 @@ impl<'a> AgentFactory<'a> {
             cb_id,
             CashType::CentralBankReserves,
             Currency::USD,
-            self.state.financial_system.central_bank.policy_rate_bps
-        ).build();
+            self.state.financial_system.central_bank.policy_rate_bps,
+        )
+        .build();
         reserves
     }
 
@@ -291,8 +297,9 @@ impl<'a> AgentFactory<'a> {
             cb_id,
             CashType::TreasuryGeneralAccount,
             Currency::USD,
-            dec!(0.0)
-        ).build();
+            dec!(0.0),
+        )
+        .build();
         tga
     }
 
@@ -305,14 +312,102 @@ impl<'a> AgentFactory<'a> {
             BondType::Government,
             Money::from(1000),
             issue,
-            maturity
-        ).coupon_bps(dec!(250.0))
-         .rating(CreditRating::government_aaa())
-         .auto_market()
-         .build()
-         .unwrap();
+            maturity,
+        )
+        .coupon_bps(dec!(250.0))
+        .rating(CreditRating::government_aaa())
+        .auto_market()
+        .build()
+        .unwrap();
 
         bond
+    }
+
+    fn allocate_bank_reserves(&mut self, banks: &[BankConfig]) -> f64 {
+        let mut total_reserves = 0.0;
+        let cb_id = self.state.financial_system.central_bank.id;
+
+        for bank_cfg in banks {
+            let bank_id = match self.agent_ids.get(&bank_cfg.id) {
+                Some(id) => *id,
+                None => continue,
+            };
+
+            let target_amount = match &bank_cfg.reserves {
+                Some(ReservesConfig::RatioOfLiabilities { min_ratio, max_ratio }) => {
+                    let min = (*min_ratio).max(0.0);
+                    let max = (*max_ratio).max(min);
+                    let liabilities = self.total_liabilities_for(bank_id);
+                    if liabilities <= 0.0 {
+                        continue;
+                    }
+                    let ratio = if (max - min).abs() <= f64::EPSILON {
+                        min
+                    } else {
+                        let dist = Uniform::new_inclusive(min, max).unwrap();
+                        self.rng.sample(dist)
+                    };
+                    liabilities * ratio
+                }
+                Some(ReservesConfig::RatioOfDeposits { ratio, .. }) => {
+                    let liabilities = self.total_deposit_liabilities_for(bank_id);
+                    if liabilities <= 0.0 {
+                        continue;
+                    }
+                    liabilities * ratio
+                }
+                None => continue,
+            };
+
+            if target_amount <= 0.0 {
+                continue;
+            }
+
+            total_reserves += target_amount;
+            let instrument = self.get_or_create_reserves_instrument();
+            self.pending_effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument {
+                instrument,
+                creditor: bank_id,
+                debtor: cb_id,
+                quantity: target_amount,
+            }));
+        }
+
+        self.apply_pending_effects();
+        total_reserves
+    }
+
+    fn total_liabilities_for(&self, bank_id: AgentId) -> f64 {
+        let mut total = 0.0;
+        if let Some(bs) = self.state.financial_system.balance_sheets.get(&bank_id) {
+            for (_inst_id, pos) in &bs.liabilities {
+                let per_unit = pos.book_value_per_unit.to_f64();
+                if per_unit.is_finite() {
+                    total += pos.quantity * per_unit;
+                }
+            }
+        }
+        total
+    }
+
+    fn total_deposit_liabilities_for(&self, bank_id: AgentId) -> f64 {
+        let mut total = 0.0;
+        let system = &self.state.financial_system;
+        if let Some(bs) = system.balance_sheets.get(&bank_id) {
+            for (inst_id, pos) in &bs.liabilities {
+                if let Some(inst) = system.instruments.get(inst_id) {
+                    if let InstrumentType::Cash(cash) = &inst.instrument_type {
+                        if matches!(cash.cash_type, CashType::DemandDeposit | CashType::SavingsDeposit) {
+                            let per_unit = pos.book_value_per_unit.to_f64();
+                            if per_unit.is_finite() {
+                                total += pos.quantity * per_unit;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        total
     }
 
     pub fn get_agent_id_map(&self) -> &HashMap<String, AgentId> {

@@ -1,6 +1,6 @@
+use crate::pserde;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use crate::pserde;
 
 #[derive(Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq, Copy, Default)]
 pub struct AgentId(pub Uuid);

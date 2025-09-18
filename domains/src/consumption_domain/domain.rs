@@ -34,12 +34,12 @@ impl Domain for ConsumptionDomain {
         let actions = match intention {
             SimIntention::Consumption(ConsumptionIntention::ConsumeGood { agent_id, good_id, quantity }) => {
                 let qty = quantity.round();
-                if qty >= 1.0 { 
+                if qty >= 1.0 {
                     vec![SimAction::Consumption(ConsumptionAction::Consume {
-                    agent_id: *agent_id,
-                    good_id: *good_id,
-                    amount: qty,
-                })]
+                        agent_id: *agent_id,
+                        good_id: *good_id,
+                        amount: qty,
+                    })]
                 } else {
                     vec![SimAction::Consumption(ConsumptionAction::NoAction { agent_id: *agent_id })]
                 }

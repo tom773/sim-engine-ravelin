@@ -10,12 +10,7 @@ pub struct TaxRates {
 
 impl Default for TaxRates {
     fn default() -> Self {
-        Self {
-            income_tax: 0.2,
-            corporate_tax: 0.2,
-            capital_gains: 0.15,
-            consumption_tax: 0.1,
-        }
+        Self { income_tax: 0.2, corporate_tax: 0.2, capital_gains: 0.15, consumption_tax: 0.1 }
     }
 }
 
@@ -29,12 +24,7 @@ pub struct SpendingTargets {
 
 impl Default for SpendingTargets {
     fn default() -> Self {
-        Self {
-            transfers: 0.0,
-            purchases: 0.0,
-            investment: 0.0,
-            debt_service: 0.0,
-        }
+        Self { transfers: 0.0, purchases: 0.0, investment: 0.0, debt_service: 0.0 }
     }
 }
 

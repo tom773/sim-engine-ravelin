@@ -1,5 +1,5 @@
 use crate::*;
-use dyn_clone::{clone_trait_object, DynClone};
+use dyn_clone::{DynClone, clone_trait_object};
 use rand::RngCore;
 use std::any::Any;
 use std::fmt::Debug;

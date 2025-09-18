@@ -261,9 +261,7 @@ impl Exchange {
 
     /// New: also refresh pricers for *existing* financial markets using instrument registry.
     pub fn attach_pricing_feeds_with_registry(
-        &mut self,
-        feeds: PricingFeeds,
-        instruments: &std::collections::HashMap<InstrumentId, Instrument>,
+        &mut self, feeds: PricingFeeds, instruments: &std::collections::HashMap<InstrumentId, Instrument>,
     ) {
         self.pricing_feeds = Some(feeds.clone());
         for (_, market) in self.markets.iter_mut() {
@@ -396,9 +394,7 @@ impl Exchange {
     }
 
     pub fn conduct_dutch_auction(
-        &mut self,
-        auction_id: &Uuid,
-        instruments: &std::collections::HashMap<InstrumentId, Instrument>,
+        &mut self, auction_id: &Uuid, instruments: &std::collections::HashMap<InstrumentId, Instrument>,
     ) -> Result<Vec<Trade>, String> {
         let mut trades = Vec::new();
         let auction = match self.open_auctions.get_mut(auction_id) {
@@ -411,7 +407,8 @@ impl Exchange {
             return Ok(trades);
         }
 
-        let instrument = instruments.get(&auction.instrument_id)
+        let instrument = instruments
+            .get(&auction.instrument_id)
             .ok_or_else(|| format!("Auction instrument {} not found", auction.instrument_id))?;
         let issuer = if let InstrumentType::Debt(details) = &instrument.instrument_type {
             details.issuer()
@@ -419,7 +416,9 @@ impl Exchange {
             auction.status = AuctionStatus::Closed;
             return Err("Auction instrument is not a debt security".into());
         };
-        let symbol = self.inst_to_symbol.get(&instrument.id)
+        let symbol = self
+            .inst_to_symbol
+            .get(&instrument.id)
             .cloned()
             .ok_or_else(|| format!("No symbol registered for instrument {}", instrument.id))?;
 

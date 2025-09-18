@@ -1,18 +1,14 @@
 #[macro_export]
 macro_rules! good_id {
     ($slug:literal) => {
-        $crate::goods::CATALOGUE
-            .get_good_id_by_slug($slug)
-            .expect(concat!("unknown good slug: ", $slug))
+        $crate::goods::CATALOGUE.get_good_id_by_slug($slug).expect(concat!("unknown good slug: ", $slug))
     };
 }
 
 #[macro_export]
 macro_rules! recipe_id {
     ($name:literal) => {
-        sim_types::goods::CATALOGUE
-            .get_recipe_id_by_name($name)
-            .expect(concat!("unknown recipe name: ", $name))
+        sim_types::goods::CATALOGUE.get_recipe_id_by_name($name).expect(concat!("unknown recipe name: ", $name))
     };
 }
 
@@ -24,10 +20,10 @@ macro_rules! pserde {
                 write!(f, "{}", self.0)
             }
         }
-        
+
         impl std::str::FromStr for $outer {
             type Err = <$inner as std::str::FromStr>::Err;
-            
+
             fn from_str(s: &str) -> Result<Self, Self::Err> {
                 Ok(Self(s.parse::<$inner>()?))
             }

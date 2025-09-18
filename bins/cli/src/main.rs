@@ -80,9 +80,9 @@ fn api_v1_router() -> Router<Arc<AppState>> {
         .nest(
             "/simulation",
             Router::new()
-            .route("/status", get(get_simulation_status))
-            .route("/tick", post(tick_handler))
-            .route("/reset", post(reset_simulation))
+                .route("/status", get(get_simulation_status))
+                .route("/tick", post(tick_handler))
+                .route("/reset", post(reset_simulation)),
         )
         .nest("/agents", Router::new().route("/", get(get_agents_list)).route("/{id}", get(get_agent_detail)))
         .nest(
@@ -290,20 +290,20 @@ async fn ws_conn(mut socket: WebSocket, state: Arc<AppState>) {
 }
 async fn reset_simulation(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let new_engine = state.scenario.initialize_engine();
-    
+
     let mut eng = state.engine.write();
     *eng = new_engine;
-    
+
     state.bus.clear();
-    
+
     let tick = eng.state.ticknum;
     let date = eng.state.current_date;
     let mut rng = StdRng::from_os_rng();
     let (_res, events) = eng.run_tick(&mut rng);
-    
+
     drop(eng);
     state.bus.push_tick(tick, date, events);
-    
+
     (
         StatusCode::OK,
         Json(serde_json::json!({
@@ -312,5 +312,5 @@ async fn reset_simulation(State(state): State<Arc<AppState>>) -> impl IntoRespon
             "current_date": state.engine.read().state.current_date.format("%Y-%m-%d").to_string()
         })),
     )
-    .into_response()
+        .into_response()
 }

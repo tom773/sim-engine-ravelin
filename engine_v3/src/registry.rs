@@ -15,23 +15,23 @@ impl DomainRegistry {
         registry.register("Fiscal", Box::new(FiscalDomain::new()));
         registry.register("Production", Box::new(ProductionDomain::new()));
         registry.register("Consumption", Box::new(ConsumptionDomain::new()));
-        
+
         registry
     }
-    
+
     pub fn register(&mut self, name: &str, domain: Box<dyn Domain>) {
         self.domains.insert(name.to_string(), domain);
     }
-    
+
     pub fn get_domain(&self, name: &str) -> Option<&Box<dyn Domain>> {
         self.domains.get(name)
     }
-    
+
     pub fn get_domain_for_action(&self, action: &SimAction) -> Option<&Box<dyn Domain>> {
         let domain_name = self.get_domain_name_for_action(action);
         self.domains.get(&domain_name)
     }
-    
+
     fn get_domain_name_for_action(&self, action: &SimAction) -> String {
         match action {
             SimAction::Banking(_) => "Banking".to_string(),
@@ -43,11 +43,8 @@ impl DomainRegistry {
             SimAction::Credit(_) => "Transactions".to_string(),
         }
     }
-    
-    pub fn categorize_intentions_by_phase(
-        &self,
-        intentions: Vec<SimIntention>,
-    ) -> HashMap<String, Vec<SimIntention>> {
+
+    pub fn categorize_intentions_by_phase(&self, intentions: Vec<SimIntention>) -> HashMap<String, Vec<SimIntention>> {
         let mut categorized: HashMap<String, Vec<SimIntention>> = HashMap::new();
         for intention in intentions {
             let mut found: Option<ResolutionPhase> = None;
@@ -67,9 +64,10 @@ impl DomainRegistry {
             if let Some(phase) = found {
                 let k = match phase {
                     ResolutionPhase::Independent => "Independent",
-                    ResolutionPhase::Market      => "Market",
-                    ResolutionPhase::Dependent   => "Dependent",
-                }.to_string();
+                    ResolutionPhase::Market => "Market",
+                    ResolutionPhase::Dependent => "Dependent",
+                }
+                .to_string();
                 categorized.entry(k).or_default().push(intention);
             } else {
                 tracing::warn!("No resolution phase found for intention: {}", intention.name());
@@ -77,12 +75,8 @@ impl DomainRegistry {
         }
         categorized
     }
-    
-    pub fn resolve_intention(
-        &self,
-        intention: &SimIntention,
-        context: &ResolutionContext,
-    ) -> ResolutionResult {
+
+    pub fn resolve_intention(&self, intention: &SimIntention, context: &ResolutionContext) -> ResolutionResult {
         let mut first: Option<ResolutionResult> = None;
         for domain in self.domains.values() {
             if let Some(result) = domain.resolve_intention(intention, context) {
@@ -100,7 +94,7 @@ impl DomainRegistry {
         }
         first.unwrap_or_else(ResolutionResult::not_handled)
     }
-    
+
     pub fn execute_action(&self, action: &SimAction, state: &SimState) -> DomainResult {
         if let Some(domain) = self.get_domain_for_action(action) {
             domain.execute(action, state)
@@ -108,7 +102,7 @@ impl DomainRegistry {
             DomainResult::failure(vec![format!("No domain found for action: {:?}", action)])
         }
     }
-    
+
     pub fn settle_trade(&self, trade: &Trade, state: &SimState) -> DomainResult {
         if let Some(domain) = self.domains.get("Transactions") {
             domain.settle_trade(trade, state)

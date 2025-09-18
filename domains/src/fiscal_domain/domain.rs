@@ -19,7 +19,12 @@ impl Domain for FiscalDomain {
 
     fn resolve_intention(&self, intention: &SimIntention, context: &ResolutionContext) -> Option<ResolutionResult> {
         let actions = match intention {
-            SimIntention::Fiscal(FiscalIntention::AnnounceDebtAuction { government_id, maturity_date, coupon_rate, quantity_to_issue }) => {
+            SimIntention::Fiscal(FiscalIntention::AnnounceDebtAuction {
+                government_id,
+                maturity_date,
+                coupon_rate,
+                quantity_to_issue,
+            }) => {
                 const FACE_VALUE: f64 = 1000.0;
                 let issue_date = context.state.current_date;
 

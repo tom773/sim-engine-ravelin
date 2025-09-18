@@ -447,7 +447,8 @@ fn apply_central_bank_payment(state: &mut SimState, pi: &PaymentInstruction) -> 
     let bank_id = pi.payee;
     let reserve_inst_id = fs
         .find_agent_liquid_account(&bank_id)
-        .ok_or_else(|| EffectError::InvalidState(format!("Bank {:?} has no reserves account", bank_id)))?.0;
+        .ok_or_else(|| EffectError::InvalidState(format!("Bank {:?} has no reserves account", bank_id)))?
+        .0;
 
     let bank_bs = fs.balance_sheets.get_mut(&bank_id).ok_or(EffectError::AgentNotFound { id: bank_id })?;
 

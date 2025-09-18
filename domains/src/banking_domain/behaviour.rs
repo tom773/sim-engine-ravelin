@@ -48,7 +48,6 @@ impl BasicBankDecisionModel {
                 continue;
             }
 
-
             let decision = if let Some(borrower) = state.agents.consumers.get(&app.borrower_id) {
                 let dti =
                     if borrower.income > 0.0 { fs.get_total_liabilities(&borrower.id) / borrower.income } else { 1.0 };

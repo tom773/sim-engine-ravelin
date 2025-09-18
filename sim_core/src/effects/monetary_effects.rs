@@ -1,5 +1,5 @@
-pub use serde::{Deserialize, Serialize};
 use crate::*;
+pub use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum MonetaryEffect {
@@ -28,9 +28,7 @@ impl StateEffectApplicator {
             }
             MonetaryEffect::SetReserveRequirement { ratio } => {
                 if *ratio < 0.0 || *ratio > 1.0 {
-                    return Err(EffectError::InvalidState(
-                        "Reserve requirement must be between 0 and 1".to_string()
-                    ));
+                    return Err(EffectError::InvalidState("Reserve requirement must be between 0 and 1".to_string()));
                 }
                 state.financial_system.central_bank.reserve_requirement = *ratio;
                 Ok(())
@@ -39,15 +37,18 @@ impl StateEffectApplicator {
                 tracing::event!(
                     tracing::Level::WARN,
                     "UNIMPLEMENTED: Central Bank performing OMO: {:?} for amount: {}",
-                    operation_type, amount
+                    operation_type,
+                    amount
                 );
                 Ok(())
             }
-            MonetaryEffect::ProvideLiquidityAssistance { bank_id, amount , collateral} => {
+            MonetaryEffect::ProvideLiquidityAssistance { bank_id, amount, collateral } => {
                 tracing::event!(
                     tracing::Level::WARN,
                     "UNIMPLEMENTED: Central Bank providing liquidity assistance to bank: {:?} for amount: {}, collateral: {:?}",
-                    bank_id, amount, collateral
+                    bank_id,
+                    amount,
+                    collateral
                 );
                 Ok(())
             }

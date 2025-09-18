@@ -54,25 +54,10 @@ impl OMOType {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum MonetaryIntention {
-    ConductOMO {
-        cb_id: AgentId,
-        operation_type: OMOType,
-        amount: f64,
-    },
-    SetPolicyRate {
-        cb_id: AgentId,
-        new_rate_bps: BasisPoints,
-    },
-    AdjustReserveRequirement {
-        cb_id: AgentId,
-        new_ratio: f64,
-    },
-    ProvideLiquidityFacility {
-        cb_id: AgentId,
-        bank_id: AgentId,
-        amount: f64,
-        collateral: Option<Vec<InstrumentId>>,
-    },
+    ConductOMO { cb_id: AgentId, operation_type: OMOType, amount: f64 },
+    SetPolicyRate { cb_id: AgentId, new_rate_bps: BasisPoints },
+    AdjustReserveRequirement { cb_id: AgentId, new_ratio: f64 },
+    ProvideLiquidityFacility { cb_id: AgentId, bank_id: AgentId, amount: f64, collateral: Option<Vec<InstrumentId>> },
 }
 
 impl MonetaryIntention {

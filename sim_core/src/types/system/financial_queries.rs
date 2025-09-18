@@ -379,7 +379,6 @@ impl FinancialSystem {
                 bs.assets
                     .iter()
                     .map(|(id, pos)| {
-
                         let price = self.get_market_price(id).unwrap_or(pos.book_value_per_unit);
                         price.to_f64() * pos.quantity
                     })
@@ -394,7 +393,6 @@ impl FinancialSystem {
             .iter()
             .map(|(id, qty)| {
                 let price = self
-
                     .get_market_price(id)
                     .or_else(|| self.instruments.get(id).and_then(|i| i.face_value()))
                     .unwrap_or(Money::ZERO);
@@ -412,7 +410,6 @@ impl FinancialSystem {
                 bs.liabilities
                     .iter()
                     .map(|(id, pos)| {
-
                         let price = self.get_market_price(id).unwrap_or(pos.book_value_per_unit);
                         price.to_f64() * pos.quantity
                     })
@@ -429,11 +426,7 @@ impl FinancialSystem {
                     .iter()
                     .filter_map(|(id, pos)| {
                         self.instruments.get(id).and_then(|inst| {
-                            if let InstrumentType::Cash(_) = &inst.instrument_type {
-                                Some(pos.quantity)
-                            } else {
-                                None
-                            }
+                            if let InstrumentType::Cash(_) = &inst.instrument_type { Some(pos.quantity) } else { None }
                         })
                     })
                     .sum()

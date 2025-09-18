@@ -177,9 +177,7 @@ impl EconomicAnalytics for SimState {
             .history
             .market_ticks
             .iter()
-            .filter(|(symbol, _)| {
-                fs.exchange.symbol_to_good.contains_key(symbol)
-            })
+            .filter(|(symbol, _)| fs.exchange.symbol_to_good.contains_key(symbol))
             .flat_map(|(_, ticks)| ticks.iter())
             .filter(|tick| tick.date == self.current_date)
             .map(|tick| tick.turnover)

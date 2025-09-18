@@ -4,16 +4,21 @@ use rand::prelude::*;
 use rust_decimal::prelude::*;
 
 pub fn quote_treasury_yields(
-    tenor_years: f64,
-    policy_bps: BasisPoints,
-    rng: &mut dyn RngCore,
+    tenor_years: f64, policy_bps: BasisPoints, rng: &mut dyn RngCore,
 ) -> (BasisPoints, BasisPoints) {
-    let tp_bps = if tenor_years <= 0.083 { 2.0 }
-    else if tenor_years <= 0.25 { 7.0 }
-    else if tenor_years <= 1.0 { 12.0 }
-    else if tenor_years <= 5.0 { 35.0 }
-    else if tenor_years <= 10.0 { 50.0 }
-    else { 65.0 };
+    let tp_bps = if tenor_years <= 0.083 {
+        2.0
+    } else if tenor_years <= 0.25 {
+        7.0
+    } else if tenor_years <= 1.0 {
+        12.0
+    } else if tenor_years <= 5.0 {
+        35.0
+    } else if tenor_years <= 10.0 {
+        50.0
+    } else {
+        65.0
+    };
 
     let jitter: f64 = rng.random_range(0.95..1.05);
     let spread_bps: f64 = rng.random_range(10.0..25.0);
@@ -27,19 +32,11 @@ pub fn quote_treasury_yields(
 }
 
 pub fn auction_bid_price(
-    bond: &BondDetails,
-    y_bps: BasisPoints,
-    instrument_id: &InstrumentId,
-    feeds: &PricingFeeds,
-    as_of: NaiveDate,
+    bond: &BondDetails, y_bps: BasisPoints, instrument_id: &InstrumentId, feeds: &PricingFeeds, as_of: NaiveDate,
 ) -> Money {
     let local_feeds = feeds.with_date(as_of);
 
-    let pricer = GovTermStructurePricer::new(
-        bond.clone(),
-        TermStructureMethod::default(),
-        local_feeds,
-    );
+    let pricer = GovTermStructurePricer::new(bond.clone(), TermStructureMethod::default(), local_feeds);
 
     let y_decimal = bps_to_decimal(y_bps).to_f64().unwrap_or(0.0);
 

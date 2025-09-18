@@ -34,7 +34,8 @@ impl StateEffectApplicator {
             AgentEffect::Produce { firm, good_id, amount } => {
                 let firm_ref = state.agents.firms.get_mut(firm).ok_or(EffectError::AgentNotFound { id: *firm })?;
                 let recipe_id = firm_ref
-                    .recipe.as_mut()
+                    .recipe
+                    .as_mut()
                     .ok_or_else(|| EffectError::InvalidState("Firm has no recipe configured".to_string()))?;
                 let recipe = state
                     .financial_system

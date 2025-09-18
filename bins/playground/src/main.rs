@@ -108,11 +108,7 @@ impl<'a> App<'a> {
             from: firm_id,
             to: consumer_id,
             amount: 20000.0,
-            context: TransactionContext::GenericTransfer {
-                from: firm_id,
-                to: consumer_id,
-                amount: 20000.0,
-            },
+            context: TransactionContext::GenericTransfer { from: firm_id, to: consumer_id, amount: 20000.0 },
         });
     }
 

@@ -2,21 +2,21 @@
 
 pub mod banking;
 pub mod consumption;
-pub mod fiscal;
-pub mod production;
-pub mod validation;
-pub mod transaction;
-pub mod monetary;
 pub mod credit_actions;
+pub mod fiscal;
+pub mod monetary;
+pub mod production;
+pub mod transaction;
+pub mod validation;
 
-pub use credit_actions::*;
-pub use consumption::*;
-pub use fiscal::*;
-pub use production::*;
 pub use banking::*;
-pub use validation::*;
-pub use transaction::*;
+pub use consumption::*;
+pub use credit_actions::*;
+pub use fiscal::*;
 pub use monetary::*;
+pub use production::*;
+pub use transaction::*;
+pub use validation::*;
 
 use crate::*;
 use serde::{Deserialize, Serialize};
@@ -81,7 +81,7 @@ impl SimIntention {
             SimIntention::Credit(intention) => format!("Credit::{}", intention.name()),
         }
     }
-    
+
     pub fn agent_id(&self) -> AgentId {
         match self {
             SimIntention::Banking(intention) => intention.agent_id(),
@@ -105,5 +105,5 @@ impl SimIntention {
                 }
             }
         }
-    } 
+    }
 }

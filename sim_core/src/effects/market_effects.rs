@@ -142,10 +142,7 @@ impl StateEffectApplicator {
                 Ok(())
             }
             MarketEffect::PostOvernightFundingQuote(quote) => {
-                state
-                    .financial_system
-                    .funding_markets
-                    .post_quote(quote.clone());
+                state.financial_system.funding_markets.post_quote(quote.clone());
                 Ok(())
             }
         }

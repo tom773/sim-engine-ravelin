@@ -336,7 +336,7 @@ impl BankingDomain {
             StateEffect::Credit(CreditEffect::RegisterLoan {
                 loan: loan.clone(),
                 is_consumer: is_consumer, // Pass the borrower type to the effect
-                purpose: loan_terms.purpose.clone()
+                purpose: loan_terms.purpose.clone(),
             }),
             StateEffect::Financial(FinancialEffect::CreateInstrument {
                 instrument: deposit_instrument,

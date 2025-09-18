@@ -101,7 +101,7 @@ impl SimpleConsumerDecisionModel {
         }
 
         let liquid_assets = fs.get_liquid_assets(&consumer.id);
-        let mut loan_amt = 5_000.0; 
+        let mut loan_amt = 5_000.0;
         if consumer.is_golden {
             loan_amt = 1_000_000.0;
         }
@@ -146,7 +146,6 @@ impl SimpleConsumerDecisionModel {
             }
         }
     }
-
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -240,7 +239,15 @@ impl CESConsumerDecisionModel {
         let mut market_data = Vec::new();
 
         for (good_id, weight) in &self.weights {
-            if let Some(view) = state.market_view(&state.financial_system.exchange.symbol_registry.symbol_of_good(good_id).map(|(s, _)| s).unwrap_or(Symbol("".to_string()))) {
+            if let Some(view) = state.market_view(
+                &state
+                    .financial_system
+                    .exchange
+                    .symbol_registry
+                    .symbol_of_good(good_id)
+                    .map(|(s, _)| s)
+                    .unwrap_or(Symbol("".to_string())),
+            ) {
                 if let Some(price) = view.last_or_mid() {
                     if price > 1e-6 {
                         market_data.push((*good_id, price, *weight));

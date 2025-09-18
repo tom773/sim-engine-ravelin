@@ -139,7 +139,7 @@ pub struct SimConfig {
 
 impl Default for SimConfig {
     fn default() -> Self {
-        Self { iterations: 100, goods: GoodsMarketConfig::default()}
+        Self { iterations: 100, goods: GoodsMarketConfig::default() }
     }
 }
 

@@ -66,7 +66,6 @@ impl TransactionContext {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum BankingIntention {
-
     PostOvernightFundingQuote {
         quote: ONQuote,
     },

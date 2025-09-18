@@ -12,6 +12,8 @@ pub struct CompactSnapshot {
 pub struct CompactBalanceSheet {
     pub a: Vec<CompactPosition>,
     pub l: Vec<CompactPosition>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub e: Option<CompactPosition>,
     pub i: CompactIncome,
 }
 
@@ -98,6 +100,8 @@ impl FinancialSystem {
 
             let mut agent_data = serde_json::json!({});
 
+            let net_worth = self.get_total_assets(agent_id) - self.get_total_liabilities(agent_id);
+
             let assets: Vec<_> = balance_sheet
                 .assets
                 .iter()
@@ -157,6 +161,14 @@ impl FinancialSystem {
                 }
             }
 
+            if net_worth.abs() > 0.01 {
+                agent_data["e"] = serde_json::json!([
+                    format!("EQ:{}", &agent_id.0.to_string()[0..4]),
+                    format!("{:.2}", net_worth),
+                    "1",
+                ]);
+            }
+
             let is = &balance_sheet.income_statement;
             if is.net_income.to_f64().abs() > 0.01 {
                 agent_data["i"] = serde_json::json!({
@@ -183,11 +195,12 @@ impl FinancialSystem {
                 "fields": {
                     "t": "tick number",
                     "d": "data by agent (6-char id prefix)",
-                    "a": "assets [[type:id, qty, book_val]]",
-                    "l": "liabilities [[type:id, qty, book_val]]",
-                    "s": "securities [[type:id, qty, face_val]]",
-                    "i": "income {n: net_income}"
-                },
+                "a": "assets [[type:id, qty, book_val]]",
+                "l": "liabilities [[type:id, qty, book_val]]",
+                "s": "securities [[type:id, qty, face_val]]",
+                "e": "equity [type:id, qty, book_val]",
+                "i": "income {n: net_income}"
+            },
                 "types": {
                     "DD": "Demand Deposit",
                     "SD": "Savings Deposit",
@@ -228,24 +241,31 @@ impl FinancialSystem {
             let agent_key = format!("{:.8}", agent_id.0.to_string());
 
             let assets = self.compact_positions(&balance_sheet.assets, true);
+            let mut total_assets_book = assets.iter().map(|p| p.q * p.b).sum::<f64>();
+
             let liabilities = self.compact_positions(&balance_sheet.liabilities, false);
+            let total_liabilities_book = liabilities.iter().map(|p| p.q * p.b).sum::<f64>();
 
             let mut all_assets = assets;
             if let Some(csd_holdings) = self.clearing_house.csd.custody_accounts.get(agent_id) {
                 for (inst_id, holding) in &csd_holdings.holdings {
                     if holding.total_position() > 1e-9 {
                         if let Some(compact) = self.create_compact_position_from_csd(inst_id, holding) {
+                            total_assets_book += compact.q * compact.b;
                             all_assets.push(compact);
                         }
                     }
                 }
             }
 
+            let equity_amount = total_assets_book - total_liabilities_book;
+
             bs.insert(
                 agent_key,
                 CompactBalanceSheet {
                     a: all_assets,
                     l: liabilities,
+                    e: Self::equity_position_from_amount(agent_id, equity_amount),
                     i: CompactIncome {
                         r: balance_sheet.income_statement.revenue.to_f64(),
                         c: balance_sheet.income_statement.cost_of_goods_sold.to_f64(),
@@ -304,6 +324,17 @@ impl FinancialSystem {
         })
     }
 
+    fn equity_position_from_amount(agent_id: &AgentId, net_worth: f64) -> Option<CompactPosition> {
+        if net_worth.abs() < 1e-6 {
+            return None;
+        }
+
+        let id_short = format!("{:.6}", agent_id.0.to_string());
+        let key = format!("EQ:{}", id_short);
+
+        Some(CompactPosition { k: key, q: net_worth, b: 1.0, c: 1.0, m: None })
+    }
+
     fn get_instrument_type_code(&self, inst: &Instrument) -> &str {
         match &inst.instrument_type {
             InstrumentType::Cash(d) => match d.cash_type {
@@ -325,7 +356,7 @@ impl FinancialSystem {
                     ConsumerDebt::ResidentialMortgage(_)
                     | ConsumerDebt::AutoLoan(_)
                     | ConsumerDebt::PersonalLoan(_) => "LN",
-                    | ConsumerDebt::CreditCard(_) => "CL",
+                    ConsumerDebt::CreditCard(_) => "CL",
                     ConsumerDebt::StudentLoan(_) => "LN",
                 },
                 DebtInstrument::Loan(_) => "LN",
@@ -353,6 +384,7 @@ impl FinancialSystem {
 
             let mut agent_data = json!({});
 
+            let mut asset_total = 0.0;
             let assets: Vec<_> = balance_sheet
                 .assets
                 .iter()
@@ -360,10 +392,12 @@ impl FinancialSystem {
                 .map(|(id, pos)| {
                     let inst = &self.instruments[id];
                     let code = self.get_instrument_type_code(inst);
+                    let book = pos.book_value_per_unit.to_f64();
+                    asset_total += pos.quantity * book;
                     json!([
                         format!("{}:{}", code, &id.0.to_string()[0..4]),
                         (pos.quantity * 100.0).round() / 100.0,
-                        pos.book_value_per_unit.to_f64().round(),
+                        book.round(),
                     ])
                 })
                 .collect();
@@ -372,6 +406,7 @@ impl FinancialSystem {
                 agent_data["a"] = json!(assets);
             }
 
+            let mut liability_total = 0.0;
             let liabilities: Vec<_> = balance_sheet
                 .liabilities
                 .iter()
@@ -379,10 +414,12 @@ impl FinancialSystem {
                 .map(|(id, pos)| {
                     let inst = &self.instruments[id];
                     let code = self.get_instrument_type_code(inst);
+                    let book = pos.book_value_per_unit.to_f64();
+                    liability_total += pos.quantity * book;
                     json!([
                         format!("{}:{}", code, &id.0.to_string()[0..4]),
                         (pos.quantity * 100.0).round() / 100.0,
-                        pos.book_value_per_unit.to_f64().round(),
+                        book.round(),
                     ])
                 })
                 .collect();
@@ -391,6 +428,7 @@ impl FinancialSystem {
                 agent_data["l"] = json!(liabilities);
             }
 
+            let mut securities_total = 0.0;
             if let Some(csd_account) = self.clearing_house.csd.custody_accounts.get(agent_id) {
                 let securities: Vec<_> = csd_account
                     .holdings
@@ -399,10 +437,12 @@ impl FinancialSystem {
                     .map(|(inst_id, holding)| {
                         let inst = &self.instruments[inst_id];
                         let code = self.get_instrument_type_code(inst);
+                        let book = inst.face_value().map(|v| v.to_f64()).unwrap_or(1000.0);
+                        securities_total += holding.total_position() * book;
                         json!([
                             format!("{}:{}", code, &inst_id.0.to_string()[0..4]),
                             (holding.total_position() * 100.0).round() / 100.0,
-                            inst.face_value().map(|v| v.to_f64().round()).unwrap_or(1000.0),
+                            book.round(),
                         ])
                     })
                     .collect();
@@ -410,6 +450,13 @@ impl FinancialSystem {
                 if !securities.is_empty() {
                     agent_data["s"] = json!(securities);
                 }
+            }
+
+            let net_worth = (asset_total + securities_total) - liability_total;
+
+            if net_worth.abs() > 0.01 {
+                agent_data["e"] =
+                    json!([format!("EQ:{}", &agent_id.0.to_string()[0..4]), (net_worth * 100.0).round() / 100.0, 1.0,]);
             }
 
             let is = &balance_sheet.income_statement;
@@ -445,6 +492,7 @@ Field Abbreviations:
   a: assets array
   l: liabilities array
   s: securities (CSD holdings)
+  e: equity array
   i: income statement
   
 Array format: [type:id, quantity, book_value]

@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
-use sim_core::{ prelude::*};
+use serde_with::{DisplayFromStr, serde_as};
+use sim_core::prelude::*;
 use std::collections::HashMap;
 use uuid::Uuid;
-use serde_with::{serde_as, DisplayFromStr};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AgentCounts {
@@ -97,7 +97,6 @@ pub struct MarketDetailDto {
     pub order_book: OrderBook,
 }
 
-
 #[derive(Serialize)]
 pub struct TickDetailDto {
     pub tick_number: u32,
@@ -130,16 +129,20 @@ pub struct OvernightRatesDto {
 pub struct PopulatedPositionDto {
     pub position: Position,
     pub instrument: Instrument,
-    pub market_price: Option<Money>
+    pub market_price: Option<Money>,
 }
 
 #[derive(Serialize)]
 pub struct PopulatedBalanceSheetDto {
     pub assets: Vec<PopulatedPositionDto>,
     pub liabilities: Vec<PopulatedPositionDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub equity: Option<PopulatedPositionDto>,
     pub income_statement: IncomeStatement,
+    pub total_assets: f64,
+    pub total_liabilities: f64,
+    pub net_worth: f64,
 }
-
 
 #[derive(Serialize, Debug, Clone)]
 pub struct MarketIndexDto {
@@ -159,10 +162,10 @@ pub struct InstrumentRegistryDto {
 #[derive(Serialize, Clone, Debug)]
 pub struct ExchangeDto {
     #[serde_as(as = "HashMap<DisplayFromStr, _>")]
-    pub markets: HashMap<Symbol, MarketTypeDto>,  
-    
+    pub markets: HashMap<Symbol, MarketTypeDto>,
+
     pub index: MarketIndexDto,
-    
+
     #[serde_as(as = "HashMap<DisplayFromStr, _>")]
     pub tape: HashMap<Symbol, Vec<TimedTrade>>,
 }
@@ -197,11 +200,7 @@ impl From<&Exchange> for ExchangeDto {
             })
             .collect();
 
-        Self {
-            markets: markets_dto,
-            index: MarketIndexDto::from(&exchange.index),
-            tape: exchange.tape.clone(),
-        }
+        Self { markets: markets_dto, index: MarketIndexDto::from(&exchange.index), tape: exchange.tape.clone() }
     }
 }
 
@@ -300,7 +299,7 @@ pub struct LabourMarketStatsDto {
     pub avg_wage_rate: f64,
     pub labor_force_participation: f64,
     pub job_openings: usize,
-    pub contracts: Vec<EmploymentRecordDto>
+    pub contracts: Vec<EmploymentRecordDto>,
 }
 
 impl From<MarketDepthSummary> for OrderBookDepthDto {

@@ -4,79 +4,35 @@ use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum CreditAction {
-    CreateLoanApplication {
-        application: LoanApplication,
-    },
-    
-    ProcessLoanApplication {
-        application_id: Uuid,
-        decision: LoanDecision,
-    },
-    
-    OriginateLoan {
-        loan: LoanDetails,
-        funding_amount: Money,
-    },
-    
-    OpenCreditFacility {
-        facility: CreditLineDetails,
-    },
-    
-    FundDrawdown {
-        facility_id: Uuid,
-        loan: LoanDetails,
-        amount: Money,
-    },
-    
-    AccrueInterest {
-        loan_id: Uuid,
-    },
-    
-    ProcessScheduledPayment {
-        loan_id: Uuid,
-        payment: ScheduledPayment,
-    },
-    
-    ApplyPayment {
-        loan_id: Uuid,
-        amount: Money,
-        payment_type: PaymentType,
-    },
-    
-    CreateLien {
-        loan_id: Uuid,
-        lien: Lien,
-    },
-    
-    ReleaseLien {
-        lien_id: LienId,
-    },
-    
-    EnforceLien {
-        lien_id: LienId,
-    },
-    
-    MarkImpairment {
-        loan_id: Uuid,
-        new_stage: ImpairmentStage,
-        provision: Money,
-    },
-    
-    WriteOffLoan {
-        loan_id: Uuid,
-        amount: Money,
-    },
-    
-    RecoverLoan {
-        loan_id: Uuid,
-        recovered_amount: Money,
-    },
-    
-    TestCovenant {
-        loan_id: Uuid,
-        covenant_index: usize,
-        result: CovenantTestResult,
-    },
+    CreateLoanApplication { application: LoanApplication },
+
+    ProcessLoanApplication { application_id: Uuid, decision: LoanDecision },
+
+    OriginateLoan { loan: LoanDetails, funding_amount: Money },
+
+    OpenCreditFacility { facility: CreditLineDetails },
+
+    FundDrawdown { facility_id: Uuid, loan: LoanDetails, amount: Money },
+
+    AccrueInterest { loan_id: Uuid },
+
+    ProcessScheduledPayment { loan_id: Uuid, payment: ScheduledPayment },
+
+    ApplyPayment { loan_id: Uuid, amount: Money, payment_type: PaymentType },
+
+    CreateLien { loan_id: Uuid, lien: Lien },
+
+    ReleaseLien { lien_id: LienId },
+
+    EnforceLien { lien_id: LienId },
+
+    MarkImpairment { loan_id: Uuid, new_stage: ImpairmentStage, provision: Money },
+
+    WriteOffLoan { loan_id: Uuid, amount: Money },
+
+    RecoverLoan { loan_id: Uuid, recovered_amount: Money },
+
+    TestCovenant { loan_id: Uuid, covenant_index: usize, result: CovenantTestResult },
 }
 impl CreditAction {
     pub fn name(&self) -> String {
@@ -137,45 +93,45 @@ pub enum CreditIntention {
         term_months: u32,
         collateral: Option<Vec<InstrumentId>>,
     },
-    
+
     BankDecision {
         application_id: Uuid,
         decision: LoanDecision,
     },
-    
+
     RequestCreditLine {
         amount: Money,
         facility_type: FacilityType,
         purpose: LoanPurpose,
     },
-    
+
     DrawFromFacility {
         facility_id: Uuid,
         amount: Money,
         term_months: Option<u32>, // None = revolving draw
     },
-    
+
     MakePayment {
         loan_id: Uuid,
         amount: Money,
         payment_type: PaymentType,
     },
-    
+
     Prepay {
         loan_id: Uuid,
         amount: Money,
     },
-    
+
     ModifyTerms {
         loan_id: Uuid,
         modification: LoanModification,
     },
-    
+
     PledgeCollateral {
         loan_id: Uuid,
         collateral: Vec<InstrumentId>,
     },
-    
+
     ReleaseCollateral {
         lien_id: LienId,
     },

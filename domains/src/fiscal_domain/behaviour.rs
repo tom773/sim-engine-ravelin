@@ -1,4 +1,4 @@
-use chrono::{NaiveDate, Datelike};
+use chrono::{Datelike, NaiveDate};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sim_core::*;
@@ -12,12 +12,7 @@ impl DecisionModel for BasicGovernmentDecisionModel {
     fn name(&self) -> &str {
         "Government"
     }
-    fn decide(
-        &self,
-        agent: &dyn Any,
-        state: &SimState,
-        _rng: &mut dyn RngCore,
-    ) -> Vec<SimIntention> {
+    fn decide(&self, agent: &dyn Any, state: &SimState, _rng: &mut dyn RngCore) -> Vec<SimIntention> {
         let government = match agent.downcast_ref::<Government>() {
             Some(g) => g,
             None => return vec![],
@@ -32,12 +27,7 @@ impl DecisionModel for BasicGovernmentDecisionModel {
 }
 
 impl BasicGovernmentDecisionModel {
-    fn collect_taxes(
-        &self,
-        government: &Government,
-        state: &SimState,
-        intentions: &mut Vec<SimIntention>,
-    ) {
+    fn collect_taxes(&self, government: &Government, state: &SimState, intentions: &mut Vec<SimIntention>) {
         if state.current_date.day() != 15 {
             return;
         }
@@ -55,17 +45,12 @@ impl BasicGovernmentDecisionModel {
         }
     }
 
-fn handle_funding(
-        &self,
-        government: &Government,
-        state: &SimState,
-        intentions: &mut Vec<SimIntention>,
-    ) {
+    fn handle_funding(&self, government: &Government, state: &SimState, intentions: &mut Vec<SimIntention>) {
         let fs = &state.financial_system;
         let current_balance = fs.get_liquid_assets(&government.id);
-        
+
         let tga_target = 5_000_000.0;
-        
+
         if state.current_date.day() == 2 || current_balance > tga_target {
             return;
         }
@@ -77,7 +62,7 @@ fn handle_funding(
         let maturity_date = TimePeriod::Years(5).add_to_date(current_date);
         let coupon_rate = fs.central_bank.policy_rate_bps;
         const FACE_VALUE: f64 = 1000.0;
-        
+
         let quantity_to_issue = (deficit / FACE_VALUE).ceil() as u32;
 
         if quantity_to_issue > 0 {

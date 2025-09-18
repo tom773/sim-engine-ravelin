@@ -1,6 +1,6 @@
-pub use std::any::Any;
 use serde::Serialize;
 use sim_core::*;
+pub use std::any::Any;
 extern crate inventory;
 
 pub trait Domain: Send + Sync {
@@ -12,11 +12,11 @@ pub trait Domain: Send + Sync {
     fn resolution_phase(&self, _intention: &SimIntention) -> Option<ResolutionPhase> {
         None
     }
-    
+
     fn settle_trade(&self, _trade: &Trade, _state: &SimState) -> DomainResult {
         DomainResult::failure(vec![format!("Trade settlement not supported by {}", self.name())])
     }
-    
+
     fn as_any(&self) -> &dyn Any;
 }
 
@@ -31,11 +31,11 @@ impl DomainResult {
     pub fn success(effects: Vec<StateEffect>) -> Self {
         Self { success: true, effects, errors: vec![] }
     }
-    
+
     pub fn failure(errors: Vec<String>) -> Self {
         Self { success: false, effects: vec![], errors }
     }
-    
+
     pub fn empty() -> Self {
         Self { success: true, effects: vec![], errors: vec![] }
     }
@@ -65,11 +65,11 @@ impl ResolutionResult {
     pub fn success(actions: Vec<SimAction>) -> Self {
         Self { actions, success: true, errors: vec![] }
     }
-    
+
     pub fn failure(errors: Vec<String>) -> Self {
         Self { actions: vec![], success: false, errors }
     }
-    
+
     pub fn not_handled() -> Self {
         Self { actions: vec![], success: true, errors: vec![] }
     }
@@ -85,22 +85,19 @@ inventory::collect!(DomainRegistration);
 pub mod banking_domain;
 pub mod consumption_domain;
 pub mod fiscal_domain;
-pub mod production_domain;
 pub mod monetary_domain;
+pub mod production_domain;
 pub mod transaction_domain;
 
 pub mod prelude {
-    pub use crate::{
-        Domain, DomainResult,DomainRegistration,
-        ResolutionContext, ResolutionResult, ResolutionPhase,
-    };
-    
+    pub use crate::{Domain, DomainRegistration, DomainResult, ResolutionContext, ResolutionPhase, ResolutionResult};
+
     pub use crate::banking_domain::{behaviour::*, domain::*};
     pub use crate::consumption_domain::{behaviour::*, domain::*};
     pub use crate::fiscal_domain::{behaviour::*, domain::*};
     pub use crate::monetary_domain::{behaviour::*, domain::*};
     pub use crate::production_domain::{behaviour::*, domain::*};
-    pub use crate::transaction_domain::{domain::*};
+    pub use crate::transaction_domain::domain::*;
 
     pub use sim_core::*;
     pub use std::any::Any;

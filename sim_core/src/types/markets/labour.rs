@@ -20,7 +20,6 @@ pub struct JobApplication {
     pub hours_desired: f64,
 }
 
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum WageRule {
     Posted,

@@ -25,16 +25,8 @@ impl ConsumptionAction {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ConsumptionIntention {
-    SpendOnGood {
-        agent_id: AgentId,
-        good_id: GoodId,
-        max_notional: f64,
-    },
-    ConsumeGood {
-        agent_id: AgentId,
-        good_id: GoodId,
-        quantity: f64,
-    },
+    SpendOnGood { agent_id: AgentId, good_id: GoodId, max_notional: f64 },
+    ConsumeGood { agent_id: AgentId, good_id: GoodId, quantity: f64 },
 }
 
 impl ConsumptionIntention {

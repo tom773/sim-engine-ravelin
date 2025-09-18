@@ -130,7 +130,6 @@ impl OrderBook {
     }
 
     pub fn submit_order(&mut self, order: Order, market_id: &Symbol) -> Vec<Trade> {
-
         let mut trades = Vec::new();
         self.match_order(order, &mut trades, market_id);
         trades

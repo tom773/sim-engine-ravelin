@@ -5,8 +5,6 @@ use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use std::collections::HashMap;
 
-
-
 #[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
 pub struct Position {
@@ -17,11 +15,7 @@ pub struct Position {
 
 impl Position {
     pub fn par(quantity: f64) -> Self {
-        Self {
-            quantity,
-            book_value_per_unit: Money::from(1 as i64),
-            cost_basis_per_unit: Money::from(1 as i64),
-        }
+        Self { quantity, book_value_per_unit: Money::from(1 as i64), cost_basis_per_unit: Money::from(1 as i64) }
     }
 }
 

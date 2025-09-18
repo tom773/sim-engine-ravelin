@@ -30,7 +30,6 @@ impl DecisionModel for ProductionFirmDecisionModel {
 
         let mut intentions = Vec::new();
 
-
         self.force_handle_hiring(firm, state, &mut intentions);
         self.handle_wages(firm, state, &mut intentions);
         self.handle_input_purchases(firm, state, &mut intentions);
@@ -96,18 +95,13 @@ impl ProductionFirmDecisionModel {
         total_input_cost / output_qty
     }
     pub fn force_handle_hiring(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
-        let has_open_offer = state
-            .financial_system
-            .exchange
-            .markets
-            .values()
-            .any(|market| {
-                if let MarketType::Labour(lm) = market {
-                    lm.job_offers.iter().any(|offer| offer.firm_id == firm.id && offer.quantity > 0)
-                } else {
-                    false
-                }
-            });
+        let has_open_offer = state.financial_system.exchange.markets.values().any(|market| {
+            if let MarketType::Labour(lm) = market {
+                lm.job_offers.iter().any(|offer| offer.firm_id == firm.id && offer.quantity > 0)
+            } else {
+                false
+            }
+        });
 
         if has_open_offer {
             return;
@@ -132,18 +126,13 @@ impl ProductionFirmDecisionModel {
         }
     }
     pub fn handle_hiring(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
-        let has_open_offer = state
-            .financial_system
-            .exchange
-            .markets
-            .values()
-            .any(|market| {
-                if let MarketType::Labour(lm) = market {
-                    lm.job_offers.iter().any(|offer| offer.firm_id == firm.id && offer.quantity > 0)
-                } else {
-                    false
-                }
-            });
+        let has_open_offer = state.financial_system.exchange.markets.values().any(|market| {
+            if let MarketType::Labour(lm) = market {
+                lm.job_offers.iter().any(|offer| offer.firm_id == firm.id && offer.quantity > 0)
+            } else {
+                false
+            }
+        });
 
         if has_open_offer {
             return;

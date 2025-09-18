@@ -11,10 +11,7 @@ use std::fmt::Debug;
 #[derive(Clone, Debug)]
 pub enum TermStructureMethod {
     Bootstrapped,
-    PolicyPlusTermPremium {
-        base_bps: f64,
-        slope_bps_per_year: f64,
-    },
+    PolicyPlusTermPremium { base_bps: f64, slope_bps_per_year: f64 },
 }
 impl Default for TermStructureMethod {
     fn default() -> Self {

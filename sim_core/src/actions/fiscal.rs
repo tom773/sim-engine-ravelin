@@ -26,7 +26,7 @@ pub enum FiscalAction {
         auction_id: Uuid, // To identify which auction
         quantity: u32,
         bid_price: Money, // Or bid_yield
-    }
+    },
 }
 
 impl FiscalAction {

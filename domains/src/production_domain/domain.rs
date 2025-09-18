@@ -31,15 +31,10 @@ impl Domain for ProductionDomain {
                     batches: *batches,
                 })]
             }
-            SimIntention::Production(ProductionIntention::FireWorkers { agent_id, employee_ids }) => {
-                employee_ids
-                    .iter()
-                    .map(|eid| SimAction::Production(ProductionAction::Fire {
-                        agent_id: *agent_id,
-                        employee_id: *eid,
-                    }))
-                    .collect()
-            }
+            SimIntention::Production(ProductionIntention::FireWorkers { agent_id, employee_ids }) => employee_ids
+                .iter()
+                .map(|eid| SimAction::Production(ProductionAction::Fire { agent_id: *agent_id, employee_id: *eid }))
+                .collect(),
             _ => return None,
         };
 

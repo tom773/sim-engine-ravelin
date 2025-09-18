@@ -62,8 +62,8 @@ impl Instrument {
                     ConsumerDebt::ResidentialMortgage(l)
                     | ConsumerDebt::AutoLoan(l)
                     | ConsumerDebt::PersonalLoan(l) => Some(l.principal),
-                    | ConsumerDebt::CreditCard(cl) => Some(cl.commitment_amount),
-                    | ConsumerDebt::StudentLoan(l) => Some(l.principal),
+                    ConsumerDebt::CreditCard(cl) => Some(cl.commitment_amount),
+                    ConsumerDebt::StudentLoan(l) => Some(l.principal),
                 },
                 _ => None,
             },
@@ -177,7 +177,7 @@ pub enum InstrumentMarket {
     MoneyMarket(MoneyMarketSegment),
     CapitalMarket(CapitalMarketSegment),
     DerivativesMarket(DerivativesMarketSegment),
-    Unlisted
+    Unlisted,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
