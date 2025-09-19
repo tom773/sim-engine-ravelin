@@ -131,7 +131,6 @@ impl StateEffectApplicator {
                     },
                 );
 
-
                 let deposit_instrument_id = fs
                     .instruments
                     .iter()

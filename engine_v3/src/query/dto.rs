@@ -132,6 +132,28 @@ pub struct PopulatedPositionDto {
     pub market_price: Option<Money>,
 }
 
+#[derive(Serialize, Clone, Debug)]
+pub struct AggregatedBookEntryDto {
+    pub label: String,
+    pub position_count: usize,
+    pub total_quantity: f64,
+    pub total_book_value: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub average_rate_bps: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub average_original_term_days: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub average_remaining_term_days: Option<f64>,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct BalanceSheetAggregatesDto {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub asset_books: Vec<AggregatedBookEntryDto>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub liability_books: Vec<AggregatedBookEntryDto>,
+}
+
 #[derive(Serialize)]
 pub struct PopulatedBalanceSheetDto {
     pub assets: Vec<PopulatedPositionDto>,
@@ -142,6 +164,8 @@ pub struct PopulatedBalanceSheetDto {
     pub total_assets: f64,
     pub total_liabilities: f64,
     pub net_worth: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aggregates: Option<BalanceSheetAggregatesDto>,
 }
 
 #[derive(Serialize, Debug, Clone)]
