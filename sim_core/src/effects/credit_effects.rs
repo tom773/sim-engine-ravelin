@@ -77,7 +77,6 @@ impl StateEffectApplicator {
             CreditEffect::RegisterLoan { loan, is_consumer, purpose } => {
                 let fs = &mut state.financial_system;
 
-                // Step 1: Create the appropriate instrument type based on loan purpose and borrower type
                 let debt_instrument = if *is_consumer {
                     let consumer_loan = match purpose {
                         LoanPurpose::RealEstate => ConsumerDebt::ResidentialMortgage(loan.details.clone()),
@@ -89,7 +88,6 @@ impl StateEffectApplicator {
                     };
                     DebtInstrument::Consumer(consumer_loan)
                 } else {
-                    // Business loan
                     DebtInstrument::Loan(loan.details.clone())
                 };
 
@@ -100,14 +98,11 @@ impl StateEffectApplicator {
                     listability: Listability::Unlisted,
                 };
 
-                // Step 2: Register the instrument in the system
                 fs.instruments.insert(loan.instrument_id, inst);
 
-                // Step 3: Register the loan with the credit registry
                 let cr = &mut fs.credit_registry;
                 cr.register_loan(loan.clone()).map_err(EffectError::FinancialSystemError)?;
 
-                // Step 4: Add loan asset to lender's balance sheet
                 let lender_bs = fs
                     .balance_sheets
                     .entry(loan.details.lender)
@@ -122,7 +117,6 @@ impl StateEffectApplicator {
                     },
                 );
 
-                // Step 5: Add loan liability to borrower's balance sheet
                 let borrower_bs = fs
                     .balance_sheets
                     .entry(loan.details.borrower)
@@ -137,10 +131,7 @@ impl StateEffectApplicator {
                     },
                 );
 
-                // Step 6: CRITICAL - Create deposit assets for the borrower (loan proceeds)
-                // This represents the money creation aspect of lending
 
-                // Find or create the deposit instrument for the lending bank
                 let deposit_instrument_id = fs
                     .instruments
                     .iter()
@@ -153,7 +144,6 @@ impl StateEffectApplicator {
                         None
                     })
                     .unwrap_or_else(|| {
-                        // Create a new deposit instrument if none exists
                         let new_deposit = Instrument::cash(
                             InstrumentId(Uuid::new_v4()),
                             loan.details.lender,
@@ -167,7 +157,6 @@ impl StateEffectApplicator {
                         id
                     });
 
-                // Add deposit asset to borrower's balance sheet (they receive the loan proceeds)
                 let borrower_bs = fs.balance_sheets.get_mut(&loan.details.borrower).unwrap();
                 let deposit_pos = borrower_bs.assets.entry(deposit_instrument_id).or_insert_with(|| Position {
                     quantity: 0.0,
@@ -176,20 +165,17 @@ impl StateEffectApplicator {
                 });
                 deposit_pos.quantity += loan.details.outstanding_principal.to_f64();
 
-                // Add corresponding deposit liability to lender's balance sheet
                 let lender_bs = fs.balance_sheets.get_mut(&loan.details.lender).unwrap();
                 let deposit_liability = lender_bs.liabilities.entry(deposit_instrument_id).or_insert_with(|| {
                     Position { quantity: 0.0, book_value_per_unit: Money::ONE, cost_basis_per_unit: Money::ONE }
                 });
                 deposit_liability.quantity += loan.details.outstanding_principal.to_f64();
 
-                // Step 7: Clean up any loan applications for this borrower
                 let borrower = loan.details.borrower;
                 if let Some(app_ids) = cr.applications_by_borrower.remove(&borrower) {
                     for app_id in app_ids {
                         cr.applications.remove(&app_id);
 
-                        // Remove from bank's application list
                         for ids in cr.applications_by_bank.values_mut() {
                             if let Some(pos) = ids.iter().position(|id| *id == app_id) {
                                 ids.swap_remove(pos);
@@ -201,7 +187,6 @@ impl StateEffectApplicator {
                 Ok(())
             }
 
-            // ... other credit effects remain the same ...
             CreditEffect::RegisterFacility { facility } => {
                 state
                     .financial_system
@@ -240,7 +225,6 @@ impl StateEffectApplicator {
                         interest_paid: interest_paid.to_f64(),
                     });
 
-                    // Update next payment date
                     loan.details.next_payment_date = match loan.details.payment_frequency {
                         PaymentFrequency::Monthly => add_months(loan.details.next_payment_date, 1),
                         PaymentFrequency::Quarterly => add_months(loan.details.next_payment_date, 3),
@@ -249,7 +233,6 @@ impl StateEffectApplicator {
                         PaymentFrequency::InterestOnly => add_months(loan.details.next_payment_date, 1),
                     };
 
-                    // Update balance sheets
                     if let Some(lender_bs) = state.financial_system.balance_sheets.get_mut(&loan.details.lender) {
                         if let Some(pos) = lender_bs.assets.get_mut(&loan.instrument_id) {
                             pos.quantity = loan.details.outstanding_principal.to_f64();
