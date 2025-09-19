@@ -352,6 +352,10 @@ impl Scenario {
                     cpi_weight: g.cpi_weight,
                 },
             );
+            state
+                .financial_system
+                .exchange
+                .ensure_goods_market(gid, &state.financial_system.goods.goods.get(&gid).unwrap().name);
         }
 
         for r in &self.recipes {

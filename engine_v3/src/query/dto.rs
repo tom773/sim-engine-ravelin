@@ -12,6 +12,15 @@ pub struct AgentCounts {
     pub total: usize,
 }
 
+impl From<&SimState> for AgentCounts {
+    fn from(state: &SimState) -> Self {
+        let banks = state.agents.banks.len();
+        let firms = state.agents.firms.len();
+        let consumers = state.agents.consumers.len();
+        Self { banks, firms, consumers, total: banks + firms + consumers }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MacroStatsDto {
     pub nominal_gdp_proxy: f64,
@@ -26,6 +35,25 @@ pub struct MacroStatsDto {
     pub m1: f64,
     pub m2: f64,
     pub bank_reserves: f64,
+}
+
+impl From<&MacroStats> for MacroStatsDto {
+    fn from(stats: &MacroStats) -> Self {
+        Self {
+            nominal_gdp_proxy: stats.nominal_gdp_proxy,
+            consumer_spending_daily: stats.consumer_spending_daily,
+            household_debt: stats.household_debt,
+            corporate_debt: stats.corporate_debt,
+            government_debt: stats.government_debt,
+            cpi: stats.cpi,
+            inflation_rate: stats.inflation_rate,
+            unemployment_rate: stats.unemployment_rate,
+            m0: stats.m0,
+            m1: stats.m1,
+            m2: stats.m2,
+            bank_reserves: stats.bank_reserves,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -324,6 +352,22 @@ pub struct LabourMarketStatsDto {
     pub labor_force_participation: f64,
     pub job_openings: usize,
     pub contracts: Vec<EmploymentRecordDto>,
+}
+
+impl LabourMarketStatsDto {
+    pub fn from_macro(macro_stats: &MacroStats, contracts: Vec<EmploymentRecordDto>) -> Self {
+        Self {
+            employment: macro_stats.employment,
+            unemployment: macro_stats.unemployment,
+            labour_force: macro_stats.labour_force,
+            unemployment_rate: macro_stats.unemployment_rate,
+            payroll_proxy: macro_stats.payroll_proxy as usize,
+            avg_wage_rate: macro_stats.avg_wage_rate,
+            labor_force_participation: macro_stats.labor_force_participation,
+            job_openings: macro_stats.job_openings as usize,
+            contracts,
+        }
+    }
 }
 
 impl From<MarketDepthSummary> for OrderBookDepthDto {

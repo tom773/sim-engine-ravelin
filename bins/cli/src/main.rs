@@ -235,7 +235,7 @@ async fn get_instrument_registry(State(state): State<Arc<AppState>>) -> impl Int
 }
 
 async fn list_ticks(State(state): State<Arc<AppState>>) -> Json<Vec<u32>> {
-    let v = state.bus.latest_n(500).into_iter().map(|(t, _, _)| t).collect();
+    let v = state.bus.latest_n(500).into_iter().map(|(t, _, _, _)| t).collect();
     Json(v)
 }
 
@@ -269,8 +269,9 @@ async fn ws_upgrade(State(state): State<Arc<AppState>>, ws: WebSocketUpgrade) ->
 }
 
 async fn ws_conn(mut socket: WebSocket, state: Arc<AppState>) {
-    for (tick, date, evs) in state.bus.latest_n(3) {
-        let msg = serde_json::to_string(&ServerEvent::Tick { tick, date, events: Arc::unwrap_or_clone(evs) }).unwrap();
+    for (tick, date, evs, summary) in state.bus.latest_n(3) {
+        let server_event = state.bus.to_server_event(tick, date, &evs, &summary);
+        let msg = serde_json::to_string(&server_event).unwrap();
         if socket.send(Message::Text(msg.into())).await.is_err() {
             return;
         }

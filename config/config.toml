@@ -206,8 +206,12 @@ id = "bank_a"
 name = "Community Savings Bank"
 initial_assets = [
   # Primary govvies via seed sale → issuance + DvP (requires patch)
-  { type = "Bond", tenor = "T2Y", quantity = 4_300 }   # ≈ $4.3m face @ $1k
+  { type = "Bond", tenor = "T2Y", quantity = 2_500 },
+  { type = "Bond", tenor = "T1Y", quantity = 2_300 },
+  { type = "Bond", tenor = "T5Y", quantity = 1_500 },  # ≈ $8.5m
+  { type = "Bond", tenor = "T10Y", quantity = 1_100 }  # ≈ $5m
 ]
+
 initial_liabilities = [] # No initial liabilities
 reserves = { type = "ratio_of_liabilities", min_ratio = 0.10, max_ratio = 0.12 }
 
@@ -215,7 +219,10 @@ reserves = { type = "ratio_of_liabilities", min_ratio = 0.10, max_ratio = 0.12 }
 id="bank_b"
 name="First National Bank"
 initial_assets = [
-  { type = "Bond", tenor = "T5Y", quantity = 22_000 }  # ≈ $22m
+  { type = "Bond", tenor = "T30Y", quantity = 5_500 },
+  { type = "Bond", tenor = "T10Y", quantity = 3_200 },
+  { type = "Bond", tenor = "T5Y", quantity = 2_800 },
+  { type = "Bond", tenor = "T2Y", quantity = 2_000 }  # ≈ $15m
 ]
 initial_liabilities = [] # No initial liabilities
 reserves = { type = "ratio_of_liabilities", min_ratio = 0.10, max_ratio = 0.12 }
@@ -243,6 +250,19 @@ initial_assets = [
 initial_liabilities = [] # No initial liabilities
 decision_model = { type = "ProductionFirm" }
 
+[[firms]]
+id = "goldman_stanley"
+name = "Goldman Stanley"
+bank_id = "bank_b"
+initial_assets = [
+  { type = "Deposit", bank_id = "bank_b", amount = 5_000_000.0 },
+  { type = "Bond", tenor = "T1M", quantity = 2_000 },  # ≈ $5m
+  { type = "Bond", tenor = "T3M", quantity = 1_500 },   # ≈ $4m
+  { type = "Bond", tenor = "T6M", quantity = 1_000 },   # ≈ $3m
+  { type = "Bond", tenor = "T2Y", quantity = 800 }    # ≈ $2.5m
+]
+initial_liabilities = [] # No initial liabilities
+decision_model = { type = "InvestmentFirm", min_liquidity = 1_000_000.0, quote_qty = 50.0 }
 # --- Firm Groups ---
 
 [[firm_groups]]

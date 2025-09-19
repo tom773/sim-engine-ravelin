@@ -1,5 +1,5 @@
 use crate::scenario::{AssetConfig, BankConfig, ConsumerConfig, FirmConfig, LiabilityConfig, ReservesConfig};
-use chrono::Duration;
+use chrono::{Duration, Months, NaiveDate};
 use rand::distr::Uniform;
 use rand::prelude::*;
 use rust_decimal_macros::dec;
@@ -123,7 +123,6 @@ impl<'a> AgentFactory<'a> {
             AssetConfig::Bond { tenor, quantity } => {
                 let gov_id = self.state.financial_system.government.id;
                 let instrument = self.get_or_create_bond_instrument(tenor, gov_id);
-
                 self.pending_effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument {
                     instrument: instrument.clone(),
                     creditor: owner_id,
@@ -303,9 +302,9 @@ impl<'a> AgentFactory<'a> {
         tga
     }
 
-    fn get_or_create_bond_instrument(&mut self, _tenor: &str, issuer_id: AgentId) -> Instrument {
+    fn get_or_create_bond_instrument(&mut self, tenor: &str, issuer_id: AgentId) -> Instrument {
         let issue = self.state.current_date;
-        let maturity = issue + Duration::days(365 * 2);
+        let maturity = Self::tenor_to_maturity(issue, tenor).unwrap_or_else(|| issue + Duration::days(365 * 2));
         let bond = Instrument::bond(
             InstrumentId(Uuid::new_v4()),
             issuer_id,
@@ -321,6 +320,43 @@ impl<'a> AgentFactory<'a> {
         .unwrap();
 
         bond
+    }
+
+    fn tenor_to_maturity(issue: NaiveDate, tenor: &str) -> Option<NaiveDate> {
+        let months = Self::parse_tenor_to_months(tenor)?;
+        issue
+            .checked_add_months(Months::new(months))
+            .or_else(|| {
+                let approx_years = months as f64 / 12.0;
+                let days = (approx_years * 365.0).round() as i64;
+                if days > 0 { Some(issue + Duration::days(days)) } else { None }
+            })
+    }
+
+    fn parse_tenor_to_months(tenor: &str) -> Option<u32> {
+        let trimmed = tenor.trim();
+        let trimmed = trimmed.strip_prefix('T').or_else(|| trimmed.strip_prefix('t'))?;
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        let trimmed = trimmed.to_ascii_uppercase();
+        let digit_count = trimmed.chars().take_while(|c| c.is_ascii_digit()).count();
+        if digit_count == 0 || digit_count == trimmed.len() {
+            return None;
+        }
+
+        let (value_str, unit_str) = trimmed.split_at(digit_count);
+        let value: u32 = value_str.parse().ok()?;
+        if value == 0 {
+            return None;
+        }
+
+        match unit_str {
+            "M" => Some(value),
+            "Y" => value.checked_mul(12),
+            _ => None,
+        }
     }
 
     fn allocate_bank_reserves(&mut self, banks: &[BankConfig]) -> f64 {

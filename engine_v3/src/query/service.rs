@@ -129,13 +129,6 @@ fn cash_bucket_label(cash_type: CashType) -> Option<&'static str> {
     }
 }
 
-fn is_core_cash(cash_type: CashType) -> bool {
-    matches!(
-        cash_type,
-        CashType::CentralBankReserves | CashType::TreasuryGeneralAccount | CashType::Currency | CashType::VaultCash
-    )
-}
-
 struct AggregationDescriptor {
     label: String,
     rate_bps: Option<f64>,
@@ -159,6 +152,87 @@ fn accumulate_entry(
 
 fn non_negative_days(diff: i64) -> f64 {
     if diff < 0 { 0.0 } else { diff as f64 }
+}
+
+fn instrument_snapshot(state: &SimState, id: &InstrumentId, position: &Position) -> Option<PopulatedPositionDto> {
+    state.financial_system.instruments.get(id).map(|inst| {
+        let market_price =
+            state.financial_system.exchange.financial_market(id).and_then(|book| book.representative_price());
+
+        PopulatedPositionDto { position: position.clone(), instrument: inst.clone(), market_price }
+    })
+}
+
+fn populate_positions<'a, I>(state: &SimState, positions: I) -> Vec<PopulatedPositionDto>
+where
+    I: IntoIterator<Item = (&'a InstrumentId, &'a Position)>,
+{
+    positions.into_iter().filter_map(|(id, pos)| instrument_snapshot(state, id, pos)).collect()
+}
+
+fn total_book_value<'a, I>(positions: I) -> f64
+where
+    I: IntoIterator<Item = &'a Position>,
+{
+    positions.into_iter().map(|pos| pos.quantity * pos.book_value_per_unit.to_f64()).sum()
+}
+
+fn build_agent_name_map(engine: &SimulationEngine) -> HashMap<AgentId, String> {
+    let state = &engine.state;
+    let mut map: HashMap<AgentId, String> = state
+        .agents
+        .all_agent_ids()
+        .into_iter()
+        .map(|id| {
+            let name = engine.get_agent_info(&id).1.unwrap_or_else(|| "N/A".to_string());
+            (id, name)
+        })
+        .collect();
+    map.insert(state.financial_system.government.id, "Government".to_string());
+    map.insert(state.financial_system.central_bank.id, "Central Bank".to_string());
+    map
+}
+
+fn collect_employment_contracts(state: &SimState, agents_map: &HashMap<AgentId, String>) -> Vec<EmploymentRecordDto> {
+    state
+        .agents
+        .firms
+        .iter()
+        .flat_map(|(fid, firm)| {
+            let firm_name = agents_map.get(fid).cloned().unwrap_or_else(|| "Firm".to_string());
+            firm.employees.values().cloned().map(move |contract| EmploymentRecordDto {
+                firm_id: *fid,
+                firm_name: firm_name.clone(),
+                contract,
+            })
+        })
+        .collect()
+}
+
+fn agent_kind(state: &SimState, id: &AgentId) -> &'static str {
+    if state.agents.banks.contains_key(id) {
+        "bank"
+    } else if state.agents.firms.contains_key(id) {
+        "firm"
+    } else if state.agents.consumers.contains_key(id) {
+        "consumer"
+    } else if *id == state.financial_system.government.id {
+        "government"
+    } else if *id == state.financial_system.central_bank.id {
+        "centralbank"
+    } else {
+        "unknown"
+    }
+}
+
+fn derive_overnight_rates(base: BasisPoints) -> OvernightRatesDto {
+    OvernightRatesDto {
+        effr: Some(base + dec!(13.0)),
+        sofr: Some(base + dec!(17.0)),
+        iorb: Some(base),
+        discount_rate: Some(base + dec!(20.0)),
+        overnight_RRP: Some(base + dec!(25.0)),
+    }
 }
 
 fn classify_asset_position(position: &PopulatedPositionDto, current_date: NaiveDate) -> Option<AggregationDescriptor> {
@@ -250,18 +324,7 @@ fn classify_asset_position(position: &PopulatedPositionDto, current_date: NaiveD
             original_term_days: Some(non_negative_days((details.end_date - details.start_date).num_days())),
             remaining_term_days: Some(non_negative_days((details.end_date - current_date).num_days())),
         }),
-        InstrumentType::Cash(details) => {
-            if is_core_cash(details.cash_type) {
-                None
-            } else {
-                cash_bucket_label(details.cash_type).map(|base| AggregationDescriptor {
-                    label: format!("{} Assets", base),
-                    rate_bps: details.interest_bps.to_f64(),
-                    original_term_days: None,
-                    remaining_term_days: None,
-                })
-            }
-        }
+        _ => None,
     }
 }
 
@@ -270,8 +333,8 @@ fn classify_liability_position(
 ) -> Option<AggregationDescriptor> {
     match &position.instrument.instrument_type {
         InstrumentType::Cash(details) => {
-            if is_core_cash(details.cash_type) {
-                None
+            if details.cash_type == CashType::TreasuryGeneralAccount {
+                return None;
             } else {
                 cash_bucket_label(details.cash_type).map(|base| AggregationDescriptor {
                     label: format!("{}", base),
@@ -283,13 +346,13 @@ fn classify_liability_position(
         }
         InstrumentType::Debt(debt) => match debt {
             DebtInstrument::Bond(details) => Some(AggregationDescriptor {
-                label: format!("Issued {}", bond_type_label(details.bond_type)),
+                label: format!("{}", bond_type_label(details.bond_type)),
                 rate_bps: details.coupon_rate_bps.to_f64(),
                 original_term_days: Some(non_negative_days((details.maturity_date - details.issue_date).num_days())),
                 remaining_term_days: Some(non_negative_days((details.maturity_date - current_date).num_days())),
             }),
             DebtInstrument::Loan(details) => Some(AggregationDescriptor {
-                label: format!("Borrowed {}", loan_type_label(details.loan_type)),
+                label: format!("{}", loan_type_label(details.loan_type)),
                 rate_bps: details.spread_bps.to_f64(),
                 original_term_days: Some(non_negative_days(
                     (details.maturity_date - details.origination_date).num_days(),
@@ -297,7 +360,7 @@ fn classify_liability_position(
                 remaining_term_days: Some(non_negative_days((details.maturity_date - current_date).num_days())),
             }),
             DebtInstrument::CreditLine(details) => Some(AggregationDescriptor {
-                label: format!("Outstanding {}", facility_type_label(details.facility_type)),
+                label: format!("{}", facility_type_label(details.facility_type)),
                 rate_bps: details.spread_bps.to_f64(),
                 original_term_days: Some(non_negative_days((details.expiry_date - details.commitment_date).num_days())),
                 remaining_term_days: Some(non_negative_days((details.expiry_date - current_date).num_days())),
@@ -335,7 +398,7 @@ impl QueryService {
         &self, agent_id: &AgentId, state: &SimState, assets: &[PopulatedPositionDto],
         liabilities: &[PopulatedPositionDto],
     ) -> Option<BalanceSheetAggregatesDto> {
-        if !state.agents.banks.contains_key(agent_id) {
+        if state.agents.consumers.contains_key(agent_id) {
             return None;
         }
 
@@ -371,44 +434,12 @@ impl QueryService {
 
     fn populate_balance_sheet(&self, agent_id: &AgentId, state: &SimState) -> PopulatedBalanceSheetDto {
         let all_assets_map = state.financial_system.get_agent_total_positions(agent_id);
-
-        let assets: Vec<PopulatedPositionDto> = all_assets_map
-            .iter()
-            .filter_map(|(id, pos)| {
-                state.financial_system.instruments.get(id).map(|inst| {
-                    let market_price = state
-                        .financial_system
-                        .exchange
-                        .financial_market(id)
-                        .and_then(|book| book.representative_price());
-
-                    PopulatedPositionDto { position: pos.clone(), instrument: inst.clone(), market_price }
-                })
-            })
-            .collect();
-
+        let assets = populate_positions(state, all_assets_map.iter());
         let bs = state.financial_system.balance_sheets.get(agent_id).unwrap();
-        let liabilities: Vec<PopulatedPositionDto> = bs
-            .liabilities
-            .iter()
-            .filter_map(|(id, pos)| {
-                state.financial_system.instruments.get(id).map(|inst| {
-                    let market_price = state
-                        .financial_system
-                        .exchange
-                        .financial_market(id)
-                        .and_then(|book| book.representative_price());
+        let liabilities = populate_positions(state, bs.liabilities.iter());
 
-                    PopulatedPositionDto { position: pos.clone(), instrument: inst.clone(), market_price }
-                })
-            })
-            .collect();
-
-        let total_assets: f64 =
-            assets.iter().map(|p| p.position.quantity * p.position.book_value_per_unit.to_f64()).sum();
-
-        let total_liabilities: f64 =
-            bs.liabilities.iter().map(|(_, pos)| pos.quantity * pos.book_value_per_unit.to_f64()).sum();
+        let total_assets = total_book_value(all_assets_map.values());
+        let total_liabilities = total_book_value(bs.liabilities.values());
 
         let net_worth = total_assets - total_liabilities;
 
@@ -461,47 +492,13 @@ impl QueryService {
         })
     }
 
-    fn collect_employment_contracts(
-        &self, state: &SimState, agents_map: &HashMap<AgentId, String>,
-    ) -> Vec<EmploymentRecordDto> {
-        state
-            .agents
-            .firms
-            .iter()
-            .flat_map(|(fid, firm)| {
-                let agents_map = agents_map.clone();
-                firm.employees.values().clone().map(move |c| EmploymentRecordDto {
-                    firm_id: *fid,
-                    firm_name: agents_map.get(fid).cloned().unwrap_or_else(|| "Firm".into()),
-                    contract: c.clone(),
-                })
-            })
-            .collect()
-    }
     pub fn get_status_data(&self) -> QueryResult<StatusDto> {
         let engine_lock = self.get_engine_lock()?;
         let state = &engine_lock.state;
 
         let macro_stats = state.macro_stats();
-        let agent_counts = AgentCounts {
-            banks: state.agents.banks.len(),
-            firms: state.agents.firms.len(),
-            consumers: state.agents.consumers.len(),
-            total: state.agents.banks.len() + state.agents.firms.len() + state.agents.consumers.len(),
-        };
-
-        let mut agents_map: HashMap<AgentId, String> = state
-            .agents
-            .all_agent_ids()
-            .into_iter()
-            .map(|id| {
-                let name = engine_lock.get_agent_info(&id).1.unwrap_or_else(|| "N/A".to_string());
-                (id, name)
-            })
-            .collect();
-        agents_map.insert(state.financial_system.government.id.clone(), "Government".to_string());
-        agents_map.insert(state.financial_system.central_bank.id.clone(), "Central Bank".to_string());
-
+        let agent_counts = AgentCounts::from(state);
+        let agents_map = build_agent_name_map(&engine_lock);
         let instruments_map: HashMap<InstrumentId, String> = state
             .financial_system
             .instruments
@@ -509,48 +506,14 @@ impl QueryService {
             .map(|(id, inst)| (id.clone(), inst.type_as_string().to_string()))
             .collect();
 
-        let macro_stats_dto = MacroStatsDto {
-            nominal_gdp_proxy: macro_stats.nominal_gdp_proxy,
-            consumer_spending_daily: macro_stats.consumer_spending_daily,
-            household_debt: macro_stats.household_debt,
-            corporate_debt: macro_stats.corporate_debt,
-            government_debt: macro_stats.government_debt,
-            cpi: macro_stats.cpi,
-            inflation_rate: macro_stats.inflation_rate,
-            unemployment_rate: macro_stats.unemployment_rate,
-            m0: macro_stats.m0,
-            m1: macro_stats.m1,
-            m2: macro_stats.m2,
-            bank_reserves: macro_stats.bank_reserves,
-        };
-
-        let contracts = self.collect_employment_contracts(state, &agents_map);
-
-        let labour_stats = LabourMarketStatsDto {
-            employment: macro_stats.employment,
-            unemployment: macro_stats.unemployment,
-            labour_force: macro_stats.labour_force,
-            unemployment_rate: macro_stats.unemployment_rate,
-            labor_force_participation: macro_stats.labor_force_participation,
-            job_openings: macro_stats.job_openings as usize,
-            payroll_proxy: macro_stats.payroll_proxy as usize,
-            avg_wage_rate: macro_stats.avg_wage_rate,
-            contracts,
-        };
-
-        let on_rates = OvernightRatesDto {
-            effr: Some(state.financial_system.central_bank.policy_rate_bps + dec!(13.0)),
-            sofr: Some(state.financial_system.central_bank.policy_rate_bps + dec!(17.0)),
-            iorb: Some(state.financial_system.central_bank.policy_rate_bps),
-            discount_rate: Some(state.financial_system.central_bank.policy_rate_bps + dec!(20.0)),
-            overnight_RRP: Some(state.financial_system.central_bank.policy_rate_bps + dec!(25.0)),
-        };
-
+        let labour_stats =
+            LabourMarketStatsDto::from_macro(&macro_stats, collect_employment_contracts(state, &agents_map));
+        let policy_rate = state.financial_system.central_bank.policy_rate_bps;
         let monetary_stats_dto = MonetaryStatsDto {
-            policy_rate: state.financial_system.central_bank.policy_rate_bps,
+            policy_rate,
             reserve_requirement: Rate::from_f64(state.financial_system.central_bank.reserve_requirement)
                 .unwrap_or_default(),
-            overnight_rates: on_rates,
+            overnight_rates: derive_overnight_rates(policy_rate),
         };
 
         Ok(StatusDto {
@@ -558,7 +521,7 @@ impl QueryService {
             tick_number: state.ticknum,
             total_iterations: state.config.iterations,
             agent_counts,
-            macro_stats: macro_stats_dto,
+            macro_stats: MacroStatsDto::from(&macro_stats),
             monetary_stats: monetary_stats_dto,
             labor_force_stats: labour_stats,
             maps: MapsDto { agents_map: agents_map.clone(), instruments_map },
@@ -569,40 +532,30 @@ impl QueryService {
         let engine = self.get_engine_lock()?;
         let state = &engine.state;
 
-        let mut summaries = Vec::new();
-        let filter_lower = agent_type_filter.as_deref().map(str::to_lowercase);
+        let filter = agent_type_filter.as_ref().map(|s| s.to_lowercase());
+        let mut ids = Vec::new();
+        ids.extend(state.agents.banks.keys().cloned());
+        ids.extend(state.agents.firms.keys().cloned());
+        ids.extend(state.agents.consumers.keys().cloned());
+        ids.push(state.financial_system.government.id);
+        ids.push(state.financial_system.central_bank.id);
 
-        let mut add_summary_for_agent = |id: &AgentId| {
-            let (agent_type_str, name_opt) = engine.get_agent_info(id);
-            let populated_bs = self.populate_balance_sheet(id, state);
+        let mut summaries = Vec::new();
+        for id in ids {
+            if let Some(ref expected) = filter {
+                if expected != agent_kind(state, &id) {
+                    continue;
+                }
+            }
+
+            let (agent_type_str, name_opt) = engine.get_agent_info(&id);
+            let populated_bs = self.populate_balance_sheet(&id, state);
             summaries.push(AgentDto {
                 id: id.0,
                 agent_type: agent_type_str,
                 name: name_opt.unwrap_or_else(|| "N/A".to_string()),
                 balance_sheet: populated_bs,
             });
-        };
-
-        if filter_lower.as_deref() == Some("bank") || filter_lower.is_none() {
-            for id in state.agents.banks.keys() {
-                add_summary_for_agent(id);
-            }
-        }
-        if filter_lower.as_deref() == Some("firm") || filter_lower.is_none() {
-            for id in state.agents.firms.keys() {
-                add_summary_for_agent(id);
-            }
-        }
-        if filter_lower.as_deref() == Some("consumer") || filter_lower.is_none() {
-            for id in state.agents.consumers.keys() {
-                add_summary_for_agent(id);
-            }
-        }
-        if filter_lower.as_deref() == Some("government") || filter_lower.is_none() {
-            add_summary_for_agent(&state.financial_system.government.id);
-        }
-        if filter_lower.as_deref() == Some("centralbank") || filter_lower.is_none() {
-            add_summary_for_agent(&state.financial_system.central_bank.id);
         }
 
         Ok(summaries)
