@@ -1,5 +1,7 @@
 use crate::prelude::*;
-use crate::types::instrument::archetypes::{InstrumentArchetype, IssuanceData, MarketProfile, ProductFamily};
+use crate::types::instrument::archetypes::{InstrumentArchetype, IssuanceData, ProductFamily};
+use crate::types::instrument::inst_core::MarketProfile;
+use crate::types::instrument::inst_core::RuntimeInstrumentCore;
 use crate::types::instrument::instrument::Currency;
 use crate::types::instrument::{BondDetails, Instrument};
 use chrono::Utc;
@@ -77,6 +79,8 @@ pub struct InstrumentRegistry {
 
     #[serde(skip)]
     pub instrument_cache: HashMap<InstrumentId, Instrument>,
+    #[serde(skip)]
+    pub instrument_core_cache: HashMap<InstrumentId, RuntimeInstrumentCore>,
 }
 
 impl InstrumentRegistry {
@@ -181,6 +185,14 @@ impl InstrumentRegistry {
 
     pub fn cache_get(&self, id: &InstrumentId) -> Option<&Instrument> {
         self.instrument_cache.get(id)
+    }
+
+    pub fn update_core_cache(&mut self, core: RuntimeInstrumentCore) {
+        self.instrument_core_cache.insert(core.identifiers.instrument_id, core);
+    }
+
+    pub fn core_cache_get(&self, id: &InstrumentId) -> Option<&RuntimeInstrumentCore> {
+        self.instrument_core_cache.get(id)
     }
 
     pub fn find_or_create_series_for_bond(

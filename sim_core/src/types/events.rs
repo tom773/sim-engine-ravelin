@@ -1,8 +1,4 @@
-use crate::actions::credit_actions::CreditIntention;
-use crate::effects::market_effects::LabourMarketUpdate;
 use crate::prelude::*;
-use crate::types::instrument::archetypes::CollateralType;
-use crate::types::instrument::credit::{CreditFacility, Lien, Loan, LoanApplication, LoanPurpose};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

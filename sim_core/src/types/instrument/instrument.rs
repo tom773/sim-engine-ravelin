@@ -1,15 +1,14 @@
 use crate::prelude::*;
-use crate::types::instrument::archetypes::{BondType, CashFlow, CashType, MarketProfile, VenueType};
+use crate::types::instrument::archetypes::{BondType, CashFlow, CashType};
+use crate::types::instrument::inst_core::{
+    InstrumentIdentifiers, LegacyInstrumentCore, Listability, MarketProfile, VenueType, legacy_core_from_instrument,
+    legacy_core_from_instrument_with_identifiers, legacy_core_from_owned, legacy_core_from_owned_with_identifiers,
+    legacy_identifiers, update_instrument_from_legacy_core,
+};
 use crate::types::money::{Money, Rate};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum Listability {
-    Unlisted,
-    Listed(VenueType),
-}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Instrument {
@@ -44,20 +43,108 @@ impl Instrument {
     }
 
     pub fn should_create_order_book(&self) -> bool {
-        matches!(self.listability, Listability::Listed(VenueType::CentralLimitOrderBook))
+        self.listability.should_create_order_book()
+    }
+
+    pub fn identifiers(&self) -> InstrumentIdentifiers {
+        legacy_identifiers(self)
+    }
+
+    pub fn to_core_with_identifiers(&self, identifiers: InstrumentIdentifiers) -> LegacyInstrumentCore {
+        legacy_core_from_instrument_with_identifiers(self, identifiers)
+    }
+
+    pub fn into_core_with_identifiers(self, identifiers: InstrumentIdentifiers) -> LegacyInstrumentCore {
+        legacy_core_from_owned_with_identifiers(self, identifiers)
+    }
+
+    pub fn into_core(self) -> LegacyInstrumentCore {
+        legacy_core_from_owned(self)
+    }
+
+    pub fn update_from_core(&mut self, core: &LegacyInstrumentCore) {
+        update_instrument_from_legacy_core(self, core)
     }
 
     pub fn face_value(&self) -> Option<Money> {
-        match &self.instrument_type {
+        self.instrument_type.face_value()
+    }
+
+    pub fn type_as_string(&self) -> &'static str {
+        self.instrument_type.type_as_string()
+    }
+}
+
+impl From<Instrument> for LegacyInstrumentCore {
+    fn from(value: Instrument) -> Self {
+        value.into_core()
+    }
+}
+
+impl From<LegacyInstrumentCore> for Instrument {
+    fn from(core: LegacyInstrumentCore) -> Self {
+        Self {
+            id: core.identifiers.instrument_id,
+            instrument_type: core.state,
+            market_profile: core.market_profile,
+            listability: core.listability,
+        }
+    }
+}
+
+impl Instrument {
+    pub fn to_core(&self) -> LegacyInstrumentCore {
+        legacy_core_from_instrument(self)
+    }
+
+    pub fn from_core(core: LegacyInstrumentCore) -> Self {
+        core.into()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum InstrumentType {
+    Cash(CashDetails),
+    Debt(DebtInstrument),
+    RealAsset(RealAssetType),
+    Equity(EquityDetails),
+    Derivative(DerivativeDetails),
+    StructuredTranche(StructuredTrancheDetails),
+    Repo(RepoDetails),
+}
+impl InstrumentType {
+    pub fn as_bond(&self) -> Option<&BondDetails> {
+        match self {
+            InstrumentType::Debt(DebtInstrument::Bond(b)) => Some(b),
+            _ => None,
+        }
+    }
+
+    pub fn as_loan(&self) -> Option<&LoanDetails> {
+        match self {
+            InstrumentType::Debt(DebtInstrument::Loan(l)) => Some(l),
+            _ => None,
+        }
+    }
+
+    pub fn as_debt(&self) -> Option<&DebtInstrument> {
+        match self {
+            InstrumentType::Debt(d) => Some(d),
+            _ => None,
+        }
+    }
+
+    pub fn face_value(&self) -> Option<Money> {
+        match self {
             InstrumentType::Debt(debt) => match debt {
                 DebtInstrument::Bond(d) => Some(d.face_value),
                 DebtInstrument::Loan(d) => Some(d.principal),
                 DebtInstrument::Consumer(c) => match c {
                     ConsumerDebt::ResidentialMortgage(l)
                     | ConsumerDebt::AutoLoan(l)
-                    | ConsumerDebt::PersonalLoan(l) => Some(l.principal),
+                    | ConsumerDebt::PersonalLoan(l)
+                    | ConsumerDebt::StudentLoan(l) => Some(l.principal),
                     ConsumerDebt::CreditCard(cl) => Some(cl.commitment_amount),
-                    ConsumerDebt::StudentLoan(l) => Some(l.principal),
                 },
                 _ => None,
             },
@@ -67,7 +154,7 @@ impl Instrument {
     }
 
     pub fn type_as_string(&self) -> &'static str {
-        match &self.instrument_type {
+        match self {
             InstrumentType::Cash(details) => match details.cash_type {
                 CashType::DemandDeposit => "Demand Deposit",
                 CashType::SavingsDeposit => "Savings Deposit",
@@ -105,39 +192,6 @@ impl Instrument {
             InstrumentType::Derivative(_) => "Derivative",
             InstrumentType::StructuredTranche(_) => "Structured Tranche",
             InstrumentType::Repo(_) => "Repurchase Agreement",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum InstrumentType {
-    Cash(CashDetails),
-    Debt(DebtInstrument),
-    RealAsset(RealAssetType),
-    Equity(EquityDetails),
-    Derivative(DerivativeDetails),
-    StructuredTranche(StructuredTrancheDetails),
-    Repo(RepoDetails),
-}
-impl InstrumentType {
-    pub fn as_bond(&self) -> Option<&BondDetails> {
-        match self {
-            InstrumentType::Debt(DebtInstrument::Bond(b)) => Some(b),
-            _ => None,
-        }
-    }
-
-    pub fn as_loan(&self) -> Option<&LoanDetails> {
-        match self {
-            InstrumentType::Debt(DebtInstrument::Loan(l)) => Some(l),
-            _ => None,
-        }
-    }
-
-    pub fn as_debt(&self) -> Option<&DebtInstrument> {
-        match self {
-            InstrumentType::Debt(d) => Some(d),
-            _ => None,
         }
     }
 }

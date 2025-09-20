@@ -1,4 +1,5 @@
 use crate::prelude::*;
+use crate::types::instrument::inst_core::RuntimeInstrumentCore;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use std::collections::HashMap;
@@ -8,6 +9,8 @@ use std::collections::HashMap;
 pub struct InstrumentCatalog {
     #[serde_as(as = "HashMap<DisplayFromStr, _>")]
     pub instruments: HashMap<InstrumentId, Instrument>,
+    #[serde(skip)]
+    pub cores: HashMap<InstrumentId, RuntimeInstrumentCore>,
 }
 
 impl InstrumentCatalog {
@@ -49,5 +52,17 @@ impl InstrumentCatalog {
 
     pub fn values_mut(&mut self) -> impl Iterator<Item = &mut Instrument> {
         self.instruments.values_mut()
+    }
+
+    pub fn insert_core(&mut self, id: InstrumentId, core: RuntimeInstrumentCore) -> Option<RuntimeInstrumentCore> {
+        self.cores.insert(id, core)
+    }
+
+    pub fn get_core(&self, id: &InstrumentId) -> Option<&RuntimeInstrumentCore> {
+        self.cores.get(id)
+    }
+
+    pub fn get_core_mut(&mut self, id: &InstrumentId) -> Option<&mut RuntimeInstrumentCore> {
+        self.cores.get_mut(id)
     }
 }

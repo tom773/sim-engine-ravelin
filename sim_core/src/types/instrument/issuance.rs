@@ -3,8 +3,9 @@ use chrono::NaiveDate;
 use thiserror::Error;
 use uuid::Uuid;
 
-use super::inst_registry::{InstrumentCatalog, InstrumentRegistry, LotQuantity, LotType, SeriesId, TemplateId};
-use super::{BondType, DebtInstrument, Instrument, InstrumentArchetype, InstrumentType};
+use super::inst_core::{InstrumentIdentifiers, legacy_instrument_from_runtime_core, runtime_core_from_legacy_bond};
+use super::inst_registry::{InstrumentCatalog, InstrumentRegistry, LotId, LotQuantity, LotType, SeriesId, TemplateId};
+use super::{BondType, Instrument, InstrumentArchetype};
 
 #[derive(Debug, Clone)]
 pub struct BondIssuanceSpec {
@@ -73,9 +74,35 @@ pub fn issue_corporate_bond(
         .mint_lot(series_id, LotType::Fungible { lot_size: spec.face_value.to_f64() }, LotQuantity::Units(spec.units))
         .map_err(IssuanceError::Registry)?;
 
-    let instrument = Instrument::new(lot_id, InstrumentType::Debt(DebtInstrument::Bond(bond_details)), market_profile)
-        .with_listability(listability);
-    catalog.insert(lot_id, instrument);
+    let bond_archetype = registry
+        .series
+        .get(&series_id)
+        .and_then(|series| match &series.archetype {
+            InstrumentArchetype::Bond(archetype) => Some(archetype.clone()),
+            _ => None,
+        })
+        .ok_or(IssuanceError::UnsupportedTemplate)?;
+
+    let identifiers = InstrumentIdentifiers::new(lot_id)
+        .with_template(spec.template_id)
+        .with_series(series_id)
+        .with_lot(LotId(lot_id.0));
+
+    let runtime_core = runtime_core_from_legacy_bond(
+        identifiers,
+        market_profile,
+        listability,
+        &bond_details,
+        bond_archetype,
+        spec.units,
+    );
+
+    let instrument = legacy_instrument_from_runtime_core(&runtime_core);
+    catalog.insert(lot_id, instrument.clone());
+    catalog.insert_core(lot_id, runtime_core.clone());
+
+    registry.update_cache(instrument);
+    registry.update_core_cache(runtime_core);
 
     Ok(IssuedBond { template_id: spec.template_id, series_id, instrument_id: lot_id })
 }

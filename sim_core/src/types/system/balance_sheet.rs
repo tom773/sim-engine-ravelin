@@ -1,5 +1,4 @@
 use crate::prelude::*;
-use crate::types::money::Money;
 use rust_decimal::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};

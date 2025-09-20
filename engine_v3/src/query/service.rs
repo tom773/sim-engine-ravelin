@@ -5,7 +5,7 @@ use parking_lot::{RwLock, RwLockReadGuard};
 use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
 use sim_core::prelude::*;
-use sim_core::types::instrument::archetypes::MarketProfile;
+use sim_core::types::instrument::inst_core::MarketProfile;
 use std::sync::Arc;
 use std::{cmp::Ordering, collections::HashMap};
 use uuid::Uuid;

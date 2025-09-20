@@ -1,8 +1,4 @@
 use crate::prelude::*;
-use crate::types::instrument::archetypes::{
-    Amortization, CollateralType, Compounding, Covenant, CreditRating, FacilityType, PaymentFrequency,
-    PrepaymentPenalty, PrepaymentTerms, RateIndex, SpCreditRating,
-};
 use chrono::NaiveDate;
 use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
