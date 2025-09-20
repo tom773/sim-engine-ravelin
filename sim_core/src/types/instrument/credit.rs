@@ -14,6 +14,14 @@ pub enum LoanPurpose {
     PersonalConsumption,
     Refinancing,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ConsumerLoanCategory {
+    ResidentialMortgage,
+    AutoLoan,
+    PersonalLoan,
+    StudentLoan,
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BorrowerType {
     Individual,

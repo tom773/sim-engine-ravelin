@@ -350,6 +350,8 @@ pub struct LoanArchetype {
     pub amortization: Amortization,
     pub prepayment: PrepaymentTerms,
     pub principal: Money,
+    pub day_count: DayCount,
+    pub compounding: Compounding,
     pub rate_structure: RateStructure,
     pub repayment_schedule: LoanRepaymentSchedule,
     pub collateral_requirements: Vec<CollateralRequirement>,

@@ -1,3 +1,8 @@
+use crate::types::instrument::credit::ConsumerLoanCategory;
+use crate::types::instrument::inst_core::{
+    InstrumentIdentifiers, runtime_core_from_legacy_consumer_loan, runtime_core_from_legacy_credit_line,
+    runtime_core_from_legacy_loan,
+};
 use crate::*;
 use chrono::NaiveDate;
 use rust_decimal_macros::dec;
@@ -77,18 +82,26 @@ impl StateEffectApplicator {
             CreditEffect::RegisterLoan { loan, is_consumer, purpose } => {
                 let fs = &mut state.financial_system;
 
-                let debt_instrument = if *is_consumer {
-                    let consumer_loan = match purpose {
-                        LoanPurpose::RealEstate => ConsumerDebt::ResidentialMortgage(loan.details.clone()),
-                        LoanPurpose::PersonalConsumption => ConsumerDebt::PersonalLoan(loan.details.clone()),
-                        LoanPurpose::Equipment => {
-                            ConsumerDebt::AutoLoan(loan.details.clone()) // Treating equipment as auto for consumers
-                        }
-                        _ => ConsumerDebt::PersonalLoan(loan.details.clone()), // Default
+                let (debt_instrument, consumer_category) = if *is_consumer {
+                    let category = match purpose {
+                        LoanPurpose::RealEstate => ConsumerLoanCategory::ResidentialMortgage,
+                        LoanPurpose::Equipment => ConsumerLoanCategory::AutoLoan,
+                        LoanPurpose::PersonalConsumption => ConsumerLoanCategory::PersonalLoan,
+                        LoanPurpose::Refinancing => ConsumerLoanCategory::PersonalLoan,
+                        _ => ConsumerLoanCategory::PersonalLoan,
                     };
-                    DebtInstrument::Consumer(consumer_loan)
+                    let consumer_loan = match category {
+                        ConsumerLoanCategory::ResidentialMortgage => {
+                            ConsumerDebt::ResidentialMortgage(loan.details.clone())
+                        }
+                        ConsumerLoanCategory::AutoLoan => ConsumerDebt::AutoLoan(loan.details.clone()),
+                        ConsumerLoanCategory::PersonalLoan => ConsumerDebt::PersonalLoan(loan.details.clone()),
+                        ConsumerLoanCategory::StudentLoan => ConsumerDebt::StudentLoan(loan.details.clone()),
+                    };
+
+                    (DebtInstrument::Consumer(consumer_loan), Some(category))
                 } else {
-                    DebtInstrument::Loan(loan.details.clone())
+                    (DebtInstrument::Loan(loan.details.clone()), None)
                 };
 
                 let inst = Instrument::new(
@@ -98,7 +111,28 @@ impl StateEffectApplicator {
                 )
                 .with_listability(Listability::Unlisted);
 
-                fs.instruments.instruments.insert(loan.instrument_id, inst);
+                fs.instruments.instruments.insert(loan.instrument_id, inst.clone());
+
+                let identifiers = InstrumentIdentifiers::from(loan.instrument_id);
+                let runtime_core = if let Some(category) = consumer_category {
+                    runtime_core_from_legacy_consumer_loan(
+                        identifiers.clone(),
+                        inst.market_profile.clone(),
+                        inst.listability.clone(),
+                        category,
+                        &loan.details,
+                    )
+                } else {
+                    runtime_core_from_legacy_loan(
+                        identifiers.clone(),
+                        inst.market_profile.clone(),
+                        inst.listability.clone(),
+                        &loan.details,
+                    )
+                };
+
+                fs.instruments.insert_core(loan.instrument_id, runtime_core.clone());
+                fs.instrument_registry.update_core_cache(runtime_core);
 
                 let cr = &mut fs.credit_registry;
                 cr.register_loan(loan.clone()).map_err(EffectError::FinancialSystemError)?;
@@ -203,7 +237,18 @@ impl StateEffectApplicator {
                 )
                 .with_listability(Listability::Unlisted);
 
-                state.financial_system.instruments.instruments.insert(facility.instrument_id, inst);
+                state.financial_system.instruments.instruments.insert(facility.instrument_id, inst.clone());
+
+                let identifiers = InstrumentIdentifiers::from(facility.instrument_id);
+                let runtime_core = runtime_core_from_legacy_credit_line(
+                    identifiers.clone(),
+                    inst.market_profile.clone(),
+                    inst.listability.clone(),
+                    &facility.details,
+                );
+
+                state.financial_system.instruments.insert_core(facility.instrument_id, runtime_core.clone());
+                state.financial_system.instrument_registry.update_core_cache(runtime_core);
                 Ok(())
             }
 
