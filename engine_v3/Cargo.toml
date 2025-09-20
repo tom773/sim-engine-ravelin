@@ -9,16 +9,11 @@ path = "src/lib.rs"
 [dependencies]
 sim_core = { workspace = true }
 domains = { workspace = true }
-thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
-async-trait = { workspace = true }
-tokio = { workspace = true }
-tokio-util = { workspace = true }
 rand = { workspace = true }
 parking_lot = { workspace = true }
-inventory = "0.3.21"
 petgraph.workspace = true
 uuid = { workspace = true }
 toml.workspace = true

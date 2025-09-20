@@ -539,7 +539,7 @@ impl SimulationEngine {
                 yc.date = self.state.current_date;
                 if let Some(treasury_ids) = fs.exchange.index.by_bond_type.get(&BondType::Government) {
                     for inst_id in treasury_ids {
-                        if let Some(inst) = fs.instruments.get(inst_id) {
+                        if let Some(inst) = fs.instruments.instruments.get(inst_id) {
                             if let Some(symbol) = fs.exchange.inst_to_symbol.get(inst_id) {
                                 if let Some(market) = fs.exchange.markets.get(symbol) {
                                     if let MarketType::Financial(fin_market) = market {
@@ -582,7 +582,7 @@ impl SimulationEngine {
         let mut unit_cost_sum: HashMap<GoodId, (f64 /*sum qty*/, f64 /*sum qty*cost*/)> = HashMap::new();
         let mut inv_qty: HashMap<GoodId, f64> = HashMap::new();
 
-        for (_id, inst) in &self.state.financial_system.instruments {
+        for (_id, inst) in &self.state.financial_system.instruments.instruments {
             if let InstrumentType::RealAsset(RealAssetType::Inventory { goods, .. }) = &inst.instrument_type {
                 for (gid, item) in goods {
                     let q = item.quantity.max(0.0);

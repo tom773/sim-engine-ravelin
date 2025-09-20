@@ -515,6 +515,7 @@ impl TransactionsDomain {
                 ids.iter()
                     .filter(|id| {
                         fs.instruments
+                            .instruments
                             .get(id)
                             .and_then(|inst| match &inst.instrument_type {
                                 InstrumentType::Debt(DebtInstrument::Bond(d)) => Some(d.maturity_date == maturity_date),
@@ -533,7 +534,7 @@ impl TransactionsDomain {
                 None => continue,
             };
 
-            if let Some(inst) = fs.instruments.get(&inst_id) {
+            if let Some(inst) = fs.instruments.instruments.get(&inst_id) {
                 if let Some(details) = inst.instrument_type.as_bond() {
                     let pricer = GovTermStructurePricer::new(
                         details.clone(),

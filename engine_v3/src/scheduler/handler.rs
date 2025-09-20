@@ -159,6 +159,7 @@ impl StepHandler for GovCouponsHandler {
 
             let gov_bonds: Vec<(InstrumentId, BondDetails)> = fs
                 .instruments
+                .instruments
                 .iter()
                 .filter_map(|(id, inst)| {
                     if let InstrumentType::Debt(DebtInstrument::Bond(details)) = &inst.instrument_type {
@@ -372,7 +373,7 @@ impl StepHandler for CreditServicingHandler {
             let fs = &mut state.financial_system;
 
             let mut effects: Vec<StateEffect> = Vec::new();
-            for (inst_id, inst) in fs.instruments.clone() {
+            for (inst_id, inst) in fs.instruments.instruments.clone() {
                 if let InstrumentType::Debt(DebtInstrument::Loan(details)) = &inst.instrument_type {
                     let servicer = LoanServicer::new(state.current_date);
                     let mut tmp = details.clone();
@@ -461,7 +462,7 @@ impl StepHandler for DepositServicingHandler {
 
             for (agent_id, bs) in &fs.balance_sheets {
                 for (inst_id, pos) in &bs.assets {
-                    if let Some(inst) = fs.instruments.get(inst_id) {
+                    if let Some(inst) = fs.instruments.instruments.get(inst_id) {
                         if let InstrumentType::Cash(details) = &inst.instrument_type {
                             let is_interest_bearing = matches!(
                                 details.cash_type,
@@ -675,7 +676,10 @@ impl StepHandler for DebtAuctionsHandler {
                     .state
                     .financial_system
                     .exchange
-                    .conduct_dutch_auction(&auction_id, &engine.state.financial_system.instruments)
+                    .conduct_dutch_auction(
+                        &auction_id,
+                        &engine.state.financial_system.instruments.instruments,
+                    )
                 {
                     Ok(trades) => trades,
                     Err(e) => {
@@ -698,7 +702,9 @@ impl StepHandler for DebtAuctionsHandler {
 
                 let leftover = (quantity_offered - sold_qty).max(0);
                 if leftover > 0 {
-                    let fallback_price = if let Some(inst) = engine.state.financial_system.instruments.get(&inst_id) {
+                    let fallback_price = if let Some(inst) =
+                        engine.state.financial_system.instruments.instruments.get(&inst_id)
+                    {
                         if let Some(d) = inst.instrument_type.as_bond() {
                             let y_backstop =
                                 (engine.state.financial_system.central_bank.policy_rate_bps - dec!(50)).max(dec!(0));

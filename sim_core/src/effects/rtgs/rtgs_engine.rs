@@ -197,7 +197,9 @@ fn apply_cash_movements_immediately(state: &mut SimState, pi: &PaymentInstructio
         return Ok(());
     }
     if let TransactionContext::CouponPayment { instrument_id } = pi.context {
-        if let Some(inst) = state.financial_system.instruments.get(&instrument_id) {
+        if let Some(inst) =
+            state.financial_system.instruments.instruments.get(&instrument_id)
+        {
             if let InstrumentType::Cash(details) = &inst.instrument_type {
                 if matches!(details.cash_type, CashType::DemandDeposit | CashType::SavingsDeposit) {
                     let bank_id = details.issuer;

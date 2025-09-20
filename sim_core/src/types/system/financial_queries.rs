@@ -117,7 +117,7 @@ impl FinancialSystem {
     pub fn find_bank_reserves_account(&self, bank_id: &AgentId) -> Option<InstrumentId> {
         let bs = self.balance_sheets.get(bank_id)?;
         bs.assets.iter().find_map(|(id, _pos)| {
-            let inst = self.instruments.get(id)?;
+            let inst = self.instruments.instruments.get(id)?;
             match &inst.instrument_type {
                 InstrumentType::Cash(details) if details.cash_type == CashType::CentralBankReserves => Some(*id),
                 _ => None,
@@ -139,7 +139,7 @@ impl FinancialSystem {
 
         let bs = self.balance_sheets.get(agent_id)?;
         bs.assets.iter().find_map(|(id, _)| {
-            let inst = self.instruments.get(id)?;
+            let inst = self.instruments.instruments.get(id)?;
             match &inst.instrument_type {
                 InstrumentType::Cash(details) if details.cash_type == CashType::DemandDeposit => {
                     Some((*id, details.issuer))
@@ -152,7 +152,7 @@ impl FinancialSystem {
     pub fn find_government_tga_account(&self) -> Option<(InstrumentId, AgentId)> {
         let gov_bs = self.balance_sheets.get(&self.government.id)?;
         gov_bs.assets.iter().find_map(|(id, _pos)| {
-            let inst = self.instruments.get(id)?;
+            let inst = self.instruments.instruments.get(id)?;
             match &inst.instrument_type {
                 InstrumentType::Cash(details) if details.cash_type == CashType::TreasuryGeneralAccount => {
                     Some((*id, self.central_bank.id))
@@ -163,7 +163,7 @@ impl FinancialSystem {
     }
 
     pub fn find_any_bank_account(&self) -> Option<(InstrumentId, AgentId)> {
-        self.instruments.values().find_map(|inst| {
+        self.instruments.instruments.values().find_map(|inst| {
             if let InstrumentType::Cash(details) = &inst.instrument_type {
                 if details.cash_type == CashType::DemandDeposit {
                     return Some((inst.id, details.issuer));
@@ -176,7 +176,7 @@ impl FinancialSystem {
         &mut self, creditor_id: &AgentId, debtor_id: &AgentId, instrument_id: &InstrumentId, quantity_change: f64,
         book_value_per_unit: f64,
     ) -> Result<(), String> {
-        if let Some(inst) = self.instruments.get(instrument_id) {
+        if let Some(inst) = self.instruments.instruments.get(instrument_id) {
             match &inst.instrument_type {
                 InstrumentType::Debt(DebtInstrument::Bond(_))
                 | InstrumentType::Equity(_)
@@ -210,7 +210,7 @@ impl FinancialSystem {
     pub fn get_instrument_info(
         &self, instrument_id: &InstrumentId, agents: &AgentRegistry, current_date: NaiveDate,
     ) -> Option<InstrumentInfo> {
-        let instrument = self.instruments.get(instrument_id)?;
+        let instrument = self.instruments.instruments.get(instrument_id)?;
 
         let mut info = InstrumentInfo {
             instrument_id: *instrument_id,
@@ -303,7 +303,7 @@ impl FinancialSystem {
     pub fn get_agent_inventory(&self, agent_id: &AgentId) -> HashMap<GoodId, InventoryItem> {
         if let Some(bs) = self.balance_sheets.get(agent_id) {
             for inst_id in bs.assets.keys() {
-                if let Some(inst) = self.instruments.get(inst_id) {
+                if let Some(inst) = self.instruments.instruments.get(inst_id) {
                     if let InstrumentType::RealAsset(RealAssetType::Inventory { goods, .. }) = &inst.instrument_type {
                         return goods.clone();
                     }
@@ -320,7 +320,7 @@ impl FinancialSystem {
 
         if let Some(bs) = self.balance_sheets.get(agent_id) {
             for (inst_id, pos) in &bs.assets {
-                if let Some(_inst) = self.instruments.get(inst_id) {
+                if let Some(_inst) = self.instruments.instruments.get(inst_id) {
                     if !self.clearing_house.csd.is_security(inst_id) {
                         positions.insert(*inst_id, pos.clone());
                     }
@@ -332,7 +332,7 @@ impl FinancialSystem {
             for (inst_id, holding) in &csd_account.holdings {
                 let quantity = holding.total_position();
                 if quantity > 1e-9 {
-                    if let Some(inst) = self.instruments.get(inst_id) {
+                    if let Some(inst) = self.instruments.instruments.get(inst_id) {
                         let book_value = inst.face_value().unwrap_or(Money::from(1000 as i64));
                         positions.insert(
                             *inst_id,
@@ -394,7 +394,7 @@ impl FinancialSystem {
             .map(|(id, qty)| {
                 let price = self
                     .get_market_price(id)
-                    .or_else(|| self.instruments.get(id).and_then(|i| i.face_value()))
+                    .or_else(|| self.instruments.instruments.get(id).and_then(|i| i.face_value()))
                     .unwrap_or(Money::ZERO);
                 price.to_f64() * qty
             })
@@ -425,7 +425,7 @@ impl FinancialSystem {
                 bs.assets
                     .iter()
                     .filter_map(|(id, pos)| {
-                        self.instruments.get(id).and_then(|inst| {
+                        self.instruments.instruments.get(id).and_then(|inst| {
                             if let InstrumentType::Cash(_) = &inst.instrument_type { Some(pos.quantity) } else { None }
                         })
                     })

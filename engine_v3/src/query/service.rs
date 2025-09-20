@@ -155,7 +155,7 @@ fn non_negative_days(diff: i64) -> f64 {
 }
 
 fn instrument_snapshot(state: &SimState, id: &InstrumentId, position: &Position) -> Option<PopulatedPositionDto> {
-    state.financial_system.instruments.get(id).map(|inst| {
+    state.financial_system.instruments.instruments.get(id).map(|inst| {
         let market_price =
             state.financial_system.exchange.financial_market(id).and_then(|book| book.representative_price());
 
@@ -502,6 +502,7 @@ impl QueryService {
         let instruments_map: HashMap<InstrumentId, String> = state
             .financial_system
             .instruments
+            .instruments
             .iter()
             .map(|(id, inst)| (id.clone(), inst.type_as_string().to_string()))
             .collect();
@@ -613,6 +614,7 @@ impl QueryService {
                         name: state
                             .financial_system
                             .instruments
+                            .instruments
                             .get(inst_id)
                             .map_or("Unknown".to_string(), |i| i.type_as_string().to_string()),
                         last_price: view.last.and_then(Rate::from_f64),
@@ -691,7 +693,7 @@ impl QueryService {
 
     pub fn get_instrument_registry(&self) -> QueryResult<InstrumentRegistryDto> {
         let engine = self.get_engine_lock()?;
-        Ok(InstrumentRegistryDto { instruments: engine.state.financial_system.instruments.clone() })
+        Ok(InstrumentRegistryDto { instruments: engine.state.financial_system.instruments.instruments.clone() })
     }
 
     pub fn get_market_detail(&self, market_id_str: &str) -> QueryResult<MarketDetailDto> {
@@ -711,6 +713,7 @@ impl QueryService {
             MarketType::Financial(fin_market) => {
                 let name = state
                     .financial_system
+                    .instruments
                     .instruments
                     .get(&fin_market.key)
                     .map_or("N/A".to_string(), |i| i.type_as_string().to_string());

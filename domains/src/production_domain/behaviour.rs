@@ -493,7 +493,7 @@ impl InvestmentFirmDecisionModel {
 
         if let Some(treasury_ids) = fs.exchange.index.by_bond_type.get(&BondType::Government) {
             for inst_id in treasury_ids {
-                if let Some(instrument) = fs.instruments.get(inst_id) {
+                if let Some(instrument) = fs.instruments.instruments.get(inst_id) {
                     if !instrument.should_create_order_book() {
                         continue;
                     }
@@ -529,7 +529,7 @@ impl InvestmentFirmDecisionModel {
         let auction_budget = liquid_assets * 0.05;
 
         for auction in fs.exchange.open_auctions.values() {
-            if let Some(instrument) = fs.instruments.get(&auction.instrument_id) {
+            if let Some(instrument) = fs.instruments.instruments.get(&auction.instrument_id) {
                 if let Some(details) = instrument.instrument_type.as_bond() {
                     let tenor_years = details.remaining_tenor_years(current_date);
                     let (bid_yield_bps, _ask_yield_bps) =

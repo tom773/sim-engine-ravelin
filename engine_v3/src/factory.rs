@@ -431,7 +431,7 @@ impl<'a> AgentFactory<'a> {
         let system = &self.state.financial_system;
         if let Some(bs) = system.balance_sheets.get(&bank_id) {
             for (inst_id, pos) in &bs.liabilities {
-                if let Some(inst) = system.instruments.get(inst_id) {
+                if let Some(inst) = system.instruments.instruments.get(inst_id) {
                     if let InstrumentType::Cash(cash) = &inst.instrument_type {
                         if matches!(cash.cash_type, CashType::DemandDeposit | CashType::SavingsDeposit) {
                             let per_unit = pos.book_value_per_unit.to_f64();

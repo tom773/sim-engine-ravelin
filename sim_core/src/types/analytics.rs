@@ -251,7 +251,7 @@ impl FinancialSystem {
             .values()
             .flat_map(|bs| bs.assets.iter())
             .filter_map(|(id, pos)| {
-                self.instruments.get(id).and_then(|inst| {
+                self.instruments.instruments.get(id).and_then(|inst| {
                     if let InstrumentType::Cash(d) = &inst.instrument_type {
                         if matches!(d.cash_type, CashType::CentralBankReserves | CashType::Currency) {
                             return Some(pos.quantity);
@@ -269,7 +269,7 @@ impl FinancialSystem {
             .filter(|(id, _)| !bank_ids.contains(id) && **id != self.central_bank.id)
             .flat_map(|(_, bs)| bs.assets.iter())
             .filter_map(|(id, pos)| {
-                self.instruments.get(id).and_then(|inst| {
+                self.instruments.instruments.get(id).and_then(|inst| {
                     if let InstrumentType::Cash(d) = &inst.instrument_type {
                         if matches!(d.cash_type, CashType::Currency | CashType::DemandDeposit) {
                             return Some(pos.quantity);
@@ -287,7 +287,7 @@ impl FinancialSystem {
             .filter(|(id, _)| !bank_ids.contains(id) && **id != self.central_bank.id)
             .flat_map(|(_, bs)| bs.assets.iter())
             .filter_map(|(id, pos)| {
-                self.instruments.get(id).and_then(|inst| {
+                self.instruments.instruments.get(id).and_then(|inst| {
                     if let InstrumentType::Cash(d) = &inst.instrument_type {
                         if matches!(
                             d.cash_type,
@@ -311,7 +311,7 @@ impl FinancialSystem {
     pub fn get_bank_reserves(&self, bank_id: &AgentId) -> Option<f64> {
         let bs = self.balance_sheets.get(bank_id)?;
         bs.assets.iter().find_map(|(id, pos)| {
-            self.instruments.get(id).and_then(|inst| {
+            self.instruments.instruments.get(id).and_then(|inst| {
                 if let InstrumentType::Cash(d) = &inst.instrument_type {
                     if d.cash_type == CashType::CentralBankReserves {
                         return Some(pos.quantity);
@@ -334,7 +334,7 @@ impl FinancialSystem {
         bs.liabilities
             .iter()
             .filter_map(|(id, pos)| {
-                self.instruments.get(id).and_then(|inst| {
+                self.instruments.instruments.get(id).and_then(|inst| {
                     if let InstrumentType::Cash(d) = &inst.instrument_type {
                         if matches!(
                             d.cash_type,

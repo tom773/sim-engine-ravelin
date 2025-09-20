@@ -48,7 +48,11 @@ impl StateEffectApplicator {
         match effect {
             FinancialEffect::CreateInstrument { instrument: inst, creditor, debtor, quantity } => {
                 let instrument_id = inst.id;
-                state.financial_system.instruments.insert(instrument_id, inst.clone());
+                state
+                    .financial_system
+                    .instruments
+                    .instruments
+                    .insert(instrument_id, inst.clone());
 
                 if is_security(inst) {
                     state
@@ -93,7 +97,12 @@ impl StateEffectApplicator {
                     }
                 }
 
-                let final_inst = state.financial_system.instruments.get(&instrument_id).unwrap();
+                let final_inst = state
+                    .financial_system
+                    .instruments
+                    .instruments
+                    .get(&instrument_id)
+                    .unwrap();
                 if final_inst.should_create_order_book() {
                     state.financial_system.exchange.ensure_listed(instrument_id, final_inst);
                 }
@@ -110,6 +119,7 @@ impl StateEffectApplicator {
                 let government_id = state.financial_system.government.id;
                 let instrument_name = state
                     .financial_system
+                    .instruments
                     .instruments
                     .get(&instruction.instrument_id)
                     .map(|inst| inst.type_as_string())
@@ -158,6 +168,7 @@ impl StateEffectApplicator {
     ) -> Result<(), EffectError> {
         let instrument = state
             .financial_system
+            .instruments
             .instruments
             .get(&instrument_id)
             .ok_or_else(|| EffectError::InstrumentNotFound { id: instrument_id })?;

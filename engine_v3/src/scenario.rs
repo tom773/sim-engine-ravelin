@@ -398,7 +398,7 @@ impl Scenario {
 
         let agent_ids = factory.get_agent_id_map().clone();
 
-        for (iid, inst) in state.financial_system.instruments.clone() {
+        for (iid, inst) in state.financial_system.instruments.instruments.clone() {
             state.financial_system.exchange.ensure_listed(iid, &inst);
         }
 

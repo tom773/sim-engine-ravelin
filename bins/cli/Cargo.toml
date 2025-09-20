@@ -10,7 +10,6 @@ engine_v3 = { workspace = true }
 
 uuid = { workspace = true }
 chrono = { workspace = true }
-dyn-clone = "1.0.20"
 rand = { workspace = true }
 
 axum = { workspace = true }

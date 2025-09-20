@@ -22,8 +22,7 @@ pub fn is_security(inst: &Instrument) -> bool {
 #[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FinancialSystem {
-    #[serde_as(as = "HashMap<DisplayFromStr, _>")]
-    pub instruments: HashMap<InstrumentId, Instrument>,
+    pub instruments: InstrumentCatalog,
     #[serde_as(as = "HashMap<DisplayFromStr, _>")]
     pub balance_sheets: HashMap<AgentId, BalanceSheet>,
     pub central_bank: CentralBank,
@@ -93,7 +92,7 @@ impl Default for FinancialSystem {
         balance_sheets.insert(government.id, BalanceSheet::new(government.id));
 
         Self {
-            instruments: HashMap::new(),
+            instruments: InstrumentCatalog::default(),
             balance_sheets,
             central_bank,
             government,
@@ -118,17 +117,19 @@ impl FinancialSystem {
             current_date: Arc::new(RwLock::new(now)),
         };
         // Use the instrument registry to re-inject financial pricers as well.
-        self.exchange.attach_pricing_feeds_with_registry(self.pricing_feeds.clone(), &self.instruments);
+        self
+            .exchange
+            .attach_pricing_feeds_with_registry(self.pricing_feeds.clone(), &self.instruments.instruments);
     }
     fn find_inventory_instrument_mut(&mut self, agent_id: &AgentId) -> Option<&mut Instrument> {
         let bs = self.balance_sheets.get(agent_id)?;
         let inventory_inst_id = bs.assets.keys().find(|inst_id| {
             matches!(
-                self.instruments.get(inst_id).map(|i| &i.instrument_type),
+                self.instruments.instruments.get(inst_id).map(|i| &i.instrument_type),
                 Some(InstrumentType::RealAsset(RealAssetType::Inventory { .. }))
             )
         })?;
-        self.instruments.get_mut(inventory_inst_id)
+        self.instruments.instruments.get_mut(inventory_inst_id)
     }
 
     pub fn add_to_inventory(&mut self, owner: &AgentId, good_id: &GoodId, qty: f64, unit_cost: Money) {
@@ -136,7 +137,7 @@ impl FinancialSystem {
         if let Some(Instrument {
             instrument_type: InstrumentType::RealAsset(RealAssetType::Inventory { goods, .. }),
             ..
-        }) = self.instruments.get_mut(&inst_id)
+        }) = self.instruments.instruments.get_mut(&inst_id)
         {
             let item = goods.entry(*good_id).or_default();
 
@@ -153,7 +154,7 @@ impl FinancialSystem {
             .and_then(|bs| {
                 bs.assets.keys().find(|inst_id| {
                     matches!(
-                        self.instruments.get(inst_id).map(|i| &i.instrument_type),
+                        self.instruments.instruments.get(inst_id).map(|i| &i.instrument_type),
                         Some(InstrumentType::RealAsset(RealAssetType::Inventory { .. }))
                     )
                 })
@@ -169,7 +170,7 @@ impl FinancialSystem {
             InstrumentType::RealAsset(RealAssetType::Inventory { owner, goods: std::collections::HashMap::new() }),
             InstrumentMarket::CapitalMarket(CapitalMarketSegment::StructuredFinance),
         );
-        self.instruments.insert(inst_id, inst);
+        self.instruments.instruments.insert(inst_id, inst);
         let bs = self.balance_sheets.entry(owner).or_insert_with(|| BalanceSheet::new(owner));
         bs.assets.insert(
             inst_id,
@@ -192,7 +193,7 @@ impl FinancialSystem {
 
         for account in self.clearing_house.csd.custody_accounts.values() {
             for (inst_id, holding) in &account.holdings {
-                if let Some(instrument) = self.instruments.get(inst_id) {
+                if let Some(instrument) = self.instruments.instruments.get(inst_id) {
                     if is_security(instrument) {
                         let quantity = holding.total_position();
                         let book_value = instrument.face_value().unwrap_or(Money::ZERO);

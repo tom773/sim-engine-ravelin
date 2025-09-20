@@ -5,20 +5,5 @@ edition = "2024"
 
 [dependencies]
 sim_core = { workspace = true }
-domains = { workspace = true }
-engine_v3 = { workspace = true }
-
-uuid = { workspace = true }
-chrono = { workspace = true }
-dyn-clone = "1.0.20"
-rand = { workspace = true }
-ratatui = { version = "0.29.0", features = ["crossterm"] }
-crossterm = "0.29.0"
-axum = { workspace = true }
-tokio = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-tower-http = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
-rust_decimal = { workspace = true }
-rust_decimal_macros = { workspace = true }
+tracing = "0.1.41"

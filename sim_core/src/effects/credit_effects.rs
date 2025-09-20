@@ -98,7 +98,7 @@ impl StateEffectApplicator {
                     listability: Listability::Unlisted,
                 };
 
-                fs.instruments.insert(loan.instrument_id, inst);
+                fs.instruments.instruments.insert(loan.instrument_id, inst);
 
                 let cr = &mut fs.credit_registry;
                 cr.register_loan(loan.clone()).map_err(EffectError::FinancialSystemError)?;
@@ -133,6 +133,7 @@ impl StateEffectApplicator {
 
                 let deposit_instrument_id = fs
                     .instruments
+                    .instruments
                     .iter()
                     .find_map(|(id, inst)| {
                         if let InstrumentType::Cash(details) = &inst.instrument_type {
@@ -152,7 +153,7 @@ impl StateEffectApplicator {
                         )
                         .build();
                         let id = new_deposit.id;
-                        fs.instruments.insert(id, new_deposit);
+                        fs.instruments.instruments.insert(id, new_deposit);
                         id
                     });
 
@@ -200,7 +201,11 @@ impl StateEffectApplicator {
                     listability: Listability::Unlisted,
                 };
 
-                state.financial_system.instruments.insert(facility.instrument_id, inst);
+                state
+                    .financial_system
+                    .instruments
+                    .instruments
+                    .insert(facility.instrument_id, inst);
                 Ok(())
             }
 
@@ -305,7 +310,12 @@ impl StateEffectApplicator {
 
                     if *new_status == LienStatus::Released {
                         if let CollateralType::Securities { instrument_id, quantity, .. } = &lien.collateral_type {
-                            if let Some(loan) = state.financial_system.instruments.get(&lien.secured_obligation) {
+                            if let Some(loan) = state
+                                .financial_system
+                                .instruments
+                                .instruments
+                                .get(&lien.secured_obligation)
+                            {
                                 if let InstrumentType::Debt(DebtInstrument::Loan(details)) = &loan.instrument_type {
                                     if let Some(holding) = state
                                         .financial_system

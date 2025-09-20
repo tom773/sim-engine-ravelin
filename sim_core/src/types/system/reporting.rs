@@ -107,7 +107,7 @@ impl FinancialSystem {
                 .iter()
                 .filter(|(_, p)| p.quantity.abs() > 0.01)
                 .map(|(id, pos)| {
-                    let inst = &self.instruments[id];
+                    let inst = &self.instruments.instruments[id];
                     let code = self.get_instrument_type_code(inst);
                     vec![
                         format!("{}:{}", code, &id.0.to_string()[0..4]),
@@ -126,7 +126,7 @@ impl FinancialSystem {
                 .iter()
                 .filter(|(_, p)| p.quantity.abs() > 0.01)
                 .map(|(id, pos)| {
-                    let inst = &self.instruments[id];
+                    let inst = &self.instruments.instruments[id];
                     let code = self.get_instrument_type_code(inst);
                     vec![
                         format!("{}:{}", code, &id.0.to_string()[0..4]),
@@ -146,7 +146,7 @@ impl FinancialSystem {
                     .iter()
                     .filter(|(_, h)| h.total_position() > 0.01)
                     .map(|(inst_id, holding)| {
-                        let inst = &self.instruments[inst_id];
+                        let inst = &self.instruments.instruments[inst_id];
                         let code = self.get_instrument_type_code(inst);
                         vec![
                             format!("{}:{}", code, &inst_id.0.to_string()[0..4]),
@@ -289,7 +289,7 @@ impl FinancialSystem {
                     return None;
                 }
 
-                let inst = self.instruments.get(id)?;
+                let inst = self.instruments.instruments.get(id)?;
                 let type_code = self.get_instrument_type_code(inst);
                 let id_short = format!("{:.6}", id.0.to_string());
                 let key = format!("{}:{}", type_code, id_short);
@@ -308,7 +308,7 @@ impl FinancialSystem {
     fn create_compact_position_from_csd(
         &self, inst_id: &InstrumentId, holding: &SecurityHolding,
     ) -> Option<CompactPosition> {
-        let inst = self.instruments.get(inst_id)?;
+        let inst = self.instruments.instruments.get(inst_id)?;
         let type_code = self.get_instrument_type_code(inst);
         let id_short = format!("{:.6}", inst_id.0.to_string());
         let key = format!("{}:{}", type_code, id_short);
@@ -390,7 +390,7 @@ impl FinancialSystem {
                 .iter()
                 .filter(|(_, p)| p.quantity.abs() > 0.01)
                 .map(|(id, pos)| {
-                    let inst = &self.instruments[id];
+                    let inst = &self.instruments.instruments[id];
                     let code = self.get_instrument_type_code(inst);
                     let book = pos.book_value_per_unit.to_f64();
                     asset_total += pos.quantity * book;
@@ -412,7 +412,7 @@ impl FinancialSystem {
                 .iter()
                 .filter(|(_, p)| p.quantity.abs() > 0.01)
                 .map(|(id, pos)| {
-                    let inst = &self.instruments[id];
+                    let inst = &self.instruments.instruments[id];
                     let code = self.get_instrument_type_code(inst);
                     let book = pos.book_value_per_unit.to_f64();
                     liability_total += pos.quantity * book;
@@ -435,7 +435,7 @@ impl FinancialSystem {
                     .iter()
                     .filter(|(_, h)| h.total_position() > 0.01)
                     .map(|(inst_id, holding)| {
-                        let inst = &self.instruments[inst_id];
+                        let inst = &self.instruments.instruments[inst_id];
                         let code = self.get_instrument_type_code(inst);
                         let book = inst.face_value().map(|v| v.to_f64()).unwrap_or(1000.0);
                         securities_total += holding.total_position() * book;

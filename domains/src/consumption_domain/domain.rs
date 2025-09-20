@@ -14,7 +14,7 @@ impl ConsumptionDomain {
     fn get_agent_inventory(fs: &FinancialSystem, agent_id: &AgentId) -> HashMap<GoodId, InventoryItem> {
         if let Some(bs) = fs.balance_sheets.get(agent_id) {
             for inst_id in bs.assets.keys() {
-                if let Some(inst) = fs.instruments.get(inst_id) {
+                if let Some(inst) = fs.instruments.instruments.get(inst_id) {
                     if let InstrumentType::RealAsset(RealAssetType::Inventory { goods, .. }) = &inst.instrument_type {
                         return goods.clone();
                     }

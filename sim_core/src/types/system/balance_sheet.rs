@@ -117,7 +117,7 @@ impl BalanceSheet {
         self.assets
             .iter()
             .filter_map(|(id, pos)| {
-                let inst = system.instruments.get(id)?;
+                let inst = system.instruments.instruments.get(id)?;
                 if let InstrumentType::Cash(_) = inst.instrument_type {
                     Some(Money::from(1 as i64) * pos.quantity)
                 } else {
@@ -131,7 +131,7 @@ impl BalanceSheet {
         self.assets
             .iter()
             .filter_map(|(id, pos)| {
-                let inst = system.instruments.get(id)?;
+                let inst = system.instruments.instruments.get(id)?;
                 if let InstrumentType::Cash(c) = &inst.instrument_type {
                     if &c.issuer == bank_id && matches!(c.cash_type, CashType::DemandDeposit | CashType::SavingsDeposit)
                     {
@@ -147,7 +147,7 @@ impl BalanceSheet {
         self.assets
             .iter()
             .filter_map(|(id, pos)| {
-                let inst = system.instruments.get(id)?;
+                let inst = system.instruments.instruments.get(id)?;
                 if let InstrumentType::Cash(c) = &inst.instrument_type {
                     if matches!(c.cash_type, CashType::DemandDeposit | CashType::SavingsDeposit) {
                         return Some(pos.quantity);
@@ -165,7 +165,7 @@ impl BalanceSheet {
         let mut rwa = 0.0;
 
         for (id, pos) in &self.assets {
-            if let Some(inst) = system.instruments.get(id) {
+            if let Some(inst) = system.instruments.instruments.get(id) {
                 let risk_weight = match &inst.instrument_type {
                     InstrumentType::Cash(c) => match c.cash_type {
                         CashType::CentralBankReserves => 0.0,
@@ -184,7 +184,7 @@ impl BalanceSheet {
 
         let positions = system.clearing_house.csd.get_all_positions(&self.agent_id);
         for (id, qty) in positions {
-            if let Some(inst) = system.instruments.get(&id) {
+            if let Some(inst) = system.instruments.instruments.get(&id) {
                 let risk_weight = match &inst.instrument_type {
                     InstrumentType::Cash(c) => match c.cash_type {
                         CashType::CentralBankReserves => 0.0,
