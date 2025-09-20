@@ -106,46 +106,6 @@ impl FromStr for LotId {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InstrumentTemplate {
-    pub id: TemplateId,
-    pub template_type: TemplateType,
-    pub product_family: ProductFamily,
-    pub market_classification: MarketClassification,
-    pub lifecycle_rules: LifecycleRules,
-    pub created_date: NaiveDate,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum TemplateType {
-    DepositAccount {
-        deposit_type: CashType,
-        interest_type: InterestType,
-    },
-    
-    BondTemplate {
-        bond_class: BondClass,
-        cash_flow_type: CashFlow,
-        day_count: DayCount,
-    },
-    
-    LoanFacility {
-        facility_type: FacilityType,
-        amortization: Amortization,
-        prepayment_allowed: bool,
-    },
-    
-    StructuredProduct {
-        product_type: StructuredProductType,
-        underlying_asset_class: AssetClass,
-    },
-    
-    DerivativeContract {
-        derivative_class: DerivativeClass,
-        settlement_type: SettlementType,
-    },
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum ProductFamily {
     Cash,
@@ -173,72 +133,6 @@ pub struct LifecycleRules {
     pub settlement_lag_days: u32,
 }
 
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InstrumentSeries {
-    pub id: SeriesId,
-    pub template_id: TemplateId,
-    pub issuer: AgentId,
-    pub series_key: SeriesKey,
-    pub terms: SeriesTerms,
-    pub issuance_data: IssuanceData,
-    pub outstanding: OutstandingData,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum SeriesKey {
-    BondIssue {
-        issue_date: NaiveDate,
-        maturity_date: NaiveDate,
-        coupon_bps: BasisPoints,
-        currency: Currency,
-    },
-    
-    DepositProduct {
-        product_name: String,
-        rate_bps: BasisPoints,
-        currency: Currency,
-    },
-    
-    LoanDraw {
-        facility_id: Uuid,
-        draw_number: u32,
-        draw_date: NaiveDate,
-    },
-    
-    Generic {
-        series_code: String,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum SeriesTerms {
-    BondTerms {
-        face_value: Money,
-        coupon_rate_bps: BasisPoints,
-        frequency: u32,
-        rating: CreditRating,
-        covenants: Vec<Covenant>,
-    },
-    
-    DepositTerms {
-        interest_rate_bps: BasisPoints,
-        minimum_balance: Option<Money>,
-        fee_schedule: Vec<FeeScheduleItem>,
-    },
-    
-    LoanTerms {
-        principal: Money,
-        rate_structure: RateStructure,
-        payment_schedule: PaymentSchedule,
-        collateral_requirements: Vec<CollateralRequirement>,
-    },
-    
-    GenericTerms {
-        parameters: HashMap<String, serde_json::Value>,
-    },
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IssuanceData {
     pub authorization_date: NaiveDate,
@@ -256,57 +150,6 @@ pub struct OutstandingData {
     pub holder_count: u32,
     pub last_activity_date: NaiveDate,
 }
-
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InstrumentLot {
-    pub id: InstrumentId,  // Uses existing InstrumentId
-    pub series_id: SeriesId,
-    pub lot_type: LotType,
-    pub quantity: LotQuantity,
-    pub creation_date: NaiveDate,
-    pub status: LotStatus,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum LotType {
-    Fungible {
-        lot_size: f64,
-    },
-    
-    LoanDrawdown {
-        draw_id: Uuid,
-        outstanding_principal: Money,
-        next_payment_date: NaiveDate,
-    },
-    
-    AccountInstance {
-        account_number: String,
-        current_balance: Money,
-    },
-    
-    Tranche {
-        tranche_name: String,
-        subordination_level: u32,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum LotQuantity {
-    Units(f64),           // For securities
-    Notional(Money),      // For loans, deposits
-    Shares(u64),          // For equity
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum LotStatus {
-    Active,
-    Frozen,
-    PendingRedemption,
-    Redeemed,
-    Cancelled,
-}
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InterestType {
