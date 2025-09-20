@@ -676,10 +676,7 @@ impl StepHandler for DebtAuctionsHandler {
                     .state
                     .financial_system
                     .exchange
-                    .conduct_dutch_auction(
-                        &auction_id,
-                        &engine.state.financial_system.instruments.instruments,
-                    )
+                    .conduct_dutch_auction(&auction_id, &engine.state.financial_system.instruments.instruments)
                 {
                     Ok(trades) => trades,
                     Err(e) => {

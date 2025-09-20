@@ -7,3 +7,7 @@ edition = "2024"
 sim_core = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
 tracing = "0.1.41"
+chrono = { workspace = true }
+uuid = { workspace = true }
+rust_decimal = { workspace = true }
+rust_decimal_macros = { workspace = true }

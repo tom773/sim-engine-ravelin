@@ -196,7 +196,7 @@ pub fn decimal_to_bps(decimal: Rate) -> BasisPoints {
     decimal * BPS_PER_UNIT
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Copy, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Copy, Default, Hash)]
 pub enum DayCount {
     Act360,
     #[default]

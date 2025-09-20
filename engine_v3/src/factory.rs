@@ -324,13 +324,11 @@ impl<'a> AgentFactory<'a> {
 
     fn tenor_to_maturity(issue: NaiveDate, tenor: &str) -> Option<NaiveDate> {
         let months = Self::parse_tenor_to_months(tenor)?;
-        issue
-            .checked_add_months(Months::new(months))
-            .or_else(|| {
-                let approx_years = months as f64 / 12.0;
-                let days = (approx_years * 365.0).round() as i64;
-                if days > 0 { Some(issue + Duration::days(days)) } else { None }
-            })
+        issue.checked_add_months(Months::new(months)).or_else(|| {
+            let approx_years = months as f64 / 12.0;
+            let days = (approx_years * 365.0).round() as i64;
+            if days > 0 { Some(issue + Duration::days(days)) } else { None }
+        })
     }
 
     fn parse_tenor_to_months(tenor: &str) -> Option<u32> {

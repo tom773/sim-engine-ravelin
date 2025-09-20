@@ -201,11 +201,7 @@ impl StateEffectApplicator {
                     listability: Listability::Unlisted,
                 };
 
-                state
-                    .financial_system
-                    .instruments
-                    .instruments
-                    .insert(facility.instrument_id, inst);
+                state.financial_system.instruments.instruments.insert(facility.instrument_id, inst);
                 Ok(())
             }
 
@@ -310,11 +306,8 @@ impl StateEffectApplicator {
 
                     if *new_status == LienStatus::Released {
                         if let CollateralType::Securities { instrument_id, quantity, .. } = &lien.collateral_type {
-                            if let Some(loan) = state
-                                .financial_system
-                                .instruments
-                                .instruments
-                                .get(&lien.secured_obligation)
+                            if let Some(loan) =
+                                state.financial_system.instruments.instruments.get(&lien.secured_obligation)
                             {
                                 if let InstrumentType::Debt(DebtInstrument::Loan(details)) = &loan.instrument_type {
                                     if let Some(holding) = state
