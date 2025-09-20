@@ -351,6 +351,9 @@ impl FinancialSystem {
                     BondType::Corporate => "CB",
                     BondType::Government => "GB",
                     BondType::InterbankLoan => "IB",
+                    BondType::Municipal => "MB",
+                    BondType::Agency => "AG",
+                    BondType::Supranational => "SB",
                 },
                 DebtInstrument::Consumer(c) => match c {
                     ConsumerDebt::ResidentialMortgage(_)

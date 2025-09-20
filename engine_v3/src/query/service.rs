@@ -5,6 +5,7 @@ use parking_lot::{RwLock, RwLockReadGuard};
 use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
 use sim_core::prelude::*;
+use sim_core::types::instrument::archetypes::MarketProfile;
 use std::sync::Arc;
 use std::{cmp::Ordering, collections::HashMap};
 use uuid::Uuid;
@@ -117,6 +118,9 @@ fn bond_type_label(bond_type: BondType) -> &'static str {
         BondType::Corporate => "Corporate Bonds",
         BondType::Government => "Government Bonds",
         BondType::InterbankLoan => "Interbank Loans",
+        BondType::Municipal => "Municipal Bonds",
+        BondType::Agency => "Agency Bonds",
+        BondType::Supranational => "Supranational Bonds",
     }
 }
 
@@ -450,7 +454,7 @@ impl QueryService {
             let instrument = Instrument::new(
                 InstrumentId(Uuid::new_v4()),
                 InstrumentType::Equity(EquityDetails { issuer: *agent_id, outstanding_shares: 1 }),
-                InstrumentMarket::CapitalMarket(CapitalMarketSegment::Equity),
+                MarketProfile::from_market(InstrumentMarket::CapitalMarket(CapitalMarketSegment::Equity)),
             );
 
             Some(PopulatedPositionDto { position, instrument, market_price: None })
@@ -693,7 +697,13 @@ impl QueryService {
 
     pub fn get_instrument_registry(&self) -> QueryResult<InstrumentRegistryDto> {
         let engine = self.get_engine_lock()?;
-        Ok(InstrumentRegistryDto { instruments: engine.state.financial_system.instruments.instruments.clone() })
+        let registry = &engine.state.financial_system.instrument_registry;
+        Ok(InstrumentRegistryDto {
+            instruments: engine.state.financial_system.instruments.instruments.clone(),
+            templates: registry.templates.values().cloned().collect(),
+            series: registry.series.values().cloned().collect(),
+            lots: registry.lots.values().cloned().collect(),
+        })
     }
 
     pub fn get_market_detail(&self, market_id_str: &str) -> QueryResult<MarketDetailDto> {

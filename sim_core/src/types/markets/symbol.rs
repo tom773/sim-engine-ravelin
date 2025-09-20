@@ -144,6 +144,9 @@ fn derive_instrument_symbol(inst: &Instrument) -> Symbol {
                     BondType::Government => "GOV",
                     BondType::Corporate => "CORP",
                     BondType::InterbankLoan => "IBL",
+                    BondType::Municipal => "MUNI",
+                    BondType::Agency => "AGY",
+                    BondType::Supranational => "SUPRA",
                 };
 
                 let tenor = Tenor::from_years(b.original_tenor_years());

@@ -192,7 +192,7 @@ impl BalanceSheet {
                         _ => 0.2,
                     },
                     InstrumentType::Debt(DebtInstrument::Bond(b)) => match b.bond_type {
-                        BondType::Government => 0.0,
+                        BondType::Government | BondType::Municipal | BondType::Agency | BondType::Supranational => 0.0,
                         BondType::Corporate => match b.rating {
                             CreditRating::Corporate(SpCreditRating::AAA)
                             | CreditRating::Corporate(SpCreditRating::AA) => 0.2,

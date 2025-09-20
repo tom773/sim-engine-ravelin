@@ -1,4 +1,5 @@
 use crate::prelude::*;
+use crate::types::instrument::archetypes::MarketProfile;
 use chrono::Months;
 use chrono::NaiveDate;
 use rust_decimal_macros::dec;
@@ -19,20 +20,28 @@ fn classify_market(bond_type: BondType, issue: NaiveDate, maturity: NaiveDate) -
     let days = (maturity - issue).num_days();
     let money = days <= 365;
     match (bond_type, money) {
-        (BondType::Government, true) | (BondType::InterbankLoan, true) => {
-            InstrumentMarket::MoneyMarket(MoneyMarketSegment::SovereignShortTerm)
-        }
+        (BondType::Government, true)
+        | (BondType::Municipal, true)
+        | (BondType::Agency, true)
+        | (BondType::Supranational, true)
+        | (BondType::InterbankLoan, true) => InstrumentMarket::MoneyMarket(MoneyMarketSegment::SovereignShortTerm),
         (BondType::Corporate, true) => InstrumentMarket::MoneyMarket(MoneyMarketSegment::CorporateShortTerm),
-        (BondType::Government, false) | (BondType::InterbankLoan, false) => {
-            InstrumentMarket::CapitalMarket(CapitalMarketSegment::SovereignLongTerm)
-        }
+        (BondType::Government, false)
+        | (BondType::Municipal, false)
+        | (BondType::Agency, false)
+        | (BondType::Supranational, false)
+        | (BondType::InterbankLoan, false) => InstrumentMarket::CapitalMarket(CapitalMarketSegment::SovereignLongTerm),
         (BondType::Corporate, false) => InstrumentMarket::CapitalMarket(CapitalMarketSegment::CorporateCredit),
     }
 }
 
+fn profile_for_market(market: InstrumentMarket) -> MarketProfile {
+    MarketProfile::from_market(market)
+}
+
 pub struct CashBuilder {
     id: InstrumentId,
-    market: Option<InstrumentMarket>,
+    market: Option<MarketProfile>,
     details: CashDetails,
     listability: Listability,
 }
@@ -52,22 +61,20 @@ impl Instrument {
 
 impl CashBuilder {
     pub fn market(mut self, m: InstrumentMarket) -> Self {
-        self.market = Some(m);
+        self.market = Some(profile_for_market(m));
         self
     }
     pub fn build(self) -> Instrument {
-        Instrument {
-            id: self.id,
-            instrument_type: InstrumentType::Cash(self.details),
-            instrument_market: self.market.unwrap_or(InstrumentMarket::MoneyMarket(MoneyMarketSegment::Interbank)),
-            listability: self.listability,
-        }
+        let profile = self
+            .market
+            .unwrap_or_else(|| profile_for_market(InstrumentMarket::MoneyMarket(MoneyMarketSegment::Interbank)));
+        Instrument::new(self.id, InstrumentType::Cash(self.details), profile).with_listability(self.listability)
     }
 }
 
 pub struct BondBuilder {
     id: InstrumentId,
-    market: Option<InstrumentMarket>,
+    market: Option<MarketProfile>,
     details: BondDetails,
     listability: Listability,
 }
@@ -131,13 +138,13 @@ impl BondBuilder {
         self
     }
     pub fn market(mut self, m: InstrumentMarket) -> Self {
-        self.market = Some(m);
+        self.market = Some(profile_for_market(m));
         self
     }
 
     pub fn auto_market(mut self) -> Self {
         let m = classify_market(self.details.bond_type, self.details.issue_date, self.details.maturity_date);
-        self.market = Some(m);
+        self.market = Some(profile_for_market(m));
         self.listability = Listability::Listed(VenueType::CentralLimitOrderBook);
         self
     }
@@ -155,14 +162,12 @@ impl BondBuilder {
             return Err(BuildError::BadFrequency);
         }
 
-        Ok(Instrument {
-            id: self.id,
-            instrument_type: InstrumentType::Debt(DebtInstrument::Bond(self.details)),
-            instrument_market: self
-                .market
-                .unwrap_or_else(|| classify_market(d.bond_type, d.issue_date, d.maturity_date)),
-            listability: self.listability,
-        })
+        let profile = self
+            .market
+            .unwrap_or_else(|| profile_for_market(classify_market(d.bond_type, d.issue_date, d.maturity_date)));
+
+        Ok(Instrument::new(self.id, InstrumentType::Debt(DebtInstrument::Bond(self.details)), profile)
+            .with_listability(self.listability))
     }
 }
 
@@ -170,10 +175,10 @@ pub fn today() -> NaiveDate {
     chrono::Utc::now().date_naive()
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum MarketChoice {
     Auto,
-    Set(InstrumentMarket),
+    Set(MarketProfile),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -221,17 +226,13 @@ impl Instrument {
             last_accrual_date: Some(maturity_date - chrono::Duration::days(1)),
         };
 
-        let instrument_market = match market {
-            MarketChoice::Set(m) => m,
-            MarketChoice::Auto => classify_market(bond_type, issue_date, maturity_date),
+        let market_profile = match market {
+            MarketChoice::Set(profile) => profile,
+            MarketChoice::Auto => profile_for_market(classify_market(bond_type, issue_date, maturity_date)),
         };
 
-        Ok(Instrument {
-            id,
-            instrument_type: InstrumentType::Debt(DebtInstrument::Bond(details)),
-            instrument_market,
-            listability: Listability::Listed(VenueType::CentralLimitOrderBook),
-        })
+        Ok(Instrument::new(id, InstrumentType::Debt(DebtInstrument::Bond(details)), market_profile)
+            .with_listability(Listability::Listed(VenueType::CentralLimitOrderBook)))
     }
 
     pub fn bond_fixed(
@@ -316,56 +317,52 @@ impl Instrument {
 
 impl Instrument {
     pub fn loan(id: InstrumentId, loan_details: LoanDetails) -> Self {
-        Instrument {
-            id,
-            instrument_type: InstrumentType::Debt(DebtInstrument::Loan(loan_details)),
-            instrument_market: InstrumentMarket::Unlisted,
-            listability: Listability::Unlisted,
-        }
+        Instrument::new(id, InstrumentType::Debt(DebtInstrument::Loan(loan_details)), MarketProfile::unlisted())
+            .with_listability(Listability::Unlisted)
     }
 
     pub fn credit_line(id: InstrumentId, credit_line_details: CreditLineDetails) -> Self {
-        Instrument {
+        Instrument::new(
             id,
-            instrument_type: InstrumentType::Debt(DebtInstrument::CreditLine(credit_line_details)),
-            instrument_market: InstrumentMarket::Unlisted,
-            listability: Listability::Unlisted,
-        }
+            InstrumentType::Debt(DebtInstrument::CreditLine(credit_line_details)),
+            MarketProfile::unlisted(),
+        )
+        .with_listability(Listability::Unlisted)
     }
     pub fn consumer_mortgage(id: InstrumentId, details: LoanDetails) -> Self {
-        Instrument {
+        Instrument::new(
             id,
-            instrument_type: InstrumentType::Debt(DebtInstrument::Consumer(ConsumerDebt::ResidentialMortgage(details))),
-            instrument_market: InstrumentMarket::Unlisted,
-            listability: Listability::Unlisted,
-        }
+            InstrumentType::Debt(DebtInstrument::Consumer(ConsumerDebt::ResidentialMortgage(details))),
+            MarketProfile::unlisted(),
+        )
+        .with_listability(Listability::Unlisted)
     }
 
     pub fn consumer_auto(id: InstrumentId, details: LoanDetails) -> Self {
-        Instrument {
+        Instrument::new(
             id,
-            instrument_type: InstrumentType::Debt(DebtInstrument::Consumer(ConsumerDebt::AutoLoan(details))),
-            instrument_market: InstrumentMarket::Unlisted,
-            listability: Listability::Unlisted,
-        }
+            InstrumentType::Debt(DebtInstrument::Consumer(ConsumerDebt::AutoLoan(details))),
+            MarketProfile::unlisted(),
+        )
+        .with_listability(Listability::Unlisted)
     }
 
     pub fn consumer_personal(id: InstrumentId, details: LoanDetails) -> Self {
-        Instrument {
+        Instrument::new(
             id,
-            instrument_type: InstrumentType::Debt(DebtInstrument::Consumer(ConsumerDebt::PersonalLoan(details))),
-            instrument_market: InstrumentMarket::Unlisted,
-            listability: Listability::Unlisted,
-        }
+            InstrumentType::Debt(DebtInstrument::Consumer(ConsumerDebt::PersonalLoan(details))),
+            MarketProfile::unlisted(),
+        )
+        .with_listability(Listability::Unlisted)
     }
 
     pub fn consumer_credit_card(id: InstrumentId, details: CreditLineDetails) -> Self {
-        Instrument {
+        Instrument::new(
             id,
-            instrument_type: InstrumentType::Debt(DebtInstrument::Consumer(ConsumerDebt::CreditCard(details))),
-            instrument_market: InstrumentMarket::Unlisted,
-            listability: Listability::Unlisted,
-        }
+            InstrumentType::Debt(DebtInstrument::Consumer(ConsumerDebt::CreditCard(details))),
+            MarketProfile::unlisted(),
+        )
+        .with_listability(Listability::Unlisted)
     }
 }
 

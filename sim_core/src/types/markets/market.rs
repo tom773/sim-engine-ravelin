@@ -99,7 +99,7 @@ impl ListingRegistry {
 pub fn listing_key_from_instrument(inst: &Instrument) -> ListingKey {
     match &inst.instrument_type {
         InstrumentType::Debt(DebtInstrument::Bond(b)) => match b.bond_type {
-            BondType::Government => {
+            BondType::Government | BondType::Municipal | BondType::Agency | BondType::Supranational => {
                 let years = b.original_tenor_years().round() as u16;
                 ListingKey::GovBond { tenor_years: years.max(1) }
             }

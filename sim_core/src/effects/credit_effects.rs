@@ -1,3 +1,4 @@
+use crate::types::instrument::archetypes::MarketProfile;
 use crate::*;
 use chrono::NaiveDate;
 use rust_decimal_macros::dec;
@@ -91,12 +92,12 @@ impl StateEffectApplicator {
                     DebtInstrument::Loan(loan.details.clone())
                 };
 
-                let inst = Instrument {
-                    id: loan.instrument_id,
-                    instrument_type: InstrumentType::Debt(debt_instrument),
-                    instrument_market: InstrumentMarket::Unlisted,
-                    listability: Listability::Unlisted,
-                };
+                let inst = Instrument::new(
+                    loan.instrument_id,
+                    InstrumentType::Debt(debt_instrument),
+                    MarketProfile::unlisted(),
+                )
+                .with_listability(Listability::Unlisted);
 
                 fs.instruments.instruments.insert(loan.instrument_id, inst);
 
@@ -194,12 +195,14 @@ impl StateEffectApplicator {
                     .register_facility(facility.clone())
                     .map_err(EffectError::FinancialSystemError)?;
 
-                let inst = Instrument {
-                    id: facility.instrument_id,
-                    instrument_type: InstrumentType::Debt(DebtInstrument::CreditLine(facility.details.clone())),
-                    instrument_market: InstrumentMarket::MoneyMarket(MoneyMarketSegment::CorporateShortTerm),
-                    listability: Listability::Unlisted,
-                };
+                let profile =
+                    MarketProfile::from_market(InstrumentMarket::MoneyMarket(MoneyMarketSegment::CorporateShortTerm));
+                let inst = Instrument::new(
+                    facility.instrument_id,
+                    InstrumentType::Debt(DebtInstrument::CreditLine(facility.details.clone())),
+                    profile,
+                )
+                .with_listability(Listability::Unlisted);
 
                 state.financial_system.instruments.instruments.insert(facility.instrument_id, inst);
                 Ok(())

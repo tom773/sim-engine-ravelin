@@ -1,4 +1,8 @@
 use crate::prelude::*;
+use crate::types::instrument::archetypes::{
+    Amortization, CollateralType, Compounding, Covenant, CreditRating, FacilityType, PaymentFrequency,
+    PrepaymentPenalty, PrepaymentTerms, RateIndex, SpCreditRating,
+};
 use chrono::NaiveDate;
 use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
@@ -28,15 +32,6 @@ pub struct LoanTerms {
     pub collateral_required: bool,
     pub loan_to_value_ratio: Option<f64>,
     pub purpose: LoanPurpose,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub enum PaymentFrequency {
-    Monthly,
-    Quarterly,
-    SemiAnnual,
-    Annual,
-    InterestOnly,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -247,45 +242,6 @@ impl Default for LoanDetails {
         }
     }
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum SpCreditRating {
-    AAA,
-    AA,
-    A,
-    BBB,
-    BB,
-    B,
-    CCC,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum ConsumerCreditRating {
-    Prime,
-    NearPrime,
-    Subprime,
-    DeepSubprime,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum CreditRating {
-    Government(SpCreditRating),
-    Corporate(SpCreditRating),
-    Consumer(ConsumerCreditRating),
-}
-
-impl CreditRating {
-    pub fn government_aaa() -> Self {
-        CreditRating::Government(SpCreditRating::AAA)
-    }
-
-    pub fn corporate_bbb() -> Self {
-        CreditRating::Corporate(SpCreditRating::BBB)
-    }
-
-    pub fn consumer_prime() -> Self {
-        CreditRating::Consumer(ConsumerCreditRating::Prime)
-    }
-}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CreditLineDetails {
     pub facility_id: Uuid,
@@ -358,57 +314,6 @@ pub enum LoanType {
     PersonalLoan,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum FacilityType {
-    Revolver,
-    TermLoanFacility,
-    Overdraft,
-    LetterOfCredit,
-    MultiCurrency,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum RateIndex {
-    RBACashRate,
-    BBSW1M,
-    BBSW3M,
-    BBSW6M,
-    SOFR,
-    Fixed,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum Compounding {
-    Simple,
-    Compounded,
-    EffectiveInterestRate,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum Amortization {
-    Bullet,
-    Linear,
-    Annuity,
-    InterestOnly,
-    Custom,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PrepaymentTerms {
-    pub allowed: bool,
-    pub penalty_type: PrepaymentPenalty,
-    pub lockout_period_months: Option<u32>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum PrepaymentPenalty {
-    None,
-    FixedAmount(i64),
-    PercentOfPrincipal(u32),
-    MakeWhole,
-    YieldMaintenance,
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ImpairmentState {
     pub stage: ImpairmentStage,
@@ -455,59 +360,12 @@ pub struct Lien {
     pub created_date: chrono::NaiveDate,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum CollateralType {
-    Securities { instrument_id: InstrumentId, quantity: f64, haircut: f64 },
-    RealEstate { property_id: Uuid, valuation: Money, ltv_limit: f64 },
-    Receivables { debtor: AgentId, amount: Money },
-    Cash { amount: Money },
-    Other { description: String, value: Money },
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum LienStatus {
     Active,
     Released,
     Enforced,
     Subordinated,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Covenant {
-    pub covenant_type: CovenantType,
-    pub status: CovenantStatus,
-    pub test_frequency: TestFrequency,
-    pub last_test_date: Option<chrono::NaiveDate>,
-    pub cure_period_days: Option<u32>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum CovenantType {
-    DebtToEquity { max_ratio: f64 },
-    InterestCoverage { min_ratio: f64 },
-    CurrentRatio { min_ratio: f64 },
-    MinimumNetWorth { amount: Money },
-    MaximumCapex { amount: Money },
-    RestrictedPayments,
-    ChangeOfControl,
-    CrossDefault,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum CovenantStatus {
-    InCompliance,
-    Breached { breach_date: chrono::NaiveDate },
-    Waived { until_date: chrono::NaiveDate },
-    Cured,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum TestFrequency {
-    Monthly,
-    Quarterly,
-    SemiAnnual,
-    Annual,
-    OnDemand,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]

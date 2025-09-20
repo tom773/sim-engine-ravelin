@@ -1,4 +1,5 @@
 use crate::prelude::*;
+use crate::types::instrument::archetypes::MarketProfile;
 use crate::types::money::Money;
 use ordered_float::NotNan;
 use rust_decimal::prelude::*;
@@ -23,6 +24,7 @@ pub fn is_security(inst: &Instrument) -> bool {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FinancialSystem {
     pub instruments: InstrumentCatalog,
+    pub instrument_registry: InstrumentRegistry,
     #[serde_as(as = "HashMap<DisplayFromStr, _>")]
     pub balance_sheets: HashMap<AgentId, BalanceSheet>,
     pub central_bank: CentralBank,
@@ -93,6 +95,7 @@ impl Default for FinancialSystem {
 
         Self {
             instruments: InstrumentCatalog::default(),
+            instrument_registry: InstrumentRegistry::default(),
             balance_sheets,
             central_bank,
             government,
@@ -166,7 +169,7 @@ impl FinancialSystem {
         let inst = Instrument::new(
             inst_id,
             InstrumentType::RealAsset(RealAssetType::Inventory { owner, goods: std::collections::HashMap::new() }),
-            InstrumentMarket::CapitalMarket(CapitalMarketSegment::StructuredFinance),
+            MarketProfile::from_market(InstrumentMarket::CapitalMarket(CapitalMarketSegment::StructuredFinance)),
         );
         self.instruments.instruments.insert(inst_id, inst);
         let bs = self.balance_sheets.entry(owner).or_insert_with(|| BalanceSheet::new(owner));

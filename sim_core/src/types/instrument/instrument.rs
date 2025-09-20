@@ -1,4 +1,5 @@
 use crate::prelude::*;
+use crate::types::instrument::archetypes::{BondType, CashFlow, CashType, MarketProfile, VenueType};
 use crate::types::money::{Money, Rate};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
@@ -11,22 +12,15 @@ pub enum Listability {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum VenueType {
-    CentralLimitOrderBook,
-    PostedRates,
-    OTC,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Instrument {
     pub id: InstrumentId,
     pub instrument_type: InstrumentType,
-    pub instrument_market: InstrumentMarket,
+    pub market_profile: MarketProfile,
     pub listability: Listability,
 }
 
 impl Instrument {
-    pub fn new(id: InstrumentId, instrument_type: InstrumentType, instrument_market: InstrumentMarket) -> Self {
+    pub fn new(id: InstrumentId, instrument_type: InstrumentType, market_profile: MarketProfile) -> Self {
         let listability = match &instrument_type {
             InstrumentType::Cash(details) => match details.cash_type {
                 CashType::DemandDeposit | CashType::SavingsDeposit => Listability::Unlisted,
@@ -41,7 +35,7 @@ impl Instrument {
             _ => Listability::Listed(VenueType::CentralLimitOrderBook),
         };
 
-        Self { id, instrument_type, instrument_market, listability }
+        Self { id, instrument_type, market_profile, listability }
     }
 
     pub fn with_listability(mut self, listability: Listability) -> Self {
@@ -88,6 +82,9 @@ impl Instrument {
                     BondType::Corporate => "Corporate Bond",
                     BondType::Government => "Government Bond",
                     BondType::InterbankLoan => "Interbank Loan",
+                    BondType::Municipal => "Municipal Bond",
+                    BondType::Agency => "Agency Bond",
+                    BondType::Supranational => "Supranational Bond",
                 },
                 DebtInstrument::Loan(_) => "Loan",
                 DebtInstrument::Consumer(c) => match c {
@@ -153,68 +150,12 @@ pub struct CashDetails {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum CashType {
-    DemandDeposit,
-    SavingsDeposit,
-    TimeDeposit,
-    Currency,
-    CentralBankReserves,
-    VaultCash,
-    TreasuryGeneralAccount,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Currency {
     USD,
     AUD,
     EUR,
     JPY,
     GBP,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum InstrumentMarket {
-    MoneyMarket(MoneyMarketSegment),
-    CapitalMarket(CapitalMarketSegment),
-    DerivativesMarket(DerivativesMarketSegment),
-    Unlisted,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum MoneyMarketSegment {
-    Interbank,
-    SovereignShortTerm,
-    CorporateShortTerm,
-    Repo,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum CapitalMarketSegment {
-    Equity,
-    SovereignLongTerm,
-    CorporateCredit,
-    StructuredFinance,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum DerivativesMarketSegment {
-    Options,
-    Futures,
-    Swaps,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum BondType {
-    Corporate,
-    Government,
-    InterbankLoan,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum CashFlow {
-    Zero,
-    Fixed,
-    Floating,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

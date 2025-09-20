@@ -208,6 +208,9 @@ pub struct MarketIndexDto {
 pub struct InstrumentRegistryDto {
     #[serde_as(as = "HashMap<DisplayFromStr, _>")]
     pub instruments: HashMap<InstrumentId, Instrument>,
+    pub templates: Vec<InstrumentTemplate>,
+    pub series: Vec<InstrumentSeries>,
+    pub lots: Vec<InstrumentLot>,
 }
 
 #[serde_as]
