@@ -397,6 +397,9 @@ impl Scenario {
         factory.seed_central_bank_portfolio(total_reserves + DEFAULT_TGA_BALANCE);
 
         let agent_ids = factory.get_agent_id_map().clone();
+        drop(factory);
+
+        state.financial_system.normalise_position_book_values();
 
         for (iid, inst) in state.financial_system.instruments.instruments.clone() {
             state.financial_system.exchange.ensure_listed(iid, &inst);

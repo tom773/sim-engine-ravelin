@@ -75,11 +75,7 @@ pub fn issue_corporate_bond(
     let instrument_id = instrument.instrument_id();
 
     let catalog_instrument = instrument.clone();
-    catalog.insert(instrument_id, catalog_instrument.clone());
-    catalog.insert_core(instrument_id, catalog_instrument.clone());
-
-    registry.update_cache(instrument);
-    registry.update_core_cache(catalog_instrument);
+    catalog.insert(instrument_id, catalog_instrument);
 
     Ok(IssuedBond { template_id: spec.template_id, series_id, instrument_id })
 }

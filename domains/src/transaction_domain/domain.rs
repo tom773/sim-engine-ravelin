@@ -3,6 +3,7 @@ use chrono::NaiveDate;
 use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
+use sim_core::types::markets::BondPricingTerms;
 use sim_core::*;
 use uuid::Uuid;
 
@@ -537,7 +538,7 @@ impl TransactionsDomain {
             if let Some(inst) = fs.instruments.instruments.get(&inst_id) {
                 if let InstrumentRuntime::Bond(details) = &inst.state() {
                     let pricer = GovTermStructurePricer::new(
-                        details.clone(),
+                        BondPricingTerms::from(details),
                         TermStructureMethod::default(),
                         fs.pricing_feeds.clone(),
                     );

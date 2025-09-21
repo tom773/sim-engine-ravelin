@@ -5,6 +5,7 @@ use rand::prelude::*;
 use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
 use sim_core::types::core_utils::time::is_coupon_date;
+use sim_core::types::markets::BondPricingTerms;
 use sim_core::*;
 use std::time::Instant;
 use tracing::instrument;
@@ -706,7 +707,7 @@ impl StepHandler for DebtAuctionsHandler {
                             let y_backstop =
                                 (engine.state.financial_system.central_bank.policy_rate_bps - dec!(50)).max(dec!(0));
                             let pricer = GovTermStructurePricer::new(
-                                b.clone(),
+                                BondPricingTerms::from(b),
                                 TermStructureMethod::default(),
                                 engine.state.financial_system.pricing_feeds.clone(),
                             );

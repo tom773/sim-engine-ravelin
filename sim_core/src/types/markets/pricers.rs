@@ -5,6 +5,27 @@ use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
+
+/// Static bond terms used for pricing so markets don't keep copies of mutable runtime state.
+#[derive(Clone, Debug)]
+pub struct BondPricingTerms {
+    pub archetype: BondArchetype,
+    pub issue_date: NaiveDate,
+    pub maturity_date: NaiveDate,
+}
+
+impl BondPricingTerms {
+    fn remaining_tenor_years(&self, as_of: NaiveDate) -> f64 {
+        let days = (self.maturity_date - as_of).num_days().max(0);
+        days as f64 / 365.25
+    }
+}
+
+impl From<&BondState> for BondPricingTerms {
+    fn from(state: &BondState) -> Self {
+        Self { archetype: state.archetype.clone(), issue_date: state.issue_date, maturity_date: state.maturity_date }
+    }
+}
 #[derive(Clone, Debug)]
 pub enum TermStructureMethod {
     Bootstrapped,
@@ -17,24 +38,25 @@ impl Default for TermStructureMethod {
 }
 #[derive(Clone, Debug)]
 pub struct GovTermStructurePricer {
-    spec: BondState,
+    terms: BondPricingTerms,
     method: TermStructureMethod,
     feeds: PricingFeeds,
 }
 
 impl GovTermStructurePricer {
-    pub fn new(spec: BondState, method: TermStructureMethod, feeds: PricingFeeds) -> Self {
-        Self { spec, method, feeds }
+    pub fn new(terms: BondPricingTerms, method: TermStructureMethod, feeds: PricingFeeds) -> Self {
+        Self { terms, method, feeds }
     }
     fn coupon_rate(&self) -> Decimal {
-        let coupon_rate = self.spec.archetype.coupon_rate_bps.to_f64().unwrap_or(0.0);
+        let coupon_rate = self.terms.archetype.coupon_rate_bps.to_f64().unwrap_or(0.0);
         Decimal::from_f64(coupon_rate / 10_000.0).unwrap_or(Decimal::ZERO)
     }
 
     fn price_from_yield_inner(&self, y_annual: f64, as_of: NaiveDate) -> Option<Money> {
-        let freq = self.spec.archetype.frequency_per_year.max(1) as i32;
-        let n = (self.spec.remaining_tenor_years(as_of) * self.spec.archetype.frequency_per_year as f64).ceil().max(0.0)
-            as i32;
+        let freq = self.terms.archetype.frequency_per_year.max(1) as i32;
+        let n = (self.terms.remaining_tenor_years(as_of) * self.terms.archetype.frequency_per_year as f64)
+            .ceil()
+            .max(0.0) as i32;
 
         const MAX_PERIODS: i32 = 4000;
         if n > MAX_PERIODS {
@@ -45,8 +67,8 @@ impl GovTermStructurePricer {
         if y <= dec!(-1.0) {
             return None;
         }
-        let c = self.spec.archetype.face_value
-            * (self.coupon_rate() / Decimal::from(self.spec.archetype.frequency_per_year));
+        let c = self.terms.archetype.face_value
+            * (self.coupon_rate() / Decimal::from(self.terms.archetype.frequency_per_year));
         let mut pv = dec!(0);
 
         let v = dec!(1) / (dec!(1) + y);
@@ -57,7 +79,7 @@ impl GovTermStructurePricer {
             pv += c.0 * v_n;
         }
 
-        pv += self.spec.archetype.face_value.0 * v_n;
+        pv += self.terms.archetype.face_value.0 * v_n;
         Some(Money(pv))
     }
 
@@ -82,7 +104,7 @@ impl GovTermStructurePricer {
     }
 
     fn curve_yield(&self, as_of: NaiveDate) -> Option<f64> {
-        let tenor = self.spec.remaining_tenor_years(as_of).max(0.0);
+        let tenor = self.terms.remaining_tenor_years(as_of).max(0.0);
         match &self.method {
             TermStructureMethod::Bootstrapped => {
                 if let Some(y) = self.feeds.yield_curve.read().ok().and_then(|yc| interp_linear(&yc.points, tenor)) {
@@ -198,5 +220,57 @@ impl Pricer<GoodProduct> for CostPlusGoodsPricer {
     }
     fn fair_price(&self, key: &GoodId) -> Option<Money> {
         self.fair_price_inner(key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::instrument::archetypes::{BondArchetype, CashFlow};
+    use chrono::NaiveDate;
+    use uuid::Uuid;
+
+    #[test]
+    fn gov_pricer_uses_archetype_terms_only() {
+        let issue_date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
+        let maturity_date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let archetype = BondArchetype {
+            bond_type: BondType::Government,
+            cash_flow_type: CashFlow::Fixed,
+            day_count: DayCount::Act360,
+            face_value: Money::from(100_i64),
+            coupon_rate_bps: BasisPoints::new(500, 1),
+            frequency_per_year: 1,
+            covenants: Vec::new(),
+        };
+
+        let mut bond_state = BondState::new(
+            AgentId(Uuid::new_v4()),
+            archetype,
+            issue_date,
+            maturity_date,
+            1_000.0,
+            None,
+            Some(CreditRating::government_aaa()),
+        );
+
+        let baseline_terms = BondPricingTerms::from(&bond_state);
+
+        bond_state.outstanding_units = 25_000.0;
+        let mutated_terms = BondPricingTerms::from(&bond_state);
+
+        let feeds = PricingFeeds::default();
+        if let Ok(mut date) = feeds.current_date.write() {
+            *date = issue_date;
+        }
+
+        let instrument_id = InstrumentId(Uuid::new_v4());
+        let pricer = GovTermStructurePricer::new(baseline_terms, TermStructureMethod::Bootstrapped, feeds.clone());
+        let pricer_after = GovTermStructurePricer::new(mutated_terms, TermStructureMethod::Bootstrapped, feeds);
+
+        let price = pricer.price_from_yield(&instrument_id, 0.05).expect("pricing should succeed");
+        let price_after = pricer_after.price_from_yield(&instrument_id, 0.05).expect("pricing should succeed");
+
+        assert_eq!(price, price_after);
     }
 }

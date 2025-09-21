@@ -747,12 +747,12 @@ fn compact_credit_effect(effect: &CreditEffect) -> Value {
 
 fn compact_credit_facility(facility: &CreditFacility) -> Value {
     json!({
-        "facility": short_uuid(facility.details.facility_id),
-        "lender": short_agent(facility.details.lender),
-        "borrower": short_agent(facility.details.borrower),
-        "commitment": round_money(facility.details.commitment_amount),
-        "available": round_money(facility.details.available_amount),
-        "drawn": round_money(facility.details.drawn_amount),
+        "facility": short_uuid(facility.state.facility_id),
+        "lender": short_agent(facility.state.lender),
+        "borrower": short_agent(facility.state.borrower),
+        "commitment": round_money(facility.state.commitment_amount),
+        "available": round_money(facility.state.available_amount),
+        "drawn": round_money(facility.state.drawn_amount),
         "status": format!("{:?}", facility.status),
     })
 }

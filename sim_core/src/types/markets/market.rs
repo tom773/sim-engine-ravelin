@@ -1,4 +1,5 @@
 use crate::prelude::*;
+use crate::types::markets::pricers::BondPricingTerms;
 use chrono::NaiveDate;
 use ordered_float::OrderedFloat;
 use serde::{
@@ -35,11 +36,16 @@ pub trait Product {
 pub enum ListingKey {
     GovBond { tenor_years: u16 },
     CorpBond { rating: CreditRating, tenor_bucket: TenorBucket },
-    CashON,
+    Cash { cash_type: CashType },
+    CreditLoan { loan_type: LoanType },
+    ConsumerLoan { category: ConsumerLoanCategory },
+    CreditFacility { facility_type: FacilityType },
+    CreditCard,
+    TradeCredit,
     RealAsset,
     Equity { issuer: AgentId },
     Derivative { underlying: UnderlyingAsset, derivative_type_key: DerivativeTypeKey },
-    StructuredProduct { rating: CreditRating, tranche_type: StructuredProductType },
+    StructuredProduct { rating: CreditRating, tranche_type: StructuredTrancheType },
     Repo,
 }
 
@@ -47,6 +53,7 @@ pub enum ListingKey {
 pub enum DerivativeTypeKey {
     Option { style: OptionStyle, strike: OrderedFloat<f64>, expiry: NaiveDate },
     Future { expiry: NaiveDate },
+    Custom { label: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -96,7 +103,7 @@ impl ListingRegistry {
 }
 
 pub fn listing_key_from_instrument(inst: &Instrument) -> ListingKey {
-    match &inst.state() {
+    match inst.state() {
         InstrumentRuntime::Bond(b) => match b.bond_type() {
             BondType::Government | BondType::Municipal | BondType::Agency | BondType::Supranational => {
                 let years = b.original_tenor_years().round() as u16;
@@ -109,14 +116,188 @@ pub fn listing_key_from_instrument(inst: &Instrument) -> ListingKey {
                     tenor_bucket: TenorBucket::from_years(years),
                 }
             }
-            BondType::InterbankLoan => ListingKey::CashON,
+            BondType::InterbankLoan => ListingKey::CreditLoan { loan_type: LoanType::WorkingCapital },
         },
-        InstrumentRuntime::Cash(_) => ListingKey::CashON,
+        InstrumentRuntime::Cash(c) => ListingKey::Cash { cash_type: c.cash_type },
+        InstrumentRuntime::Credit(credit) => match credit {
+            CreditState::Loan(loan) => ListingKey::CreditLoan { loan_type: loan.loan_type },
+            CreditState::ConsumerLoan { category, .. } => ListingKey::ConsumerLoan { category: *category },
+            CreditState::ConsumerCreditCard(_) => ListingKey::CreditCard,
+            CreditState::TradeCredit(_) => ListingKey::TradeCredit,
+            CreditState::Facility(facility) => ListingKey::CreditFacility { facility_type: facility.facility_type },
+        },
         InstrumentRuntime::RealAsset(_) => ListingKey::RealAsset,
         InstrumentRuntime::Equity(e) => ListingKey::Equity { issuer: e.profile.issuer },
         InstrumentRuntime::Repo(_) => ListingKey::Repo,
-        InstrumentRuntime::Credit(_) => ListingKey::CashON,
-        _ => ListingKey::CashON,
+        InstrumentRuntime::Structured(tranche) => {
+            ListingKey::StructuredProduct { rating: tranche.rating, tranche_type: tranche.tranche_type }
+        }
+        InstrumentRuntime::Derivative(derivative) => {
+            let fallback_date = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+            let derivative_type_key = match &derivative.contract {
+                DerivativeContract::Option(option) => {
+                    let strike = option.strike_price.to_f64();
+                    let expiry = derivative.expiry_date.unwrap_or(fallback_date);
+                    DerivativeTypeKey::Option { style: option.style, strike: OrderedFloat(strike), expiry }
+                }
+                DerivativeContract::Future(_) => {
+                    let expiry = derivative.expiry_date.unwrap_or(fallback_date);
+                    DerivativeTypeKey::Future { expiry }
+                }
+                DerivativeContract::Custom { description } => DerivativeTypeKey::Custom { label: description.clone() },
+            };
+
+            ListingKey::Derivative { underlying: derivative.underlying.clone(), derivative_type_key }
+        }
+    }
+}
+
+fn instrument_listing_agent(inst: &Instrument) -> Option<AgentId> {
+    match inst.state() {
+        InstrumentRuntime::Bond(b) => Some(b.issuer),
+        InstrumentRuntime::Cash(c) => Some(c.issuer),
+        InstrumentRuntime::Credit(credit) => match credit {
+            CreditState::Loan(loan) => Some(loan.lender),
+            CreditState::ConsumerLoan { loan, .. } => Some(loan.lender),
+            CreditState::ConsumerCreditCard(facility) => Some(facility.lender),
+            CreditState::TradeCredit(trade) => Some(trade.creditor),
+            CreditState::Facility(facility) => Some(facility.lender),
+        },
+        InstrumentRuntime::Equity(equity) => Some(equity.profile.issuer),
+        InstrumentRuntime::Structured(tranche) => Some(tranche.issuer),
+        InstrumentRuntime::Derivative(derivative) => Some(derivative.issuer),
+        InstrumentRuntime::Repo(repo) => Some(repo.lender),
+        InstrumentRuntime::RealAsset(real) => match real {
+            RealAssetState::Inventory { owner, .. } => Some(*owner),
+            RealAssetState::Property { owner, .. } => Some(*owner),
+            RealAssetState::Custom { owner, .. } => Some(*owner),
+        },
+    }
+}
+
+impl ListingKey {
+    pub fn label(&self) -> String {
+        match self {
+            ListingKey::GovBond { tenor_years } => format!("Gov Bond {}Y", tenor_years),
+            ListingKey::CorpBond { rating, tenor_bucket } => format!("Corp Bond {:?} {:?}", rating, tenor_bucket),
+            ListingKey::Cash { cash_type } => format!("Cash {:?}", cash_type),
+            ListingKey::CreditLoan { loan_type } => format!("Loan {:?}", loan_type),
+            ListingKey::ConsumerLoan { category } => format!("Consumer Loan {:?}", category),
+            ListingKey::CreditFacility { facility_type } => format!("Credit Facility {:?}", facility_type),
+            ListingKey::CreditCard => "Credit Card".into(),
+            ListingKey::TradeCredit => "Trade Credit".into(),
+            ListingKey::RealAsset => "Real Asset".into(),
+            ListingKey::Equity { issuer } => format!("Equity {}", issuer.0),
+            ListingKey::Derivative { underlying, derivative_type_key } => {
+                format!("Derivative {} on {}", derivative_type_key.label(), underlying_label(underlying))
+            }
+            ListingKey::StructuredProduct { rating, tranche_type } => {
+                format!("Structured {:?} {:?}", rating, tranche_type)
+            }
+            ListingKey::Repo => "Repo".into(),
+        }
+    }
+}
+
+impl DerivativeTypeKey {
+    fn label(&self) -> String {
+        match self {
+            DerivativeTypeKey::Option { style, strike, expiry } => {
+                format!("{:?} Option {:.2} @ {}", style, strike.into_inner(), expiry)
+            }
+            DerivativeTypeKey::Future { expiry } => format!("Future @ {}", expiry),
+            DerivativeTypeKey::Custom { label } => label.clone(),
+        }
+    }
+}
+
+fn underlying_label(underlying: &UnderlyingAsset) -> String {
+    match underlying {
+        UnderlyingAsset::Instrument(id) => format!("Instrument {}", id.0),
+        UnderlyingAsset::Good(good_id) => format!("Good {}", good_id.0),
+        UnderlyingAsset::Index(name) => name.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::instrument::archetypes::{
+        LoanArchetype, LoanRepaymentSchedule, PrepaymentPenalty, PrepaymentTerms,
+    };
+    use chrono::{Duration, NaiveDate};
+    use uuid::Uuid;
+
+    #[test]
+    fn listing_key_maps_business_loans() {
+        let issue_date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
+        let maturity_date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+
+        let loan_archetype = LoanArchetype {
+            facility_type: FacilityType::TermLoanFacility,
+            amortization: Amortization::Annuity,
+            prepayment: PrepaymentTerms {
+                allowed: true,
+                penalty_type: PrepaymentPenalty::None,
+                lockout_period_months: None,
+            },
+            principal: Money::from(500_000_i64),
+            day_count: DayCount::Act360,
+            compounding: Compounding::Simple,
+            rate_structure: RateStructure {
+                base_rate: RateIndex::SOFR,
+                spread_bps: BasisPoints::new(250, 1),
+                floor_bps: None,
+                cap_bps: None,
+            },
+            repayment_schedule: LoanRepaymentSchedule {
+                payment_frequency: PaymentFrequency::Quarterly,
+                term_months: 12,
+            },
+            collateral_requirements: Vec::new(),
+        };
+
+        let impairment = ImpairmentState {
+            stage: ImpairmentStage::Stage1Performing,
+            provision_amount: Money::ZERO,
+            days_past_due: 0,
+            probability_of_default: 0.0,
+            loss_given_default: 0.0,
+            exposure_at_default: Money::ZERO,
+        };
+
+        let loan_state = LoanState::new(
+            Uuid::new_v4(),
+            AgentId(Uuid::new_v4()),
+            AgentId(Uuid::new_v4()),
+            None,
+            LoanType::TermLoan,
+            loan_archetype,
+            Money::from(400_000_i64),
+            issue_date,
+            maturity_date,
+            issue_date + Duration::days(30),
+            issue_date,
+            Vec::new(),
+            Vec::new(),
+            None,
+            impairment,
+            Money::ZERO,
+            Money::ZERO,
+        );
+
+        let instrument = Instrument::new(
+            InstrumentIdentifiers::from(InstrumentId(Uuid::new_v4())),
+            MarketProfile::from_market(InstrumentMarket::MoneyMarket(MoneyMarketSegment::CorporateShortTerm)),
+            Listability::Unlisted,
+            InstrumentRuntime::Credit(CreditState::Loan(loan_state)),
+        );
+
+        let key = listing_key_from_instrument(&instrument);
+        match key {
+            ListingKey::CreditLoan { loan_type } => assert_eq!(loan_type, LoanType::TermLoan),
+            other => panic!("expected credit loan listing key, got {:?}", other),
+        }
     }
 }
 
@@ -180,6 +361,7 @@ impl<P: Product<Quote = Money, Lot = f64>> MarketGeneric<P> {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct MarketIndex {
     pub by_issuer: HashMap<AgentId, Vec<InstrumentId>>,
+    pub by_listing: HashMap<ListingKey, Vec<InstrumentId>>,
     pub by_rating_and_tenor: HashMap<(CreditRating, TenorBucket), Vec<InstrumentId>>,
     pub by_bond_type: HashMap<BondType, Vec<InstrumentId>>,
 }
@@ -260,10 +442,11 @@ impl Exchange {
                 }
                 MarketType::Financial(f) => {
                     if let Some(inst) = instruments.get(&f.key) {
-                        if let InstrumentRuntime::Bond(bond) = &inst.state() {
+                        if let InstrumentRuntime::Bond(bond) = inst.state() {
                             if bond.bond_type() == BondType::Government {
+                                let terms = BondPricingTerms::from(bond);
                                 f.pricer = Arc::new(GovTermStructurePricer::new(
-                                    bond.clone(),
+                                    terms,
                                     TermStructureMethod::default(),
                                     feeds.clone(),
                                 ));
@@ -288,7 +471,8 @@ impl Exchange {
                     InstrumentRuntime::Bond(b) if b.bond_type() == BondType::Government => {
                         let feeds = self.pricing_feeds.clone().expect("attach_pricing_feeds before listing");
                         let method = TermStructureMethod::Bootstrapped;
-                        Arc::new(GovTermStructurePricer::new(b.clone(), method, feeds))
+                        let terms = BondPricingTerms::from(b);
+                        Arc::new(GovTermStructurePricer::new(terms, method, feeds))
                     }
                     _ => Arc::new(NoOpPricer),
                 };
@@ -336,9 +520,14 @@ impl Exchange {
     }
 
     fn update_index_only(&mut self, inst_id: InstrumentId, inst: &Instrument) {
-        if let InstrumentRuntime::Bond(b) = inst.state() {
-            self.index.by_issuer.entry(b.issuer).or_default().push(inst_id);
+        let listing_key = listing_key_from_instrument(inst);
+        self.index.by_listing.entry(listing_key).or_default().push(inst_id);
 
+        if let Some(agent) = instrument_listing_agent(inst) {
+            self.index.by_issuer.entry(agent).or_default().push(inst_id);
+        }
+
+        if let InstrumentRuntime::Bond(b) = inst.state() {
             let tenor_bucket = TenorBucket::from_years(b.original_tenor_years());
             self.index
                 .by_rating_and_tenor

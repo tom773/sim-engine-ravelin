@@ -10,7 +10,7 @@ pub enum CreditAction {
 
     OriginateLoan { loan: Loan, funding_amount: Money },
 
-    OpenCreditFacility { facility: CreditLineDetails },
+    OpenCreditFacility { facility: CreditFacilityState },
 
     FundDrawdown { facility_id: Uuid, loan: Loan, amount: Money },
 

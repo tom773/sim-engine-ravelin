@@ -1,3 +1,4 @@
+use crate::types::markets::BondPricingTerms;
 use crate::*;
 use chrono::NaiveDate;
 use rand::prelude::*;
@@ -36,7 +37,7 @@ pub fn auction_bid_price(
 ) -> Money {
     let local_feeds = feeds.with_date(as_of);
 
-    let pricer = GovTermStructurePricer::new(bond.clone(), TermStructureMethod::default(), local_feeds);
+    let pricer = GovTermStructurePricer::new(BondPricingTerms::from(bond), TermStructureMethod::default(), local_feeds);
 
     let y_decimal = bps_to_decimal(y_bps).to_f64().unwrap_or(0.0);
 

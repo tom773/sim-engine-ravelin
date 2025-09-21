@@ -177,13 +177,13 @@ fn derive_instrument_symbol(inst: &Instrument) -> Symbol {
                 let d = loan.maturity_date.format("%Y%m%d");
                 Symbol(format!("{tag}_{}_{}", short_agent(loan.borrower), d))
             }
-            CreditState::ConsumerCreditCard(details) => {
-                let d = details.expiry_date.format("%Y%m%d");
-                Symbol(format!("CARD_{}_{}", short_agent(details.borrower), d))
+            CreditState::ConsumerCreditCard(facility) => {
+                let d = facility.expiry_date.format("%Y%m%d");
+                Symbol(format!("CARD_{}_{}", short_agent(facility.borrower), d))
             }
-            CreditState::CreditLine(details) => {
-                let d = details.expiry_date.format("%Y%m%d");
-                Symbol(format!("CRED_{}_{}", short_agent(details.borrower), d))
+            CreditState::Facility(facility) => {
+                let d = facility.expiry_date.format("%Y%m%d");
+                Symbol(format!("CRED_{}_{}", short_agent(facility.borrower), d))
             }
             CreditState::TradeCredit(details) => {
                 let d = details.due_date.format("%Y%m%d");

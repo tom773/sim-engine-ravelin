@@ -83,21 +83,7 @@ fn get_market_price(inst: &Instrument, exchange: &Exchange) -> Option<Money> {
             MarketType::Labour(_) => None,
         }
     } else {
-        match inst.state() {
-            InstrumentRuntime::Repo(repo) => Some(repo.cash_principal),
-            InstrumentRuntime::RealAsset(asset) => asset.face_value(),
-            InstrumentRuntime::Cash(_) => Some(Money::from(1_i64)),
-            InstrumentRuntime::Credit(credit) => match credit {
-                CreditState::Loan(loan) => Some(loan.outstanding_principal),
-                CreditState::ConsumerLoan { loan, .. } => Some(loan.outstanding_principal),
-                CreditState::ConsumerCreditCard(details) => Some(details.drawn_amount),
-                CreditState::CreditLine(details) => Some(details.drawn_amount),
-                CreditState::TradeCredit(details) => Some(details.amount),
-            },
-            InstrumentRuntime::Structured(tranche) => Some(tranche.outstanding_notional),
-            InstrumentRuntime::Derivative(derivative) => derivative.notional,
-            _ => None,
-        }
+        inst.unit_par_value()
     }
 }
 
@@ -226,7 +212,8 @@ impl BalanceSheet {
                 };
 
                 let market_value = get_market_price(inst, &system.exchange)
-                    .unwrap_or_else(|| inst.face_value().unwrap_or(Money::from(1000_i64)))
+                    .or_else(|| inst.unit_par_value())
+                    .unwrap_or(Money::ONE)
                     .to_f64()
                     * qty;
                 rwa += market_value * risk_weight;

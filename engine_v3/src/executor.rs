@@ -5,6 +5,7 @@ use ordered_float::NotNan;
 use rand::RngCore;
 use rand::prelude::ThreadRng;
 use rust_decimal::prelude::*;
+use sim_core::types::markets::BondPricingTerms;
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -547,7 +548,7 @@ impl SimulationEngine {
                                             if let Some(mid) = fin_market.book.mid_price() {
                                                 let tenor = b.remaining_tenor_years(self.state.current_date);
                                                 let tmp = GovTermStructurePricer::new(
-                                                    b.clone(),
+                                                    BondPricingTerms::from(b),
                                                     TermStructureMethod::Bootstrapped,
                                                     fs.pricing_feeds.clone(),
                                                 );

@@ -1,3 +1,6 @@
+//! Instrument types combine immutable archetypes (contract templates) with runtime state.
+//! Archetypes describe the long-lived terms, while builders and `inst_core` construct
+//! `InstrumentCore<InstrumentRuntime>` values that flow through registries and catalogs.
 pub mod archetypes;
 pub mod builder;
 pub mod credit;

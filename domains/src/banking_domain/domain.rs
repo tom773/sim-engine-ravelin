@@ -156,17 +156,19 @@ impl BankingDomain {
         let current_date = state.current_date;
         let maturity_date = current_date + chrono::Duration::days(1);
 
+        let face_value = Money::from_f64(amount.max(1.0)).unwrap_or_else(|| Money::from(1_u64));
         let loan_instrument = match Instrument::bond(
             InstrumentId(Uuid::new_v4()),
             borrower_id,
             BondType::InterbankLoan,
-            Money::from((amount as u64).max(1)),
+            face_value,
             current_date,
             maturity_date,
         )
         .coupon_bps(rate_bps)
         .frequency(0)
         .rating(CreditRating::Corporate(SpCreditRating::A))
+        .outstanding_units(1.0)
         .build()
         {
             Ok(inst) => inst,

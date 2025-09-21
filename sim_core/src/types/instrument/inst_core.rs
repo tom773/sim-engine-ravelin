@@ -1,8 +1,9 @@
 use crate::prelude::*;
+// Runtime layer for instruments: concrete, mutable state composed with identifiers and markets.
 use crate::types::instrument::archetypes::{
     BondArchetype, BondType, CashFlow, CashType, Covenant, CreditRating, LoanArchetype, RateIndex,
 };
-use crate::types::instrument::credit::{ConsumerLoanCategory, CreditLineDetails, LoanType, TradeCreditDetails};
+use crate::types::instrument::credit::{ConsumerLoanCategory, CreditFacilityState, LoanType, TradeCreditState};
 use crate::types::instrument::inst_registry::{LotId, SeriesId, TemplateId};
 use crate::types::instrument::instrument::{
     Currency, DerivativeState, EquityState, RealAssetState, RepoState, StructuredTrancheState,
@@ -284,15 +285,32 @@ impl InstrumentRuntime {
             InstrumentRuntime::RealAsset(asset) => asset.face_value(),
         }
     }
+
+    pub fn unit_par_value(&self) -> Option<Money> {
+        match self {
+            InstrumentRuntime::Cash(_) => Some(Money::ONE),
+            InstrumentRuntime::Bond(state) => Some(state.archetype.face_value),
+            InstrumentRuntime::Credit(_) => Some(Money::ONE),
+            InstrumentRuntime::Equity(state) => state.profile.par_value.or(Some(Money::ONE)),
+            InstrumentRuntime::Structured(state) => Some(state.face_value),
+            InstrumentRuntime::Derivative(state) => state.notional,
+            InstrumentRuntime::Repo(state) => Some(state.cash_principal),
+            InstrumentRuntime::RealAsset(asset) => asset.face_value(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CreditState {
     Loan(LoanState),
-    ConsumerLoan { category: ConsumerLoanCategory, loan: LoanState },
-    ConsumerCreditCard(CreditLineDetails),
-    TradeCredit(TradeCreditDetails),
-    CreditLine(CreditLineDetails),
+    ConsumerLoan {
+        category: ConsumerLoanCategory,
+        loan: LoanState,
+    },
+    ConsumerCreditCard(CreditFacilityState),
+    TradeCredit(TradeCreditState),
+    #[serde(alias = "CreditLine")]
+    Facility(CreditFacilityState),
 }
 
 impl CreditState {
@@ -300,9 +318,9 @@ impl CreditState {
         match self {
             CreditState::Loan(loan) => loan.outstanding_principal,
             CreditState::ConsumerLoan { loan, .. } => loan.outstanding_principal,
-            CreditState::ConsumerCreditCard(details) => details.drawn_amount,
-            CreditState::CreditLine(details) => details.drawn_amount,
-            CreditState::TradeCredit(details) => details.amount,
+            CreditState::ConsumerCreditCard(facility) => facility.drawn_amount,
+            CreditState::Facility(facility) => facility.drawn_amount,
+            CreditState::TradeCredit(trade) => trade.amount,
         }
     }
 
@@ -312,7 +330,7 @@ impl CreditState {
             CreditState::ConsumerLoan { .. } => "Consumer Loan",
             CreditState::ConsumerCreditCard(_) => "Credit Card",
             CreditState::TradeCredit(_) => "Trade Credit",
-            CreditState::CreditLine(_) => "Credit Facility",
+            CreditState::Facility(_) => "Credit Facility",
         }
     }
 }
@@ -449,6 +467,10 @@ impl InstrumentCore<InstrumentRuntime> {
         self.state.face_value()
     }
 
+    pub fn unit_par_value(&self) -> Option<Money> {
+        self.state.unit_par_value()
+    }
+
     pub fn label(&self) -> &'static str {
         self.state.label()
     }
@@ -457,5 +479,3 @@ impl InstrumentCore<InstrumentRuntime> {
         self.label()
     }
 }
-
-pub type RuntimeInstrumentCore = InstrumentCore<InstrumentRuntime>;

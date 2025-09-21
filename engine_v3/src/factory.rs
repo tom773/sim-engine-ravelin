@@ -122,7 +122,7 @@ impl<'a> AgentFactory<'a> {
             }
             AssetConfig::Bond { tenor, quantity } => {
                 let gov_id = self.state.financial_system.government.id;
-                let instrument = self.get_or_create_bond_instrument(tenor, gov_id);
+                let instrument = self.get_or_create_bond_instrument(tenor, gov_id, *quantity as f64);
                 self.pending_effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument {
                     instrument: instrument.clone(),
                     creditor: owner_id,
@@ -296,9 +296,9 @@ impl<'a> AgentFactory<'a> {
 
         let cb_id = self.state.financial_system.central_bank.id;
         let gov_id = self.state.financial_system.government.id;
-        let bond = self.get_or_create_bond_instrument("CB_BALANCE", gov_id);
+        let sample_bond = self.get_or_create_bond_instrument("CB_BALANCE", gov_id, 1.0);
 
-        let face_value = bond.face_value().map(|m| m.to_f64()).unwrap_or(1_000.0);
+        let face_value = sample_bond.unit_par_value().map(|m| m.to_f64()).unwrap_or(1_000.0);
         if face_value <= 0.0 {
             return;
         }
@@ -307,6 +307,12 @@ impl<'a> AgentFactory<'a> {
         if quantity <= 0.0 {
             return;
         }
+
+        let bond = if (quantity - 1.0).abs() < f64::EPSILON {
+            sample_bond
+        } else {
+            self.get_or_create_bond_instrument("CB_BALANCE", gov_id, quantity)
+        };
 
         self.pending_effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument {
             instrument: bond,
@@ -351,7 +357,7 @@ impl<'a> AgentFactory<'a> {
         tga
     }
 
-    fn get_or_create_bond_instrument(&mut self, tenor: &str, issuer_id: AgentId) -> Instrument {
+    fn get_or_create_bond_instrument(&mut self, tenor: &str, issuer_id: AgentId, units: f64) -> Instrument {
         let issue = self.state.current_date;
         let maturity = Self::tenor_to_maturity(issue, tenor).unwrap_or_else(|| issue + Duration::days(365 * 2));
         let bond = Instrument::bond(
@@ -364,6 +370,7 @@ impl<'a> AgentFactory<'a> {
         )
         .coupon_bps(dec!(250.0))
         .rating(CreditRating::government_aaa())
+        .outstanding_units(units)
         .auto_market()
         .build()
         .unwrap();

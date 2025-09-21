@@ -151,7 +151,7 @@ impl FinancialSystem {
                         vec![
                             format!("{}:{}", code, &inst_id.0.to_string()[0..4]),
                             format!("{:.2}", holding.total_position()),
-                            format!("{:.0}", inst.face_value().map(|v| v.to_f64()).unwrap_or(1000.0)),
+                            format!("{:.0}", inst.unit_par_value().map(|v| v.to_f64()).unwrap_or(1.0)),
                         ]
                     })
                     .collect();
@@ -313,7 +313,7 @@ impl FinancialSystem {
         let id_short = format!("{:.6}", inst_id.0.to_string());
         let key = format!("{}:{}", type_code, id_short);
 
-        let book_value = inst.face_value().unwrap_or(Money::from(1000)).to_f64();
+        let book_value = inst.unit_par_value().unwrap_or(Money::ONE).to_f64();
 
         Some(CompactPosition {
             k: key,
@@ -359,7 +359,7 @@ impl FinancialSystem {
                 CreditState::Loan(_) => "LN",
                 CreditState::ConsumerLoan { .. } => "LN",
                 CreditState::ConsumerCreditCard(_) => "CL",
-                CreditState::CreditLine(_) => "CL",
+                CreditState::Facility(_) => "CL",
                 CreditState::TradeCredit(_) => "TC",
             },
             InstrumentRuntime::RealAsset(asset) => match asset {
@@ -437,7 +437,7 @@ impl FinancialSystem {
                     .map(|(inst_id, holding)| {
                         let inst = &self.instruments.instruments[inst_id];
                         let code = self.get_instrument_type_code(inst);
-                        let book = inst.face_value().map(|v| v.to_f64()).unwrap_or(1000.0);
+                        let book = inst.unit_par_value().map(|v| v.to_f64()).unwrap_or(1.0);
                         securities_total += holding.total_position() * book;
                         json!([
                             format!("{}:{}", code, &inst_id.0.to_string()[0..4]),

@@ -52,15 +52,15 @@ impl Instrument {
                     instrument_type: "Loan".to_string(),
                     subtype: format!("{:?}_{:?}", loan.loan_type, loan.loan_id),
                 },
-                CreditState::CreditLine(details) => ConsolidationKey {
-                    issuer: details.lender,
+                CreditState::Facility(facility) => ConsolidationKey {
+                    issuer: facility.lender,
                     instrument_type: "CreditLine".to_string(),
-                    subtype: format!("{:?}_{:?}", details.facility_type, details.facility_id),
+                    subtype: format!("{:?}_{:?}", facility.facility_type, facility.facility_id),
                 },
-                CreditState::ConsumerCreditCard(details) => ConsolidationKey {
-                    issuer: details.lender,
+                CreditState::ConsumerCreditCard(facility) => ConsolidationKey {
+                    issuer: facility.lender,
                     instrument_type: "CreditCard".to_string(),
-                    subtype: format!("{:?}_{:?}", details.facility_type, details.facility_id),
+                    subtype: format!("{:?}_{:?}", facility.facility_type, facility.facility_id),
                 },
                 CreditState::TradeCredit(details) => ConsolidationKey {
                     issuer: details.creditor,
@@ -248,15 +248,15 @@ impl FinancialSystem {
                     info.maturity_date = Some(loan.maturity_date);
                     Some(loan.lender)
                 }
-                CreditState::CreditLine(details) => {
-                    info.face_value = Some(details.commitment_amount);
-                    info.maturity_date = Some(details.expiry_date);
-                    Some(details.lender)
+                CreditState::Facility(facility) => {
+                    info.face_value = Some(facility.commitment_amount);
+                    info.maturity_date = Some(facility.expiry_date);
+                    Some(facility.lender)
                 }
-                CreditState::ConsumerCreditCard(details) => {
-                    info.face_value = Some(details.commitment_amount);
-                    info.maturity_date = Some(details.expiry_date);
-                    Some(details.lender)
+                CreditState::ConsumerCreditCard(facility) => {
+                    info.face_value = Some(facility.commitment_amount);
+                    info.maturity_date = Some(facility.expiry_date);
+                    Some(facility.lender)
                 }
                 CreditState::TradeCredit(details) => {
                     info.face_value = Some(details.amount);
@@ -332,10 +332,10 @@ impl FinancialSystem {
                 let quantity = holding.total_position();
                 if quantity > 1e-9 {
                     if let Some(inst) = self.instruments.instruments.get(inst_id) {
-                        let book_value = inst.face_value().unwrap_or(Money::from(1000 as i64));
+                        let unit_value = inst.unit_par_value().unwrap_or(Money::ONE);
                         positions.insert(
                             *inst_id,
-                            Position { quantity, book_value_per_unit: book_value, cost_basis_per_unit: book_value },
+                            Position { quantity, book_value_per_unit: unit_value, cost_basis_per_unit: unit_value },
                         );
                     }
                 }
@@ -378,7 +378,10 @@ impl FinancialSystem {
                 bs.assets
                     .iter()
                     .map(|(id, pos)| {
-                        let price = self.get_market_price(id).unwrap_or(pos.book_value_per_unit);
+                        let price = self
+                            .get_market_price(id)
+                            .or_else(|| self.instruments.instruments.get(id).and_then(|i| i.unit_par_value()))
+                            .unwrap_or(pos.book_value_per_unit);
                         price.to_f64() * pos.quantity
                     })
                     .sum::<f64>()
@@ -393,8 +396,8 @@ impl FinancialSystem {
             .map(|(id, qty)| {
                 let price = self
                     .get_market_price(id)
-                    .or_else(|| self.instruments.instruments.get(id).and_then(|i| i.face_value()))
-                    .unwrap_or(Money::ZERO);
+                    .or_else(|| self.instruments.instruments.get(id).and_then(|i| i.unit_par_value()))
+                    .unwrap_or(Money::ONE);
                 price.to_f64() * qty
             })
             .sum::<f64>();

@@ -102,10 +102,7 @@ impl StateEffectApplicator {
                 );
 
                 let instrument_id = loan.instrument_id;
-                fs.instruments.instruments.insert(instrument_id, instrument.clone());
-                fs.instruments.insert_core(instrument_id, instrument.clone());
-                fs.instrument_registry.update_cache(instrument.clone());
-                fs.instrument_registry.update_core_cache(instrument.clone());
+                fs.instruments.insert(instrument_id, instrument.clone());
 
                 let cr = &mut fs.credit_registry;
                 cr.register_loan(loan.clone()).map_err(EffectError::FinancialSystemError)?;
@@ -156,10 +153,7 @@ impl StateEffectApplicator {
                         )
                         .build();
                         let id = new_deposit.instrument_id();
-                        fs.instruments.instruments.insert(id, new_deposit.clone());
-                        fs.instruments.insert_core(id, new_deposit.clone());
-                        fs.instrument_registry.update_cache(new_deposit.clone());
-                        fs.instrument_registry.update_core_cache(new_deposit.clone());
+                        fs.instruments.insert(id, new_deposit.clone());
                         id
                     });
 
@@ -208,20 +202,17 @@ impl StateEffectApplicator {
                     InstrumentIdentifiers::from(facility.instrument_id),
                     profile,
                     Listability::Unlisted,
-                    InstrumentRuntime::Credit(CreditState::CreditLine(facility.details.clone())),
+                    InstrumentRuntime::Credit(CreditState::Facility(facility.state.clone())),
                 );
 
-                state.financial_system.instruments.instruments.insert(facility.instrument_id, instrument.clone());
-                state.financial_system.instruments.insert_core(facility.instrument_id, instrument.clone());
-                state.financial_system.instrument_registry.update_cache(instrument.clone());
-                state.financial_system.instrument_registry.update_core_cache(instrument);
+                state.financial_system.instruments.insert(facility.instrument_id, instrument.clone());
                 Ok(())
             }
 
             CreditEffect::UpdateFacilityUtilization { facility_id, drawn_amount, available_amount } => {
                 if let Some(facility) = state.financial_system.credit_registry.facilities.get_mut(facility_id) {
-                    facility.details.drawn_amount = *drawn_amount;
-                    facility.details.available_amount = *available_amount;
+                    facility.state.drawn_amount = *drawn_amount;
+                    facility.state.available_amount = *available_amount;
                 }
                 Ok(())
             }
@@ -251,6 +242,8 @@ impl StateEffectApplicator {
                     if let Some(lender_bs) = state.financial_system.balance_sheets.get_mut(&loan.state.lender) {
                         if let Some(pos) = lender_bs.assets.get_mut(&loan.instrument_id) {
                             pos.quantity = loan.state.outstanding_principal.to_f64();
+                            pos.book_value_per_unit = Money::ONE;
+                            pos.cost_basis_per_unit = Money::ONE;
                         }
                         lender_bs.income_statement.interest_income += *interest_paid;
                     }
@@ -258,6 +251,8 @@ impl StateEffectApplicator {
                     if let Some(borrower_bs) = state.financial_system.balance_sheets.get_mut(&loan.state.borrower) {
                         if let Some(pos) = borrower_bs.liabilities.get_mut(&loan.instrument_id) {
                             pos.quantity = loan.state.outstanding_principal.to_f64();
+                            pos.book_value_per_unit = Money::ONE;
+                            pos.cost_basis_per_unit = Money::ONE;
                         }
                         borrower_bs.income_statement.interest_expense += *interest_paid;
                     }
@@ -331,11 +326,11 @@ impl StateEffectApplicator {
                                     InstrumentRuntime::Credit(CreditState::ConsumerLoan { loan, .. }) => {
                                         Some(loan.borrower)
                                     }
-                                    InstrumentRuntime::Credit(CreditState::CreditLine(details)) => {
-                                        Some(details.borrower)
+                                    InstrumentRuntime::Credit(CreditState::Facility(facility)) => {
+                                        Some(facility.borrower)
                                     }
-                                    InstrumentRuntime::Credit(CreditState::ConsumerCreditCard(details)) => {
-                                        Some(details.borrower)
+                                    InstrumentRuntime::Credit(CreditState::ConsumerCreditCard(facility)) => {
+                                        Some(facility.borrower)
                                     }
                                     InstrumentRuntime::Credit(CreditState::TradeCredit(details)) => {
                                         Some(details.debtor)

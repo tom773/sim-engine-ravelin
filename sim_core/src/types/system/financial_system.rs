@@ -111,6 +111,29 @@ impl Default for FinancialSystem {
 }
 
 impl FinancialSystem {
+    pub fn normalise_position_book_values(&mut self) {
+        let instruments = &self.instruments.instruments;
+        for balance_sheet in self.balance_sheets.values_mut() {
+            // Adjust both asset and liability books to reflect per-unit par values.
+            for (inst_id, position) in balance_sheet.assets.iter_mut().chain(balance_sheet.liabilities.iter_mut()) {
+                if let Some(inst) = instruments.get(inst_id) {
+                    if let Some(unit_value) = inst.unit_par_value() {
+                        let original_book = position.book_value_per_unit;
+                        let original_cost = position.cost_basis_per_unit;
+
+                        if original_book != unit_value {
+                            position.book_value_per_unit = unit_value;
+                        }
+
+                        if original_cost == original_book || original_cost == unit_value {
+                            position.cost_basis_per_unit = unit_value;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub fn attach_default_pricing_feeds(&mut self, now: chrono::NaiveDate) {
         self.pricing_feeds = PricingFeeds {
             policy_rate_bps: Arc::new(RwLock::new(self.central_bank.policy_rate_bps.to_f64().unwrap_or(69.0))),
@@ -177,10 +200,7 @@ impl FinancialSystem {
             Listability::Unlisted,
             InstrumentRuntime::RealAsset(RealAssetState::Inventory { owner, goods: HashMap::new() }),
         );
-        self.instruments.instruments.insert(inst_id, instrument.clone());
-        self.instruments.insert_core(inst_id, instrument.clone());
-        self.instrument_registry.update_cache(instrument.clone());
-        self.instrument_registry.update_core_cache(instrument.clone());
+        self.instruments.insert(inst_id, instrument.clone());
         let bs = self.balance_sheets.entry(owner).or_insert_with(|| BalanceSheet::new(owner));
         bs.assets.insert(
             inst_id,
@@ -206,8 +226,9 @@ impl FinancialSystem {
                 if let Some(instrument) = self.instruments.instruments.get(inst_id) {
                     if is_security(instrument) {
                         let quantity = holding.total_position();
-                        let book_value = instrument.face_value().unwrap_or(Money::ZERO);
-                        total_assets += book_value * quantity;
+                        let unit_value =
+                            instrument.unit_par_value().or_else(|| instrument.face_value()).unwrap_or(Money::ONE);
+                        total_assets += unit_value * quantity;
                     }
                 }
             }
@@ -241,5 +262,51 @@ impl FinancialSystem {
             }
         }
         Err(format!("No inventory for good {:?} found for agent {:?}", good_id.0, agent_id.0))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::core_utils::time::BasisPoints;
+    use crate::types::instrument::{BondType, Instrument};
+
+    #[test]
+    fn normalise_bond_positions_reset_total_notional() {
+        let mut system = FinancialSystem::default();
+        let issuer = system.government.id;
+        let instrument = Instrument::bond(
+            InstrumentId(Uuid::new_v4()),
+            issuer,
+            BondType::Government,
+            Money::from(1_000_i64),
+            chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+            chrono::NaiveDate::from_ymd_opt(2027, 1, 1).unwrap(),
+        )
+        .coupon_bps(BasisPoints::new(250, 1))
+        .frequency(2)
+        .outstanding_units(2_800.0)
+        .build()
+        .unwrap();
+
+        let inst_id = instrument.instrument_id();
+        system.instruments.insert(inst_id, instrument);
+
+        let mut bs = BalanceSheet::new(issuer);
+        bs.liabilities.insert(
+            inst_id,
+            Position {
+                quantity: 2_800.0,
+                book_value_per_unit: Money::from(2_800_000_i64),
+                cost_basis_per_unit: Money::from(2_800_000_i64),
+            },
+        );
+        system.balance_sheets.insert(issuer, bs);
+
+        system.normalise_position_book_values();
+
+        let pos = &system.balance_sheets[&issuer].liabilities[&inst_id];
+        assert_eq!(pos.book_value_per_unit, Money::from(1_000_i64));
+        assert_eq!(pos.cost_basis_per_unit, Money::from(1_000_i64));
     }
 }

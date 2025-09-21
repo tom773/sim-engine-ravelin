@@ -1,4 +1,5 @@
 use crate::types::money::Money;
+use crate::types::system::balance_sheet::Position;
 use crate::*;
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::Entry;
@@ -50,6 +51,8 @@ impl StateEffectApplicator {
                 let instrument_id = inst.instrument_id();
                 state.financial_system.instruments.instruments.insert(instrument_id, inst.clone());
 
+                let par_value = inst.unit_par_value().unwrap_or(Money::ONE);
+
                 if is_security(inst) {
                     state
                         .financial_system
@@ -67,17 +70,21 @@ impl StateEffectApplicator {
                             .map_err(|e| EffectError::FinancialSystemError(e.to_string()))?;
                     }
 
-                    let book_value = inst.face_value().unwrap_or(Money::ZERO);
                     let debtor_bs = state
                         .financial_system
                         .balance_sheets
                         .entry(*debtor)
                         .or_insert_with(|| BalanceSheet::new(*debtor));
-                    let pos = debtor_bs.liabilities.entry(instrument_id).or_insert_with(Default::default);
+                    let pos = debtor_bs.liabilities.entry(instrument_id).or_insert_with(|| Position {
+                        quantity: 0.0,
+                        book_value_per_unit: par_value,
+                        cost_basis_per_unit: par_value,
+                    });
                     pos.quantity += quantity;
-                    pos.book_value_per_unit = book_value;
+                    pos.book_value_per_unit = par_value;
+                    pos.cost_basis_per_unit = par_value;
                 } else {
-                    let book_value = Money::from(1); // Deposits are 1-to-1 with currency
+                    let book_value = par_value; // deposits and other cash-like instruments use par-per-unit
 
                     if *quantity > 0.0 {
                         state

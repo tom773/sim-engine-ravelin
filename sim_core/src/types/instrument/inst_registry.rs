@@ -2,7 +2,6 @@ use crate::prelude::*;
 use crate::types::instrument::archetypes::{
     BondArchetype, InstrumentArchetype, IssuanceData, LifecycleRules, MarketProfile, OutstandingData, ProductFamily,
 };
-use crate::types::instrument::inst_core::RuntimeInstrumentCore;
 use crate::types::instrument::instrument::Currency;
 use chrono::{NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
@@ -18,8 +17,6 @@ use uuid::Uuid;
 pub struct InstrumentCatalog {
     #[serde_as(as = "HashMap<DisplayFromStr, _>")]
     pub instruments: HashMap<InstrumentId, Instrument>,
-    #[serde(skip)]
-    pub cores: HashMap<InstrumentId, RuntimeInstrumentCore>,
 }
 
 impl InstrumentCatalog {
@@ -61,18 +58,6 @@ impl InstrumentCatalog {
 
     pub fn values_mut(&mut self) -> impl Iterator<Item = &mut Instrument> {
         self.instruments.values_mut()
-    }
-
-    pub fn insert_core(&mut self, id: InstrumentId, core: RuntimeInstrumentCore) -> Option<RuntimeInstrumentCore> {
-        self.cores.insert(id, core)
-    }
-
-    pub fn get_core(&self, id: &InstrumentId) -> Option<&RuntimeInstrumentCore> {
-        self.cores.get(id)
-    }
-
-    pub fn get_core_mut(&mut self, id: &InstrumentId) -> Option<&mut RuntimeInstrumentCore> {
-        self.cores.get_mut(id)
     }
 }
 
@@ -224,11 +209,6 @@ pub struct InstrumentRegistry {
 
     pub lots: HashMap<InstrumentId, InstrumentLot>,
     pub lots_by_series: HashMap<SeriesId, Vec<InstrumentId>>,
-
-    #[serde(skip)]
-    pub instrument_cache: HashMap<InstrumentId, Instrument>,
-    #[serde(skip)]
-    pub instrument_core_cache: HashMap<InstrumentId, RuntimeInstrumentCore>,
 }
 
 impl InstrumentRegistry {
@@ -326,24 +306,6 @@ impl InstrumentRegistry {
         self.lots.insert(lot_id, lot);
 
         Ok(lot_id)
-    }
-
-    pub fn update_cache(&mut self, instrument: Instrument) {
-        let id = instrument.instrument_id();
-        self.instrument_cache.insert(id, instrument);
-    }
-
-    pub fn cache_get(&self, id: &InstrumentId) -> Option<&Instrument> {
-        self.instrument_cache.get(id)
-    }
-
-    pub fn update_core_cache(&mut self, core: RuntimeInstrumentCore) {
-        let id = core.instrument_id();
-        self.instrument_core_cache.insert(id, core);
-    }
-
-    pub fn core_cache_get(&self, id: &InstrumentId) -> Option<&RuntimeInstrumentCore> {
-        self.instrument_core_cache.get(id)
     }
 
     pub fn ensure_bond_series(

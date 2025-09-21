@@ -104,7 +104,7 @@ pub struct CreditHistory {
     pub payment_performance: f64,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CreditLineDetails {
+pub struct CreditFacilityState {
     pub facility_id: Uuid,
     pub lender: AgentId,
     pub borrower: AgentId,
@@ -128,7 +128,20 @@ pub struct CreditLineDetails {
 
     pub drawn_loans: Vec<Uuid>,
 }
-impl Default for CreditLineDetails {
+impl CreditFacilityState {
+    pub fn utilization_ratio(&self) -> f64 {
+        if self.commitment_amount == Money::ZERO {
+            return 0.0;
+        }
+        (self.drawn_amount / self.commitment_amount).to_f64().unwrap_or(0.0)
+    }
+
+    pub fn remaining_capacity(&self) -> Money {
+        self.available_amount
+    }
+}
+
+impl Default for CreditFacilityState {
     fn default() -> Self {
         let now = chrono::Utc::now().date_naive();
         Self {
@@ -154,7 +167,7 @@ impl Default for CreditLineDetails {
     }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TradeCreditDetails {
+pub struct TradeCreditState {
     pub creditor: AgentId,
     pub debtor: AgentId,
     pub amount: Money,
@@ -256,7 +269,7 @@ pub struct CreditRegistry {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreditFacility {
     pub instrument_id: InstrumentId,
-    pub details: CreditLineDetails,
+    pub state: CreditFacilityState,
     pub status: FacilityStatus,
 }
 
@@ -311,9 +324,9 @@ impl CreditRegistry {
     }
 
     pub fn register_facility(&mut self, facility: CreditFacility) -> Result<(), String> {
-        let facility_id = facility.details.facility_id;
-        let lender = facility.details.lender;
-        let borrower = facility.details.borrower;
+        let facility_id = facility.state.facility_id;
+        let lender = facility.state.lender;
+        let borrower = facility.state.borrower;
 
         if self.facilities.contains_key(&facility_id) {
             return Err(format!("Facility {} already exists", facility_id));
@@ -330,15 +343,15 @@ impl CreditRegistry {
         let facility =
             self.facilities.get_mut(&facility_id).ok_or_else(|| format!("Facility {} not found", facility_id))?;
 
-        if facility.details.available_amount < amount {
+        if facility.state.available_amount < amount {
             return Err(format!(
                 "Insufficient availability: {} available, {} requested",
-                facility.details.available_amount, amount
+                facility.state.available_amount, amount
             ));
         }
-        facility.details.available_amount -= amount;
-        facility.details.drawn_amount += amount;
-        facility.details.drawn_loans.push(loan.state.loan_id);
+        facility.state.available_amount -= amount;
+        facility.state.drawn_amount += amount;
+        facility.state.drawn_loans.push(loan.state.loan_id);
 
         let loan_id = loan.state.loan_id;
         let lender = loan.state.lender;
@@ -403,8 +416,8 @@ impl CreditRegistry {
 
     pub fn get_facility_utilization(&self, facility_id: &Uuid) -> Option<f64> {
         self.facilities.get(facility_id).map(|f| {
-            let total = f.details.commitment_amount.to_f64();
-            let drawn = f.details.drawn_amount.to_f64();
+            let total = f.state.commitment_amount.to_f64();
+            let drawn = f.state.drawn_amount.to_f64();
             if total > 0.0 { drawn / total } else { 0.0 }
         })
     }
