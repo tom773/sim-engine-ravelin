@@ -73,7 +73,8 @@ impl IncomeStatement {
 }
 
 fn get_market_price(inst: &Instrument, exchange: &Exchange) -> Option<Money> {
-    let symbol = exchange.inst_to_symbol.get(&inst.id)?;
+    // Pricing logic now matches on InstrumentRuntime instead of legacy InstrumentType wrappers.
+    let symbol = exchange.inst_to_symbol.get(&inst.instrument_id())?;
 
     if let Some(market) = exchange.markets.get(symbol) {
         match market {
@@ -82,22 +83,19 @@ fn get_market_price(inst: &Instrument, exchange: &Exchange) -> Option<Money> {
             MarketType::Labour(_) => None,
         }
     } else {
-        match &inst.instrument_type {
-            InstrumentType::Repo(r) => Some(r.loan_amount),
-            InstrumentType::RealAsset(asset_type) => match asset_type {
-                RealAssetType::Inventory { goods, .. } => {
-                    let total: Money = goods.values().map(|item| item.unit_cost * item.quantity).sum();
-                    Some(total)
-                }
-                RealAssetType::Property { market_value, .. } => Some(*market_value),
+        match inst.state() {
+            InstrumentRuntime::Repo(repo) => Some(repo.cash_principal),
+            InstrumentRuntime::RealAsset(asset) => asset.face_value(),
+            InstrumentRuntime::Cash(_) => Some(Money::from(1_i64)),
+            InstrumentRuntime::Credit(credit) => match credit {
+                CreditState::Loan(loan) => Some(loan.outstanding_principal),
+                CreditState::ConsumerLoan { loan, .. } => Some(loan.outstanding_principal),
+                CreditState::ConsumerCreditCard(details) => Some(details.drawn_amount),
+                CreditState::CreditLine(details) => Some(details.drawn_amount),
+                CreditState::TradeCredit(details) => Some(details.amount),
             },
-            InstrumentType::Cash(_) => Some(Money::from(1 as i64)),
-            InstrumentType::Debt(debt) => match debt {
-                DebtInstrument::Loan(l) => Some(l.outstanding_principal),
-                DebtInstrument::CreditLine(c) => Some(c.drawn_amount),
-                DebtInstrument::TradeCredit(t) => Some(t.amount),
-                _ => None,
-            },
+            InstrumentRuntime::Structured(tranche) => Some(tranche.outstanding_notional),
+            InstrumentRuntime::Derivative(derivative) => derivative.notional,
             _ => None,
         }
     }
@@ -117,11 +115,7 @@ impl BalanceSheet {
             .iter()
             .filter_map(|(id, pos)| {
                 let inst = system.instruments.instruments.get(id)?;
-                if let InstrumentType::Cash(_) = inst.instrument_type {
-                    Some(Money::from(1 as i64) * pos.quantity)
-                } else {
-                    None
-                }
+                matches!(inst.state(), InstrumentRuntime::Cash(_)).then(|| Money::from(1_i64) * pos.quantity)
             })
             .sum()
     }
@@ -131,7 +125,7 @@ impl BalanceSheet {
             .iter()
             .filter_map(|(id, pos)| {
                 let inst = system.instruments.instruments.get(id)?;
-                if let InstrumentType::Cash(c) = &inst.instrument_type {
+                if let InstrumentRuntime::Cash(c) = inst.state() {
                     if &c.issuer == bank_id && matches!(c.cash_type, CashType::DemandDeposit | CashType::SavingsDeposit)
                     {
                         return Some(pos.quantity);
@@ -147,7 +141,7 @@ impl BalanceSheet {
             .iter()
             .filter_map(|(id, pos)| {
                 let inst = system.instruments.instruments.get(id)?;
-                if let InstrumentType::Cash(c) = &inst.instrument_type {
+                if let InstrumentRuntime::Cash(c) = inst.state() {
                     if matches!(c.cash_type, CashType::DemandDeposit | CashType::SavingsDeposit) {
                         return Some(pos.quantity);
                     }
@@ -165,13 +159,12 @@ impl BalanceSheet {
 
         for (id, pos) in &self.assets {
             if let Some(inst) = system.instruments.instruments.get(id) {
-                let risk_weight = match &inst.instrument_type {
-                    InstrumentType::Cash(c) => match c.cash_type {
-                        CashType::CentralBankReserves => 0.0,
-                        CashType::TreasuryGeneralAccount => 0.0,
+                let risk_weight = match inst.state() {
+                    InstrumentRuntime::Cash(c) => match c.cash_type {
+                        CashType::CentralBankReserves | CashType::TreasuryGeneralAccount => 0.0,
                         _ => 0.2,
                     },
-                    InstrumentType::RealAsset(_) => 1.0,
+                    InstrumentRuntime::RealAsset(_) => 1.0,
                     _ => continue,
                 };
 
@@ -184,15 +177,14 @@ impl BalanceSheet {
         let positions = system.clearing_house.csd.get_all_positions(&self.agent_id);
         for (id, qty) in positions {
             if let Some(inst) = system.instruments.instruments.get(&id) {
-                let risk_weight = match &inst.instrument_type {
-                    InstrumentType::Cash(c) => match c.cash_type {
-                        CashType::CentralBankReserves => 0.0,
-                        CashType::TreasuryGeneralAccount => 0.0,
+                let risk_weight = match inst.state() {
+                    InstrumentRuntime::Cash(c) => match c.cash_type {
+                        CashType::CentralBankReserves | CashType::TreasuryGeneralAccount => 0.0,
                         _ => 0.2,
                     },
-                    InstrumentType::Debt(DebtInstrument::Bond(b)) => match b.bond_type {
+                    InstrumentRuntime::Bond(b) => match b.bond_type() {
                         BondType::Government | BondType::Municipal | BondType::Agency | BondType::Supranational => 0.0,
-                        BondType::Corporate => match b.rating {
+                        BondType::Corporate => match b.rating.unwrap_or(CreditRating::Corporate(SpCreditRating::BB)) {
                             CreditRating::Corporate(SpCreditRating::AAA)
                             | CreditRating::Corporate(SpCreditRating::AA) => 0.2,
                             CreditRating::Corporate(SpCreditRating::A) => 0.5,
@@ -201,7 +193,7 @@ impl BalanceSheet {
                         },
                         BondType::InterbankLoan => 0.2,
                     },
-                    InstrumentType::Debt(DebtInstrument::Loan(l)) => match l.rating {
+                    InstrumentRuntime::Credit(CreditState::Loan(loan)) => match loan.rating {
                         Some(CreditRating::Corporate(SpCreditRating::AAA))
                         | Some(CreditRating::Corporate(SpCreditRating::AA)) => 0.5,
                         Some(CreditRating::Corporate(SpCreditRating::A))
@@ -212,7 +204,14 @@ impl BalanceSheet {
                         Some(CreditRating::Consumer(ConsumerCreditRating::DeepSubprime)) => 2.0,
                         _ => 1.5,
                     },
-                    InstrumentType::StructuredTranche(t) => match t.rating {
+                    InstrumentRuntime::Credit(CreditState::ConsumerLoan { loan, .. }) => match loan.rating {
+                        Some(CreditRating::Consumer(ConsumerCreditRating::Prime)) => 0.75,
+                        Some(CreditRating::Consumer(ConsumerCreditRating::NearPrime)) => 1.0,
+                        Some(CreditRating::Consumer(ConsumerCreditRating::Subprime)) => 1.5,
+                        Some(CreditRating::Consumer(ConsumerCreditRating::DeepSubprime)) => 2.0,
+                        _ => 1.5,
+                    },
+                    InstrumentRuntime::Structured(tranche) => match tranche.rating {
                         CreditRating::Corporate(SpCreditRating::AAA)
                         | CreditRating::Government(SpCreditRating::AAA) => 0.2,
                         CreditRating::Corporate(SpCreditRating::AA) | CreditRating::Government(SpCreditRating::AA) => {
@@ -221,12 +220,13 @@ impl BalanceSheet {
                         CreditRating::Corporate(SpCreditRating::A) | CreditRating::Government(SpCreditRating::A) => 1.0,
                         _ => 2.0,
                     },
-                    InstrumentType::RealAsset(_) => 1.0,
+                    InstrumentRuntime::RealAsset(_) => 1.0,
+                    InstrumentRuntime::Credit(_) => 1.0,
                     _ => 1.0,
                 };
 
                 let market_value = get_market_price(inst, &system.exchange)
-                    .unwrap_or_else(|| inst.face_value().unwrap_or(Money::from(1000)))
+                    .unwrap_or_else(|| inst.face_value().unwrap_or(Money::from(1000_i64)))
                     .to_f64()
                     * qty;
                 rwa += market_value * risk_weight;

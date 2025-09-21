@@ -17,23 +17,24 @@ impl Default for TermStructureMethod {
 }
 #[derive(Clone, Debug)]
 pub struct GovTermStructurePricer {
-    spec: BondDetails,
+    spec: BondState,
     method: TermStructureMethod,
     feeds: PricingFeeds,
 }
 
 impl GovTermStructurePricer {
-    pub fn new(spec: BondDetails, method: TermStructureMethod, feeds: PricingFeeds) -> Self {
+    pub fn new(spec: BondState, method: TermStructureMethod, feeds: PricingFeeds) -> Self {
         Self { spec, method, feeds }
     }
     fn coupon_rate(&self) -> Decimal {
-        let coupon_rate = self.spec.coupon_rate_bps.to_f64().unwrap_or(0.0);
+        let coupon_rate = self.spec.archetype.coupon_rate_bps.to_f64().unwrap_or(0.0);
         Decimal::from_f64(coupon_rate / 10_000.0).unwrap_or(Decimal::ZERO)
     }
 
     fn price_from_yield_inner(&self, y_annual: f64, as_of: NaiveDate) -> Option<Money> {
-        let freq = self.spec.frequency.max(1) as i32;
-        let n = (self.spec.remaining_tenor_years(as_of) * self.spec.frequency as f64).ceil().max(0.0) as i32;
+        let freq = self.spec.archetype.frequency_per_year.max(1) as i32;
+        let n = (self.spec.remaining_tenor_years(as_of) * self.spec.archetype.frequency_per_year as f64).ceil().max(0.0)
+            as i32;
 
         const MAX_PERIODS: i32 = 4000;
         if n > MAX_PERIODS {
@@ -44,8 +45,8 @@ impl GovTermStructurePricer {
         if y <= dec!(-1.0) {
             return None;
         }
-
-        let c = self.spec.face_value * (self.coupon_rate() / Decimal::from(self.spec.frequency));
+        let c = self.spec.archetype.face_value
+            * (self.coupon_rate() / Decimal::from(self.spec.archetype.frequency_per_year));
         let mut pv = dec!(0);
 
         let v = dec!(1) / (dec!(1) + y);
@@ -56,7 +57,7 @@ impl GovTermStructurePricer {
             pv += c.0 * v_n;
         }
 
-        pv += self.spec.face_value.0 * v_n;
+        pv += self.spec.archetype.face_value.0 * v_n;
         Some(Money(pv))
     }
 

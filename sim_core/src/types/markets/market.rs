@@ -39,7 +39,7 @@ pub enum ListingKey {
     RealAsset,
     Equity { issuer: AgentId },
     Derivative { underlying: UnderlyingAsset, derivative_type_key: DerivativeTypeKey },
-    StructuredTranche { rating: CreditRating, tranche_type: TrancheType },
+    StructuredProduct { rating: CreditRating, tranche_type: StructuredProductType },
     Repo,
 }
 
@@ -96,37 +96,27 @@ impl ListingRegistry {
 }
 
 pub fn listing_key_from_instrument(inst: &Instrument) -> ListingKey {
-    match &inst.instrument_type {
-        InstrumentType::Debt(DebtInstrument::Bond(b)) => match b.bond_type {
+    match &inst.state() {
+        InstrumentRuntime::Bond(b) => match b.bond_type() {
             BondType::Government | BondType::Municipal | BondType::Agency | BondType::Supranational => {
                 let years = b.original_tenor_years().round() as u16;
                 ListingKey::GovBond { tenor_years: years.max(1) }
             }
             BondType::Corporate => {
                 let years = b.original_tenor_years();
-                ListingKey::CorpBond { rating: b.rating, tenor_bucket: TenorBucket::from_years(years) }
+                ListingKey::CorpBond {
+                    rating: b.rating.unwrap_or(CreditRating::corporate_bbb()),
+                    tenor_bucket: TenorBucket::from_years(years),
+                }
             }
             BondType::InterbankLoan => ListingKey::CashON,
         },
-        InstrumentType::Cash(_) => ListingKey::CashON,
-        InstrumentType::RealAsset(_) => ListingKey::RealAsset,
-        InstrumentType::Equity(e) => ListingKey::Equity { issuer: e.issuer },
-        InstrumentType::Repo(_) => ListingKey::Repo,
-        InstrumentType::Derivative(d) => {
-            let derivative_type_key = match &d.derivative_type {
-                DerivativeType::Option(o) => DerivativeTypeKey::Option {
-                    style: o.style,
-                    strike: OrderedFloat(o.strike_price.to_f64()),
-                    expiry: d.expiry_date,
-                },
-                DerivativeType::Future(_) => DerivativeTypeKey::Future { expiry: d.expiry_date },
-            };
-            ListingKey::Derivative { underlying: d.underlying.clone(), derivative_type_key }
-        }
-        InstrumentType::StructuredTranche(s) => {
-            ListingKey::StructuredTranche { rating: s.rating, tranche_type: s.tranche_type }
-        }
-        InstrumentType::Debt(_) => ListingKey::CashON,
+        InstrumentRuntime::Cash(_) => ListingKey::CashON,
+        InstrumentRuntime::RealAsset(_) => ListingKey::RealAsset,
+        InstrumentRuntime::Equity(e) => ListingKey::Equity { issuer: e.profile.issuer },
+        InstrumentRuntime::Repo(_) => ListingKey::Repo,
+        InstrumentRuntime::Credit(_) => ListingKey::CashON,
+        _ => ListingKey::CashON,
     }
 }
 
@@ -270,8 +260,8 @@ impl Exchange {
                 }
                 MarketType::Financial(f) => {
                     if let Some(inst) = instruments.get(&f.key) {
-                        if let InstrumentType::Debt(DebtInstrument::Bond(bond)) = &inst.instrument_type {
-                            if bond.bond_type == BondType::Government {
+                        if let InstrumentRuntime::Bond(bond) = &inst.state() {
+                            if bond.bond_type() == BondType::Government {
                                 f.pricer = Arc::new(GovTermStructurePricer::new(
                                     bond.clone(),
                                     TermStructureMethod::default(),
@@ -292,10 +282,10 @@ impl Exchange {
         self.inst_to_symbol.insert(inst_id, symbol.clone());
         self.symbol_to_inst.insert(symbol.clone(), inst_id);
 
-        if inst.should_create_order_book() {
+        if inst.listability.should_create_order_book() {
             self.markets.entry(symbol.clone()).or_insert_with(|| {
-                let pricer: Arc<dyn Pricer<FinancialProduct>> = match &inst.instrument_type {
-                    InstrumentType::Debt(DebtInstrument::Bond(b)) if b.bond_type == BondType::Government => {
+                let pricer: Arc<dyn Pricer<FinancialProduct>> = match &inst.state() {
+                    InstrumentRuntime::Bond(b) if b.bond_type() == BondType::Government => {
                         let feeds = self.pricing_feeds.clone().expect("attach_pricing_feeds before listing");
                         let method = TermStructureMethod::Bootstrapped;
                         Arc::new(GovTermStructurePricer::new(b.clone(), method, feeds))
@@ -346,13 +336,17 @@ impl Exchange {
     }
 
     fn update_index_only(&mut self, inst_id: InstrumentId, inst: &Instrument) {
-        if let InstrumentType::Debt(DebtInstrument::Bond(b)) = &inst.instrument_type {
+        if let InstrumentRuntime::Bond(b) = inst.state() {
             self.index.by_issuer.entry(b.issuer).or_default().push(inst_id);
 
-            let tenor_bucket = b.tenor_bucket();
-            self.index.by_rating_and_tenor.entry((b.rating, tenor_bucket)).or_default().push(inst_id);
+            let tenor_bucket = TenorBucket::from_years(b.original_tenor_years());
+            self.index
+                .by_rating_and_tenor
+                .entry((b.rating.unwrap_or(CreditRating::government_aaa()), tenor_bucket))
+                .or_default()
+                .push(inst_id);
 
-            self.index.by_bond_type.entry(b.bond_type).or_default().push(inst_id);
+            self.index.by_bond_type.entry(b.bond_type()).or_default().push(inst_id);
         }
     }
     pub fn financial_market(&self, id: &InstrumentId) -> Option<&OrderBook> {
@@ -409,17 +403,17 @@ impl Exchange {
         let instrument = instruments
             .get(&auction.instrument_id)
             .ok_or_else(|| format!("Auction instrument {} not found", auction.instrument_id))?;
-        let issuer = if let InstrumentType::Debt(details) = &instrument.instrument_type {
-            details.issuer()
+        let issuer = if let InstrumentRuntime::Bond(details) = &instrument.state() {
+            details.issuer
         } else {
             auction.status = AuctionStatus::Closed;
             return Err("Auction instrument is not a debt security".into());
         };
         let symbol = self
             .inst_to_symbol
-            .get(&instrument.id)
+            .get(&instrument.instrument_id())
             .cloned()
-            .ok_or_else(|| format!("No symbol registered for instrument {}", instrument.id))?;
+            .ok_or_else(|| format!("No symbol registered for instrument {}", instrument.instrument_id()))?;
 
         auction.bids.sort_by(|a, b| b.price.cmp(&a.price));
 

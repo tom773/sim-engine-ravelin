@@ -1,7 +1,6 @@
 use crate::types::instrument::credit::ConsumerLoanCategory;
-use crate::types::instrument::inst_core::{
-    InstrumentIdentifiers, runtime_core_from_legacy_consumer_loan, runtime_core_from_legacy_credit_line,
-    runtime_core_from_legacy_loan,
+use crate::types::instrument::{
+    CashType, CreditState, Currency, InstrumentIdentifiers, InstrumentRuntime, Listability, MarketProfile,
 };
 use crate::*;
 use chrono::NaiveDate;
@@ -82,7 +81,7 @@ impl StateEffectApplicator {
             CreditEffect::RegisterLoan { loan, is_consumer, purpose } => {
                 let fs = &mut state.financial_system;
 
-                let (debt_instrument, consumer_category) = if *is_consumer {
+                let credit_state = if *is_consumer {
                     let category = match purpose {
                         LoanPurpose::RealEstate => ConsumerLoanCategory::ResidentialMortgage,
                         LoanPurpose::Equipment => ConsumerLoanCategory::AutoLoan,
@@ -90,76 +89,46 @@ impl StateEffectApplicator {
                         LoanPurpose::Refinancing => ConsumerLoanCategory::PersonalLoan,
                         _ => ConsumerLoanCategory::PersonalLoan,
                     };
-                    let consumer_loan = match category {
-                        ConsumerLoanCategory::ResidentialMortgage => {
-                            ConsumerDebt::ResidentialMortgage(loan.details.clone())
-                        }
-                        ConsumerLoanCategory::AutoLoan => ConsumerDebt::AutoLoan(loan.details.clone()),
-                        ConsumerLoanCategory::PersonalLoan => ConsumerDebt::PersonalLoan(loan.details.clone()),
-                        ConsumerLoanCategory::StudentLoan => ConsumerDebt::StudentLoan(loan.details.clone()),
-                    };
-
-                    (DebtInstrument::Consumer(consumer_loan), Some(category))
+                    CreditState::ConsumerLoan { category, loan: loan.state.clone() }
                 } else {
-                    (DebtInstrument::Loan(loan.details.clone()), None)
+                    CreditState::Loan(loan.state.clone())
                 };
 
-                let inst = Instrument::new(
-                    loan.instrument_id,
-                    InstrumentType::Debt(debt_instrument),
+                let instrument = Instrument::new(
+                    InstrumentIdentifiers::from(loan.instrument_id),
                     MarketProfile::unlisted(),
-                )
-                .with_listability(Listability::Unlisted);
+                    Listability::Unlisted,
+                    InstrumentRuntime::Credit(credit_state),
+                );
 
-                fs.instruments.instruments.insert(loan.instrument_id, inst.clone());
-
-                let identifiers = InstrumentIdentifiers::from(loan.instrument_id);
-                let runtime_core = if let Some(category) = consumer_category {
-                    runtime_core_from_legacy_consumer_loan(
-                        identifiers.clone(),
-                        inst.market_profile.clone(),
-                        inst.listability.clone(),
-                        category,
-                        &loan.details,
-                    )
-                } else {
-                    runtime_core_from_legacy_loan(
-                        identifiers.clone(),
-                        inst.market_profile.clone(),
-                        inst.listability.clone(),
-                        &loan.details,
-                    )
-                };
-
-                fs.instruments.insert_core(loan.instrument_id, runtime_core.clone());
-                fs.instrument_registry.update_core_cache(runtime_core);
+                let instrument_id = loan.instrument_id;
+                fs.instruments.instruments.insert(instrument_id, instrument.clone());
+                fs.instruments.insert_core(instrument_id, instrument.clone());
+                fs.instrument_registry.update_cache(instrument.clone());
+                fs.instrument_registry.update_core_cache(instrument.clone());
 
                 let cr = &mut fs.credit_registry;
                 cr.register_loan(loan.clone()).map_err(EffectError::FinancialSystemError)?;
 
-                let lender_bs = fs
-                    .balance_sheets
-                    .entry(loan.details.lender)
-                    .or_insert_with(|| BalanceSheet::new(loan.details.lender));
+                let lender = loan.state.lender;
+                let borrower = loan.state.borrower;
+                let outstanding = loan.state.outstanding_principal.to_f64();
 
+                let lender_bs = fs.balance_sheets.entry(lender).or_insert_with(|| BalanceSheet::new(lender));
                 lender_bs.assets.insert(
-                    loan.instrument_id,
+                    instrument_id,
                     Position {
-                        quantity: loan.details.outstanding_principal.to_f64(),
+                        quantity: outstanding,
                         book_value_per_unit: Money::ONE,
                         cost_basis_per_unit: Money::ONE,
                     },
                 );
 
-                let borrower_bs = fs
-                    .balance_sheets
-                    .entry(loan.details.borrower)
-                    .or_insert_with(|| BalanceSheet::new(loan.details.borrower));
-
+                let borrower_bs = fs.balance_sheets.entry(borrower).or_insert_with(|| BalanceSheet::new(borrower));
                 borrower_bs.liabilities.insert(
-                    loan.instrument_id,
+                    instrument_id,
                     Position {
-                        quantity: loan.details.outstanding_principal.to_f64(),
+                        quantity: outstanding,
                         book_value_per_unit: Money::ONE,
                         cost_basis_per_unit: Money::ONE,
                     },
@@ -170,8 +139,8 @@ impl StateEffectApplicator {
                     .instruments
                     .iter()
                     .find_map(|(id, inst)| {
-                        if let InstrumentType::Cash(details) = &inst.instrument_type {
-                            if details.issuer == loan.details.lender && details.cash_type == CashType::DemandDeposit {
+                        if let InstrumentRuntime::Cash(details) = inst.state() {
+                            if details.issuer == lender && details.cash_type == CashType::DemandDeposit {
                                 return Some(*id);
                             }
                         }
@@ -180,32 +149,37 @@ impl StateEffectApplicator {
                     .unwrap_or_else(|| {
                         let new_deposit = Instrument::cash(
                             InstrumentId(Uuid::new_v4()),
-                            loan.details.lender,
+                            lender,
                             CashType::DemandDeposit,
                             Currency::USD,
-                            dec!(25.0), // Standard deposit rate
+                            dec!(25.0),
                         )
                         .build();
-                        let id = new_deposit.id;
-                        fs.instruments.instruments.insert(id, new_deposit);
+                        let id = new_deposit.instrument_id();
+                        fs.instruments.instruments.insert(id, new_deposit.clone());
+                        fs.instruments.insert_core(id, new_deposit.clone());
+                        fs.instrument_registry.update_cache(new_deposit.clone());
+                        fs.instrument_registry.update_core_cache(new_deposit.clone());
                         id
                     });
 
-                let borrower_bs = fs.balance_sheets.get_mut(&loan.details.borrower).unwrap();
-                let deposit_pos = borrower_bs.assets.entry(deposit_instrument_id).or_insert_with(|| Position {
+                let borrower_assets = fs.balance_sheets.get_mut(&borrower).unwrap();
+                let deposit_pos = borrower_assets.assets.entry(deposit_instrument_id).or_insert_with(|| Position {
                     quantity: 0.0,
                     book_value_per_unit: Money::ONE,
                     cost_basis_per_unit: Money::ONE,
                 });
-                deposit_pos.quantity += loan.details.outstanding_principal.to_f64();
+                deposit_pos.quantity += outstanding;
 
-                let lender_bs = fs.balance_sheets.get_mut(&loan.details.lender).unwrap();
-                let deposit_liability = lender_bs.liabilities.entry(deposit_instrument_id).or_insert_with(|| {
-                    Position { quantity: 0.0, book_value_per_unit: Money::ONE, cost_basis_per_unit: Money::ONE }
-                });
-                deposit_liability.quantity += loan.details.outstanding_principal.to_f64();
+                let lender_liabilities = fs.balance_sheets.get_mut(&lender).unwrap();
+                let deposit_liability =
+                    lender_liabilities.liabilities.entry(deposit_instrument_id).or_insert_with(|| Position {
+                        quantity: 0.0,
+                        book_value_per_unit: Money::ONE,
+                        cost_basis_per_unit: Money::ONE,
+                    });
+                deposit_liability.quantity += outstanding;
 
-                let borrower = loan.details.borrower;
                 if let Some(app_ids) = cr.applications_by_borrower.remove(&borrower) {
                     for app_id in app_ids {
                         cr.applications.remove(&app_id);
@@ -230,25 +204,17 @@ impl StateEffectApplicator {
 
                 let profile =
                     MarketProfile::from_market(InstrumentMarket::MoneyMarket(MoneyMarketSegment::CorporateShortTerm));
-                let inst = Instrument::new(
-                    facility.instrument_id,
-                    InstrumentType::Debt(DebtInstrument::CreditLine(facility.details.clone())),
+                let instrument = Instrument::new(
+                    InstrumentIdentifiers::from(facility.instrument_id),
                     profile,
-                )
-                .with_listability(Listability::Unlisted);
-
-                state.financial_system.instruments.instruments.insert(facility.instrument_id, inst.clone());
-
-                let identifiers = InstrumentIdentifiers::from(facility.instrument_id);
-                let runtime_core = runtime_core_from_legacy_credit_line(
-                    identifiers.clone(),
-                    inst.market_profile.clone(),
-                    inst.listability.clone(),
-                    &facility.details,
+                    Listability::Unlisted,
+                    InstrumentRuntime::Credit(CreditState::CreditLine(facility.details.clone())),
                 );
 
-                state.financial_system.instruments.insert_core(facility.instrument_id, runtime_core.clone());
-                state.financial_system.instrument_registry.update_core_cache(runtime_core);
+                state.financial_system.instruments.instruments.insert(facility.instrument_id, instrument.clone());
+                state.financial_system.instruments.insert_core(facility.instrument_id, instrument.clone());
+                state.financial_system.instrument_registry.update_cache(instrument.clone());
+                state.financial_system.instrument_registry.update_core_cache(instrument);
                 Ok(())
             }
 
@@ -262,34 +228,36 @@ impl StateEffectApplicator {
 
             CreditEffect::ProcessLoanPayment { loan_id, principal_paid, interest_paid, fees_paid, payment_date } => {
                 if let Some(loan) = state.financial_system.credit_registry.loans.get_mut(loan_id) {
-                    loan.details.outstanding_principal -= *principal_paid;
+                    loan.state.outstanding_principal -= *principal_paid;
 
                     loan.servicing_history.push(PaymentRecord {
                         payment_date: *payment_date,
-                        due_date: loan.details.next_payment_date,
+                        due_date: loan.state.next_payment_date,
                         amount: (*principal_paid + *interest_paid + *fees_paid).to_f64(),
                         principal_paid: principal_paid.to_f64(),
                         interest_paid: interest_paid.to_f64(),
                     });
 
-                    loan.details.next_payment_date = match loan.details.payment_frequency {
-                        PaymentFrequency::Monthly => add_months(loan.details.next_payment_date, 1),
-                        PaymentFrequency::Quarterly => add_months(loan.details.next_payment_date, 3),
-                        PaymentFrequency::SemiAnnual => add_months(loan.details.next_payment_date, 6),
-                        PaymentFrequency::Annual => add_months(loan.details.next_payment_date, 12),
-                        PaymentFrequency::InterestOnly => add_months(loan.details.next_payment_date, 1),
+                    let next_payment = loan.state.next_payment_date;
+                    let frequency = loan.state.archetype.repayment_schedule.payment_frequency;
+                    loan.state.next_payment_date = match frequency {
+                        PaymentFrequency::Monthly => add_months(next_payment, 1),
+                        PaymentFrequency::Quarterly => add_months(next_payment, 3),
+                        PaymentFrequency::SemiAnnual => add_months(next_payment, 6),
+                        PaymentFrequency::Annual => add_months(next_payment, 12),
+                        PaymentFrequency::InterestOnly => add_months(next_payment, 1),
                     };
 
-                    if let Some(lender_bs) = state.financial_system.balance_sheets.get_mut(&loan.details.lender) {
+                    if let Some(lender_bs) = state.financial_system.balance_sheets.get_mut(&loan.state.lender) {
                         if let Some(pos) = lender_bs.assets.get_mut(&loan.instrument_id) {
-                            pos.quantity = loan.details.outstanding_principal.to_f64();
+                            pos.quantity = loan.state.outstanding_principal.to_f64();
                         }
                         lender_bs.income_statement.interest_income += *interest_paid;
                     }
 
-                    if let Some(borrower_bs) = state.financial_system.balance_sheets.get_mut(&loan.details.borrower) {
+                    if let Some(borrower_bs) = state.financial_system.balance_sheets.get_mut(&loan.state.borrower) {
                         if let Some(pos) = borrower_bs.liabilities.get_mut(&loan.instrument_id) {
-                            pos.quantity = loan.details.outstanding_principal.to_f64();
+                            pos.quantity = loan.state.outstanding_principal.to_f64();
                         }
                         borrower_bs.income_statement.interest_expense += *interest_paid;
                     }
@@ -299,8 +267,8 @@ impl StateEffectApplicator {
 
             CreditEffect::AccrueLoanInterest { loan_id, interest_amount, accrual_date } => {
                 if let Some(loan) = state.financial_system.credit_registry.loans.get_mut(loan_id) {
-                    loan.details.accrued_interest += *interest_amount;
-                    loan.details.last_accrual_date = *accrual_date;
+                    loan.state.accrued_interest += *interest_amount;
+                    loan.state.last_accrual_date = *accrual_date;
                 }
                 Ok(())
             }
@@ -313,7 +281,7 @@ impl StateEffectApplicator {
                     .map_err(EffectError::FinancialSystemError)?;
 
                 if let Some(loan) = state.financial_system.credit_registry.loans.get(loan_id) {
-                    if let Some(lender_bs) = state.financial_system.balance_sheets.get_mut(&loan.details.lender) {
+                    if let Some(lender_bs) = state.financial_system.balance_sheets.get_mut(&loan.state.lender) {
                         lender_bs.income_statement.operating_expenses += *provision;
                     }
                 }
@@ -328,7 +296,7 @@ impl StateEffectApplicator {
                             .clearing_house
                             .csd
                             .custody_accounts
-                            .get_mut(&loan.details.borrower)
+                            .get_mut(&loan.state.borrower)
                             .and_then(|acc| acc.holdings.get_mut(instrument_id))
                         {
                             if holding.available >= *quantity {
@@ -353,16 +321,35 @@ impl StateEffectApplicator {
 
                     if *new_status == LienStatus::Released {
                         if let CollateralType::Securities { instrument_id, quantity, .. } = &lien.collateral_type {
-                            if let Some(loan) =
+                            if let Some(instrument) =
                                 state.financial_system.instruments.instruments.get(&lien.secured_obligation)
                             {
-                                if let InstrumentType::Debt(DebtInstrument::Loan(details)) = &loan.instrument_type {
+                                let borrower = match instrument.state() {
+                                    InstrumentRuntime::Credit(CreditState::Loan(loan_state)) => {
+                                        Some(loan_state.borrower)
+                                    }
+                                    InstrumentRuntime::Credit(CreditState::ConsumerLoan { loan, .. }) => {
+                                        Some(loan.borrower)
+                                    }
+                                    InstrumentRuntime::Credit(CreditState::CreditLine(details)) => {
+                                        Some(details.borrower)
+                                    }
+                                    InstrumentRuntime::Credit(CreditState::ConsumerCreditCard(details)) => {
+                                        Some(details.borrower)
+                                    }
+                                    InstrumentRuntime::Credit(CreditState::TradeCredit(details)) => {
+                                        Some(details.debtor)
+                                    }
+                                    _ => None,
+                                };
+
+                                if let Some(borrower_id) = borrower {
                                     if let Some(holding) = state
                                         .financial_system
                                         .clearing_house
                                         .csd
                                         .custody_accounts
-                                        .get_mut(&details.borrower)
+                                        .get_mut(&borrower_id)
                                         .and_then(|acc| acc.holdings.get_mut(instrument_id))
                                     {
                                         holding.pledged = (holding.pledged - quantity).max(0.0);

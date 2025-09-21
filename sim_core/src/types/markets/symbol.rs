@@ -137,68 +137,62 @@ fn slugify(s: &str) -> String {
 }
 
 fn derive_instrument_symbol(inst: &Instrument) -> Symbol {
-    match &inst.instrument_type {
-        InstrumentType::Debt(debt) => match debt {
-            DebtInstrument::Bond(b) => {
-                let base = match b.bond_type {
-                    BondType::Government => "GOV",
-                    BondType::Corporate => "CORP",
-                    BondType::InterbankLoan => "IBL",
-                    BondType::Municipal => "MUNI",
-                    BondType::Agency => "AGY",
-                    BondType::Supranational => "SUPRA",
+    // Updated symbol derivation to match on InstrumentRuntime now that legacy InstrumentType was removed.
+    match inst.state() {
+        InstrumentRuntime::Bond(bond) => {
+            let base = match bond.bond_type() {
+                BondType::Government => "GOV",
+                BondType::Corporate => "CORP",
+                BondType::InterbankLoan => "IBL",
+                BondType::Municipal => "MUNI",
+                BondType::Agency => "AGY",
+                BondType::Supranational => "SUPRA",
+            };
+
+            let tenor_years = bond.archetype.day_count.year_fraction(bond.issue_date, bond.maturity_date).abs();
+            let tenor = Tenor::from_years(tenor_years);
+            let year = bond.maturity_date.year();
+            let issuer_short = short_agent(bond.issuer);
+
+            let body = if matches!(bond.bond_type(), BondType::Corporate) {
+                format!("{base}_{issuer_short}_{}_{}", fmt_tenor(tenor), year)
+            } else {
+                format!("{base}_{}_{}", fmt_tenor(tenor), year)
+            };
+
+            Symbol(body)
+        }
+        InstrumentRuntime::Credit(credit) => match credit {
+            CreditState::Loan(loan) => {
+                let d = loan.maturity_date.format("%Y%m%d");
+                Symbol(format!("LOAN_{}_{}", short_agent(loan.borrower), d))
+            }
+            CreditState::ConsumerLoan { category, loan } => {
+                let tag = match category {
+                    ConsumerLoanCategory::ResidentialMortgage => "MTG",
+                    ConsumerLoanCategory::AutoLoan => "AUTO",
+                    ConsumerLoanCategory::PersonalLoan => "PLN",
+                    ConsumerLoanCategory::StudentLoan => "STUD",
                 };
-
-                let tenor = Tenor::from_years(b.original_tenor_years());
-                let y = b.maturity_date.year();
-                let iss = short_agent(b.issuer);
-
-                let body = if matches!(b.bond_type, BondType::Corporate) {
-                    format!("{base}_{iss}_{}_{}", fmt_tenor(tenor), y)
-                } else {
-                    format!("{base}_{}_{}", fmt_tenor(tenor), y)
-                };
-
-                Symbol(body)
+                let d = loan.maturity_date.format("%Y%m%d");
+                Symbol(format!("{tag}_{}_{}", short_agent(loan.borrower), d))
             }
-            DebtInstrument::Loan(l) => {
-                let d = l.maturity_date.format("%Y%m%d");
-                Symbol(format!("LOAN_{}_{}", short_agent(l.borrower), d))
+            CreditState::ConsumerCreditCard(details) => {
+                let d = details.expiry_date.format("%Y%m%d");
+                Symbol(format!("CARD_{}_{}", short_agent(details.borrower), d))
             }
-            DebtInstrument::CreditLine(c) => {
-                let d = c.expiry_date.format("%Y%m%d");
-                Symbol(format!("CRED_{}_{}", short_agent(c.borrower), d))
+            CreditState::CreditLine(details) => {
+                let d = details.expiry_date.format("%Y%m%d");
+                Symbol(format!("CRED_{}_{}", short_agent(details.borrower), d))
             }
-            DebtInstrument::TradeCredit(t) => {
-                let d = t.due_date.format("%Y%m%d");
-                Symbol(format!("TCR_{}_{}", short_agent(t.debtor), d))
+            CreditState::TradeCredit(details) => {
+                let d = details.due_date.format("%Y%m%d");
+                Symbol(format!("TCR_{}_{}", short_agent(details.debtor), d))
             }
-            DebtInstrument::Consumer(c) => match c {
-                ConsumerDebt::ResidentialMortgage(l) => {
-                    let d = l.maturity_date.format("%Y%m%d");
-                    Symbol(format!("MTG_{}_{}", short_agent(l.borrower), d))
-                }
-                ConsumerDebt::AutoLoan(l) => {
-                    let d = l.maturity_date.format("%Y%m%d");
-                    Symbol(format!("AUTO_{}_{}", short_agent(l.borrower), d))
-                }
-                ConsumerDebt::PersonalLoan(l) => {
-                    let d = l.maturity_date.format("%Y%m%d");
-                    Symbol(format!("PLN_{}_{}", short_agent(l.borrower), d))
-                }
-                ConsumerDebt::CreditCard(c) => {
-                    let d = c.expiry_date.format("%Y%m%d");
-                    Symbol(format!("CARD_{}_{}", short_agent(c.borrower), d))
-                }
-                ConsumerDebt::StudentLoan(l) => {
-                    let d = l.maturity_date.format("%Y%m%d");
-                    Symbol(format!("STUD_{}_{}", short_agent(l.borrower), d))
-                }
-            },
         },
-        InstrumentType::Equity(e) => Symbol(format!("EQ_{}", short_agent(e.issuer))),
-        InstrumentType::Cash(c) => {
-            let tag = match c.cash_type {
+        InstrumentRuntime::Equity(equity) => Symbol(format!("EQ_{}", short_agent(equity.profile.issuer))),
+        InstrumentRuntime::Cash(cash) => {
+            let tag = match cash.cash_type {
                 CashType::DemandDeposit => "DEM",
                 CashType::SavingsDeposit => "SAV",
                 CashType::TimeDeposit => "TERM",
@@ -207,31 +201,41 @@ fn derive_instrument_symbol(inst: &Instrument) -> Symbol {
                 CashType::VaultCash => "VAULT",
                 CashType::TreasuryGeneralAccount => "TGA",
             };
-            let ccy = format!("{:?}", c.currency);
+            let ccy = format!("{:?}", cash.currency);
             Symbol(format!("{tag}_{ccy}"))
         }
-        InstrumentType::Derivative(d) => {
-            let und = match &d.underlying {
+        InstrumentRuntime::Derivative(derivative) => {
+            let und = match &derivative.underlying {
                 UnderlyingAsset::Instrument(i) => format!("I{}", short_inst(*i)),
                 UnderlyingAsset::Good(g) => format!("G{}", short_from_uuid(g.0)),
                 UnderlyingAsset::Index(s) => slugify(s),
             };
-            let dte = d.expiry_date.format("%Y%m%d");
+            let dte = derivative
+                .expiry_date
+                .map(|d| d.format("%Y%m%d").to_string())
+                .unwrap_or_else(|| "00000000".to_string());
             Symbol(format!("DRV_{}_{}", und, dte))
         }
-        InstrumentType::StructuredTranche(st) => {
-            let y = st.maturity_date.year();
-            let r = match st.rating {
+        InstrumentRuntime::Structured(tranche) => {
+            let year = tranche.maturity_date.year();
+            let rating_label = match tranche.rating {
                 CreditRating::Government(r) | CreditRating::Corporate(r) => format!("{:?}", r),
                 CreditRating::Consumer(_) => "CN".into(),
             };
-            Symbol(format!("TR_{}_{}", r, y))
+            Symbol(format!("TR_{}_{}", rating_label, year))
         }
-        InstrumentType::Repo(rp) => {
-            let d = rp.end_date.format("%Y%m%d");
-            Symbol(format!("REPO_{}_{}", short_inst(rp.collateral_id), d))
+        InstrumentRuntime::Repo(repo) => {
+            let d = repo.end_date.format("%Y%m%d");
+            Symbol(format!("REPO_{}_{}", short_inst(repo.collateral_id), d))
         }
-        InstrumentType::RealAsset(_) => Symbol("REAL".into()),
+        InstrumentRuntime::RealAsset(asset) => match asset {
+            RealAssetState::Inventory { .. } => Symbol("REAL_INV".into()),
+            RealAssetState::Property { .. } => Symbol("REAL_PROP".into()),
+            RealAssetState::Custom { description, .. } => {
+                let slug = slugify(description);
+                Symbol(if slug.is_empty() { "REAL_CUSTOM".into() } else { slug })
+            }
+        },
     }
 }
 

@@ -103,7 +103,7 @@ impl BasicBankDecisionModel {
             .iter()
             .filter_map(|(id, pos)| {
                 fs.instruments.instruments.get(id).and_then(|inst| {
-                    if let InstrumentType::Cash(d) = &inst.instrument_type {
+                    if let InstrumentRuntime::Cash(d) = &inst.state() {
                         if matches!(d.cash_type, CashType::DemandDeposit | CashType::SavingsDeposit) {
                             return Some(pos.quantity);
                         }
@@ -175,10 +175,10 @@ impl BasicBankDecisionModel {
         if let Some(treasury_ids) = fs.exchange.index.by_bond_type.get(&BondType::Government) {
             for inst_id in treasury_ids {
                 if let Some(instrument) = fs.instruments.instruments.get(inst_id) {
-                    if !instrument.should_create_order_book() {
+                    if !instrument.listability.should_create_order_book() {
                         continue;
                     }
-                    if let InstrumentType::Debt(DebtInstrument::Bond(details)) = &instrument.instrument_type {
+                    if let InstrumentRuntime::Bond(details) = &instrument.state() {
                         if details.maturity_date <= current_date {
                             continue;
                         }
@@ -212,31 +212,33 @@ impl BasicBankDecisionModel {
 
         for auction in fs.exchange.open_auctions.values() {
             if let Some(instrument) = fs.instruments.instruments.get(&auction.instrument_id) {
-                if let Some(details) = instrument.instrument_type.as_bond() {
-                    let tenor_years = details.remaining_tenor_years(current_date);
-                    let (bid_yield_bps, _ask_yield_bps) =
-                        quote_treasury_yields(tenor_years, fs.central_bank.policy_rate_bps, rng);
+                if let InstrumentRuntime::Bond(details) = &instrument.state() {
+                    if details.maturity_date <= current_date {
+                        let tenor_years = details.remaining_tenor_years(current_date);
+                        let (bid_yield_bps, _ask_yield_bps) =
+                            quote_treasury_yields(tenor_years, fs.central_bank.policy_rate_bps, rng);
 
-                    let bid_price = auction_bid_price(
-                        details,
-                        bid_yield_bps,
-                        &auction.instrument_id,
-                        &fs.pricing_feeds,
-                        current_date,
-                    );
+                        let bid_price = auction_bid_price(
+                            details,
+                            bid_yield_bps,
+                            &auction.instrument_id,
+                            &fs.pricing_feeds,
+                            current_date,
+                        );
 
-                    if bid_price.to_f64() < 1.0 {
-                        continue;
-                    }
-                    let quantity_to_bid = (auction_budget / bid_price.to_f64()).floor() as u32;
+                        if bid_price.to_f64() < 1.0 {
+                            continue;
+                        }
+                        let quantity_to_bid = (auction_budget / bid_price.to_f64()).floor() as u32;
 
-                    if quantity_to_bid > 0 {
-                        intentions.push(SimIntention::Fiscal(FiscalIntention::BidInDebtAuction {
-                            agent_id: bank.id,
-                            auction_id: auction.auction_id,
-                            quantity: quantity_to_bid,
-                            bid_price,
-                        }));
+                        if quantity_to_bid > 0 {
+                            intentions.push(SimIntention::Fiscal(FiscalIntention::BidInDebtAuction {
+                                agent_id: bank.id,
+                                auction_id: auction.auction_id,
+                                quantity: quantity_to_bid,
+                                bid_price,
+                            }));
+                        }
                     }
                 }
             }

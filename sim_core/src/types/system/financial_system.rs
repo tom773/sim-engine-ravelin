@@ -1,4 +1,5 @@
 use crate::prelude::*;
+use crate::types::instrument::{InstrumentIdentifiers, InstrumentRuntime, Listability, MarketProfile, RealAssetState};
 use ordered_float::NotNan;
 use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
@@ -11,11 +12,11 @@ use uuid::Uuid;
 
 pub fn is_security(inst: &Instrument) -> bool {
     matches!(
-        inst.instrument_type,
-        InstrumentType::Debt(DebtInstrument::Bond(_))
-            | InstrumentType::Equity(_)
-            | InstrumentType::StructuredTranche(_)
-            | InstrumentType::Derivative(_)
+        inst.state(),
+        InstrumentRuntime::Bond(_)
+            | InstrumentRuntime::Equity(_)
+            | InstrumentRuntime::Structured(_)
+            | InstrumentRuntime::Derivative(_)
     )
 }
 #[serde_as]
@@ -123,27 +124,29 @@ impl FinancialSystem {
     fn find_inventory_instrument_mut(&mut self, agent_id: &AgentId) -> Option<&mut Instrument> {
         let bs = self.balance_sheets.get(agent_id)?;
         let inventory_inst_id = bs.assets.keys().find(|inst_id| {
-            matches!(
-                self.instruments.instruments.get(inst_id).map(|i| &i.instrument_type),
-                Some(InstrumentType::RealAsset(RealAssetType::Inventory { .. }))
-            )
+            self.instruments
+                .instruments
+                .get(inst_id)
+                .map(|i| matches!(i.state(), InstrumentRuntime::RealAsset(RealAssetState::Inventory { .. })))
+                .unwrap_or(false)
         })?;
         self.instruments.instruments.get_mut(inventory_inst_id)
     }
 
     pub fn add_to_inventory(&mut self, owner: &AgentId, good_id: &GoodId, qty: f64, unit_cost: Money) {
         let inst_id = self.ensure_inventory_container(*owner);
-        if let Some(Instrument {
-            instrument_type: InstrumentType::RealAsset(RealAssetType::Inventory { goods, .. }),
-            ..
-        }) = self.instruments.instruments.get_mut(&inst_id)
-        {
-            let item = goods.entry(*good_id).or_default();
+        if let Some(inst) = self.instruments.instruments.get_mut(&inst_id) {
+            if let InstrumentRuntime::RealAsset(RealAssetState::Inventory { goods, .. }) = inst.state_mut() {
+                let item = goods.entry(*good_id).or_default();
 
-            let new_qty = item.quantity + qty;
-            item.unit_cost =
-                if new_qty > 0.0 { (item.unit_cost * item.quantity + unit_cost * qty) / new_qty } else { Money::ZERO };
-            item.quantity = new_qty;
+                let new_qty = item.quantity + qty;
+                item.unit_cost = if new_qty > 0.0 {
+                    (item.unit_cost * item.quantity + unit_cost * qty) / new_qty
+                } else {
+                    Money::ZERO
+                };
+                item.quantity = new_qty;
+            }
         }
     }
     pub fn ensure_inventory_container(&mut self, owner: AgentId) -> InstrumentId {
@@ -152,10 +155,14 @@ impl FinancialSystem {
             .get(&owner)
             .and_then(|bs| {
                 bs.assets.keys().find(|inst_id| {
-                    matches!(
-                        self.instruments.instruments.get(inst_id).map(|i| &i.instrument_type),
-                        Some(InstrumentType::RealAsset(RealAssetType::Inventory { .. }))
-                    )
+                    self.instruments
+                        .instruments
+                        .get(inst_id)
+                        .and_then(|i| match &i.state() {
+                            InstrumentRuntime::RealAsset(RealAssetState::Inventory { .. }) => Some(()),
+                            _ => None,
+                        })
+                        .is_some()
                 })
             })
             .copied()
@@ -164,12 +171,16 @@ impl FinancialSystem {
         }
 
         let inst_id = InstrumentId(uuid::Uuid::new_v4());
-        let inst = Instrument::new(
-            inst_id,
-            InstrumentType::RealAsset(RealAssetType::Inventory { owner, goods: std::collections::HashMap::new() }),
+        let instrument = Instrument::new(
+            InstrumentIdentifiers::from(inst_id),
             MarketProfile::from_market(InstrumentMarket::CapitalMarket(CapitalMarketSegment::StructuredFinance)),
+            Listability::Unlisted,
+            InstrumentRuntime::RealAsset(RealAssetState::Inventory { owner, goods: HashMap::new() }),
         );
-        self.instruments.instruments.insert(inst_id, inst);
+        self.instruments.instruments.insert(inst_id, instrument.clone());
+        self.instruments.insert_core(inst_id, instrument.clone());
+        self.instrument_registry.update_cache(instrument.clone());
+        self.instrument_registry.update_core_cache(instrument.clone());
         let bs = self.balance_sheets.entry(owner).or_insert_with(|| BalanceSheet::new(owner));
         bs.assets.insert(
             inst_id,
@@ -201,7 +212,6 @@ impl FinancialSystem {
                 }
             }
         }
-
         let discrepancy = total_assets - total_liabilities;
         const TOLERANCE: f64 = 1.0;
 
@@ -216,7 +226,7 @@ impl FinancialSystem {
     }
     pub fn remove_from_inventory(&mut self, agent_id: &AgentId, good_id: &GoodId, quantity: f64) -> Result<(), String> {
         if let Some(inst) = self.find_inventory_instrument_mut(agent_id) {
-            if let InstrumentType::RealAsset(RealAssetType::Inventory { goods, .. }) = &mut inst.instrument_type {
+            if let InstrumentRuntime::RealAsset(RealAssetState::Inventory { goods, .. }) = inst.state_mut() {
                 if let Some(item) = goods.get_mut(good_id) {
                     if item.quantity >= quantity {
                         item.quantity -= quantity;

@@ -107,7 +107,7 @@ impl Domain for FiscalDomain {
 
                 let auction = DebtAuction {
                     auction_id: Uuid::new_v4(),
-                    instrument_id: new_instrument.id,
+                    instrument_id: new_instrument.instrument_id(),
                     quantity_offered: *quantity,
                     status: AuctionStatus::Open,
                     bids: vec![],

@@ -494,14 +494,13 @@ impl InvestmentFirmDecisionModel {
         if let Some(treasury_ids) = fs.exchange.index.by_bond_type.get(&BondType::Government) {
             for inst_id in treasury_ids {
                 if let Some(instrument) = fs.instruments.instruments.get(inst_id) {
-                    if !instrument.should_create_order_book() {
+                    if !instrument.listability.should_create_order_book() {
                         continue;
                     }
-                    if let InstrumentType::Debt(DebtInstrument::Bond(details)) = &instrument.instrument_type {
+                    if let InstrumentRuntime::Bond(details) = &instrument.state() {
                         if details.maturity_date <= current_date {
                             continue;
                         }
-
                         let tenor_years = details.remaining_tenor_years(current_date);
                         if self.should_make_market_for_ytm(tenor_years) {
                             let (bid_bps, ask_bps) =
@@ -530,7 +529,7 @@ impl InvestmentFirmDecisionModel {
 
         for auction in fs.exchange.open_auctions.values() {
             if let Some(instrument) = fs.instruments.instruments.get(&auction.instrument_id) {
-                if let Some(details) = instrument.instrument_type.as_bond() {
+                if let InstrumentRuntime::Bond(details) = &instrument.state() {
                     let tenor_years = details.remaining_tenor_years(current_date);
                     let (bid_yield_bps, _ask_yield_bps) =
                         quote_treasury_yields(tenor_years, fs.central_bank.policy_rate_bps, rng);

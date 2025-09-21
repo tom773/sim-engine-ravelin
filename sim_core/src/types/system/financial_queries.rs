@@ -1,4 +1,6 @@
 use crate::prelude::*;
+use crate::types::instrument::credit::ConsumerLoanCategory;
+use crate::types::instrument::{CreditState, InstrumentRuntime, RealAssetState};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -27,87 +29,85 @@ pub struct InstrumentInfo {
 
 impl Instrument {
     pub fn get_consolidation_key(&self) -> ConsolidationKey {
-        match &self.instrument_type {
-            InstrumentType::Cash(d) => ConsolidationKey {
+        match self.state() {
+            InstrumentRuntime::Cash(d) => ConsolidationKey {
                 issuer: d.issuer,
                 instrument_type: "Cash".to_string(),
                 subtype: format!("{:?}", d.cash_type),
             },
-            InstrumentType::Debt(debt) => match debt {
-                DebtInstrument::Bond(d) => ConsolidationKey {
-                    issuer: d.issuer,
-                    instrument_type: "Bond".to_string(),
-                    subtype: format!("{:?}_{:?}_{:?}_{:?}", d.bond_type, d.rating, d.maturity_date, d.coupon_rate_bps),
-                },
-                DebtInstrument::Loan(d) => ConsolidationKey {
-                    issuer: d.lender,
-                    instrument_type: "Loan".to_string(),
-                    subtype: format!("{:?}_{:?}", d.loan_type, d.loan_id),
-                },
-                DebtInstrument::CreditLine(d) => ConsolidationKey {
-                    issuer: d.lender,
-                    instrument_type: "CreditLine".to_string(),
-                    subtype: format!("{:?}_{:?}", d.facility_type, d.facility_id),
-                },
-                DebtInstrument::TradeCredit(d) => ConsolidationKey {
-                    issuer: d.creditor,
-                    instrument_type: "TradeCredit".to_string(),
-                    subtype: format!("{:?}", d.status),
-                },
-                DebtInstrument::Consumer(c) => match c {
-                    ConsumerDebt::ResidentialMortgage(l) => ConsolidationKey {
-                        issuer: l.lender,
-                        instrument_type: "ResidentialMortgage".to_string(),
-                        subtype: format!("{:?}_{:?}", l.loan_type, l.loan_id),
-                    },
-                    ConsumerDebt::AutoLoan(l) => ConsolidationKey {
-                        issuer: l.lender,
-                        instrument_type: "AutoLoan".to_string(),
-                        subtype: format!("{:?}_{:?}", l.loan_type, l.loan_id),
-                    },
-                    ConsumerDebt::CreditCard(cl) => ConsolidationKey {
-                        issuer: cl.lender,
-                        instrument_type: "CreditCard".to_string(),
-                        subtype: format!("{:?}_{:?}", cl.facility_type, cl.facility_id),
-                    },
-                    ConsumerDebt::PersonalLoan(l) => ConsolidationKey {
-                        issuer: l.lender,
-                        instrument_type: "PersonalLoan".to_string(),
-                        subtype: format!("{:?}_{:?}", l.loan_type, l.loan_id),
-                    },
-                    ConsumerDebt::StudentLoan(l) => ConsolidationKey {
-                        issuer: l.lender,
-                        instrument_type: "StudentLoan".to_string(),
-                        subtype: format!("{:?}_{:?}", l.loan_type, l.loan_id),
-                    },
-                },
+            InstrumentRuntime::Bond(d) => ConsolidationKey {
+                issuer: d.issuer,
+                instrument_type: "Bond".to_string(),
+                subtype: format!(
+                    "{:?}_{:?}_{:?}_{:?}",
+                    d.bond_type(),
+                    d.rating,
+                    d.maturity_date,
+                    d.archetype.coupon_rate_bps
+                ),
             },
-            InstrumentType::RealAsset(d) => {
-                let (owner, subtype) = match d {
-                    RealAssetType::Inventory { owner, .. } => (*owner, "Inventory".to_string()),
-                    RealAssetType::Property { owner, .. } => (*owner, "Property".to_string()),
+            InstrumentRuntime::Credit(credit) => match credit {
+                CreditState::Loan(loan) => ConsolidationKey {
+                    issuer: loan.lender,
+                    instrument_type: "Loan".to_string(),
+                    subtype: format!("{:?}_{:?}", loan.loan_type, loan.loan_id),
+                },
+                CreditState::CreditLine(details) => ConsolidationKey {
+                    issuer: details.lender,
+                    instrument_type: "CreditLine".to_string(),
+                    subtype: format!("{:?}_{:?}", details.facility_type, details.facility_id),
+                },
+                CreditState::ConsumerCreditCard(details) => ConsolidationKey {
+                    issuer: details.lender,
+                    instrument_type: "CreditCard".to_string(),
+                    subtype: format!("{:?}_{:?}", details.facility_type, details.facility_id),
+                },
+                CreditState::TradeCredit(details) => ConsolidationKey {
+                    issuer: details.creditor,
+                    instrument_type: "TradeCredit".to_string(),
+                    subtype: format!("{:?}", details.status),
+                },
+                CreditState::ConsumerLoan { category, loan } => {
+                    let instrument_type = match category {
+                        ConsumerLoanCategory::ResidentialMortgage => "ResidentialMortgage",
+                        ConsumerLoanCategory::AutoLoan => "AutoLoan",
+                        ConsumerLoanCategory::PersonalLoan => "PersonalLoan",
+                        ConsumerLoanCategory::StudentLoan => "StudentLoan",
+                    };
+                    ConsolidationKey {
+                        issuer: loan.lender,
+                        instrument_type: instrument_type.to_string(),
+                        subtype: format!("{:?}_{:?}", loan.loan_type, loan.loan_id),
+                    }
+                }
+            },
+            InstrumentRuntime::RealAsset(asset) => {
+                let (owner, subtype) = match asset {
+                    RealAssetState::Inventory { owner, .. } => (*owner, "Inventory".to_string()),
+                    RealAssetState::Property { owner, .. } => (*owner, "Property".to_string()),
+                    RealAssetState::Custom { owner, description, .. } => (*owner, description.clone()),
                 };
                 ConsolidationKey { issuer: owner, instrument_type: "RealAsset".to_string(), subtype }
             }
-            InstrumentType::Equity(d) => ConsolidationKey {
-                issuer: d.issuer,
+            InstrumentRuntime::Equity(equity) => ConsolidationKey {
+                issuer: equity.profile.issuer,
                 instrument_type: "Equity".to_string(),
-                subtype: "CommonStock".to_string(),
+                subtype: format!("{:?}", equity.profile.share_class),
             },
-            InstrumentType::Repo(d) => ConsolidationKey {
-                issuer: d.borrower,
+            InstrumentRuntime::Repo(repo) => ConsolidationKey {
+                issuer: repo.borrower,
                 instrument_type: "Repo".to_string(),
                 subtype: "Repo".to_string(),
             },
-            InstrumentType::Derivative(d) => ConsolidationKey {
+            InstrumentRuntime::Derivative(derivative) => ConsolidationKey {
                 issuer: AgentId(Uuid::nil()),
                 instrument_type: "Derivative".to_string(),
-                subtype: format!("{:?}", d.underlying),
+                subtype: format!("{:?}", derivative.underlying),
             },
-            InstrumentType::StructuredTranche(d) => ConsolidationKey {
-                issuer: d.issuer,
+            InstrumentRuntime::Structured(tranche) => ConsolidationKey {
+                issuer: tranche.issuer,
                 instrument_type: "StructuredTranche".to_string(),
-                subtype: format!("{:?}_{:?}", d.tranche_type, d.rating),
+                subtype: format!("{:?}_{:?}", tranche.tranche_type, tranche.rating),
             },
         }
     }
@@ -118,8 +118,8 @@ impl FinancialSystem {
         let bs = self.balance_sheets.get(bank_id)?;
         bs.assets.iter().find_map(|(id, _pos)| {
             let inst = self.instruments.instruments.get(id)?;
-            match &inst.instrument_type {
-                InstrumentType::Cash(details) if details.cash_type == CashType::CentralBankReserves => Some(*id),
+            match inst.state() {
+                InstrumentRuntime::Cash(details) if details.cash_type == CashType::CentralBankReserves => Some(*id),
                 _ => None,
             }
         })
@@ -140,8 +140,8 @@ impl FinancialSystem {
         let bs = self.balance_sheets.get(agent_id)?;
         bs.assets.iter().find_map(|(id, _)| {
             let inst = self.instruments.instruments.get(id)?;
-            match &inst.instrument_type {
-                InstrumentType::Cash(details) if details.cash_type == CashType::DemandDeposit => {
+            match inst.state() {
+                InstrumentRuntime::Cash(details) if details.cash_type == CashType::DemandDeposit => {
                     Some((*id, details.issuer))
                 }
                 _ => None,
@@ -153,8 +153,8 @@ impl FinancialSystem {
         let gov_bs = self.balance_sheets.get(&self.government.id)?;
         gov_bs.assets.iter().find_map(|(id, _pos)| {
             let inst = self.instruments.instruments.get(id)?;
-            match &inst.instrument_type {
-                InstrumentType::Cash(details) if details.cash_type == CashType::TreasuryGeneralAccount => {
+            match inst.state() {
+                InstrumentRuntime::Cash(details) if details.cash_type == CashType::TreasuryGeneralAccount => {
                     Some((*id, self.central_bank.id))
                 }
                 _ => None,
@@ -164,9 +164,9 @@ impl FinancialSystem {
 
     pub fn find_any_bank_account(&self) -> Option<(InstrumentId, AgentId)> {
         self.instruments.instruments.values().find_map(|inst| {
-            if let InstrumentType::Cash(details) = &inst.instrument_type {
+            if let InstrumentRuntime::Cash(details) = inst.state() {
                 if details.cash_type == CashType::DemandDeposit {
-                    return Some((inst.id, details.issuer));
+                    return Some((inst.instrument_id(), details.issuer));
                 }
             }
             None
@@ -177,11 +177,11 @@ impl FinancialSystem {
         book_value_per_unit: f64,
     ) -> Result<(), String> {
         if let Some(inst) = self.instruments.instruments.get(instrument_id) {
-            match &inst.instrument_type {
-                InstrumentType::Debt(DebtInstrument::Bond(_))
-                | InstrumentType::Equity(_)
-                | InstrumentType::StructuredTranche(_)
-                | InstrumentType::Derivative(_) => {
+            match inst.state() {
+                InstrumentRuntime::Bond(_)
+                | InstrumentRuntime::Equity(_)
+                | InstrumentRuntime::Structured(_)
+                | InstrumentRuntime::Derivative(_) => {
                     return Err(format!("Security {} must use CSD…", instrument_id));
                 }
                 _ => {}
@@ -225,59 +225,58 @@ impl FinancialSystem {
             currency: None,
         };
 
-        let issuer_id = match &instrument.instrument_type {
-            InstrumentType::Cash(d) => {
+        let issuer_id = match instrument.state() {
+            InstrumentRuntime::Cash(d) => {
                 info.currency = Some(d.currency);
                 Some(d.issuer)
             }
-            InstrumentType::Debt(debt) => match debt {
-                DebtInstrument::Bond(d) => {
-                    info.face_value = Some(d.face_value);
-                    info.coupon_rate_bps = Some(d.coupon_rate_bps);
-                    info.maturity_date = Some(d.maturity_date);
-                    info.remaining_years = Some(d.remaining_tenor_years(current_date));
-                    Some(d.issuer)
-                }
-                DebtInstrument::Loan(d) => {
-                    info.face_value = Some(d.principal);
-                    info.maturity_date = Some(d.maturity_date);
-                    Some(d.lender)
-                }
-                DebtInstrument::CreditLine(d) => {
-                    info.face_value = Some(d.commitment_amount);
-                    info.maturity_date = Some(d.expiry_date);
-                    Some(d.lender)
-                }
-                DebtInstrument::TradeCredit(d) => {
-                    info.face_value = Some(d.amount);
-                    info.maturity_date = Some(d.due_date);
-                    Some(d.creditor)
-                }
-                DebtInstrument::Consumer(c) => match c {
-                    ConsumerDebt::ResidentialMortgage(l)
-                    | ConsumerDebt::AutoLoan(l)
-                    | ConsumerDebt::PersonalLoan(l)
-                    | ConsumerDebt::StudentLoan(l) => {
-                        info.face_value = Some(l.principal);
-                        info.maturity_date = Some(l.maturity_date);
-                        Some(l.lender)
-                    }
-                    ConsumerDebt::CreditCard(cl) => {
-                        info.face_value = Some(cl.commitment_amount);
-                        info.maturity_date = Some(cl.expiry_date);
-                        Some(cl.lender)
-                    }
-                },
-            },
-            InstrumentType::Equity(d) => Some(d.issuer),
-            InstrumentType::Repo(d) => Some(d.borrower),
-            InstrumentType::StructuredTranche(d) => {
-                info.face_value = Some(d.face_value);
-                info.coupon_rate_bps = Some(d.coupon_rate_bps);
+            InstrumentRuntime::Bond(d) => {
+                info.face_value = Some(d.archetype.face_value);
+                info.coupon_rate_bps = Some(d.archetype.coupon_rate_bps);
                 info.maturity_date = Some(d.maturity_date);
+                info.remaining_years = Some(d.remaining_tenor_years(current_date));
                 Some(d.issuer)
             }
-            _ => None,
+            InstrumentRuntime::Credit(credit) => match credit {
+                CreditState::Loan(loan) => {
+                    info.face_value = Some(loan.principal());
+                    info.maturity_date = Some(loan.maturity_date);
+                    Some(loan.lender)
+                }
+                CreditState::ConsumerLoan { loan, .. } => {
+                    info.face_value = Some(loan.principal());
+                    info.maturity_date = Some(loan.maturity_date);
+                    Some(loan.lender)
+                }
+                CreditState::CreditLine(details) => {
+                    info.face_value = Some(details.commitment_amount);
+                    info.maturity_date = Some(details.expiry_date);
+                    Some(details.lender)
+                }
+                CreditState::ConsumerCreditCard(details) => {
+                    info.face_value = Some(details.commitment_amount);
+                    info.maturity_date = Some(details.expiry_date);
+                    Some(details.lender)
+                }
+                CreditState::TradeCredit(details) => {
+                    info.face_value = Some(details.amount);
+                    info.maturity_date = Some(details.due_date);
+                    Some(details.creditor)
+                }
+            },
+            InstrumentRuntime::Equity(equity) => Some(equity.profile.issuer),
+            InstrumentRuntime::Repo(repo) => {
+                info.face_value = Some(repo.cash_principal);
+                info.maturity_date = Some(repo.end_date);
+                Some(repo.borrower)
+            }
+            InstrumentRuntime::Structured(tranche) => {
+                info.face_value = Some(tranche.face_value);
+                info.coupon_rate_bps = Some(tranche.coupon_rate_bps);
+                info.maturity_date = Some(tranche.maturity_date);
+                Some(tranche.issuer)
+            }
+            InstrumentRuntime::Derivative(_) | InstrumentRuntime::RealAsset(_) => None,
         };
 
         if let Some(id) = issuer_id {
@@ -304,7 +303,7 @@ impl FinancialSystem {
         if let Some(bs) = self.balance_sheets.get(agent_id) {
             for inst_id in bs.assets.keys() {
                 if let Some(inst) = self.instruments.instruments.get(inst_id) {
-                    if let InstrumentType::RealAsset(RealAssetType::Inventory { goods, .. }) = &inst.instrument_type {
+                    if let InstrumentRuntime::RealAsset(RealAssetState::Inventory { goods, .. }) = inst.state() {
                         return goods.clone();
                     }
                 }
@@ -426,7 +425,7 @@ impl FinancialSystem {
                     .iter()
                     .filter_map(|(id, pos)| {
                         self.instruments.instruments.get(id).and_then(|inst| {
-                            if let InstrumentType::Cash(_) = &inst.instrument_type { Some(pos.quantity) } else { None }
+                            if matches!(inst.state(), InstrumentRuntime::Cash(_)) { Some(pos.quantity) } else { None }
                         })
                     })
                     .sum()

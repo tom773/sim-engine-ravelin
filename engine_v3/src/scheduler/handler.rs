@@ -4,6 +4,7 @@ use domains::{ResolutionContext, ResolutionPhase};
 use rand::prelude::*;
 use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
+use sim_core::types::core_utils::time::is_coupon_date;
 use sim_core::*;
 use std::time::Instant;
 use tracing::instrument;
@@ -157,23 +158,23 @@ impl StepHandler for GovCouponsHandler {
             let current_date = state.current_date;
             let gov_id = fs.government.id;
 
-            let gov_bonds: Vec<(InstrumentId, BondDetails)> = fs
+            let gov_bonds: Vec<(InstrumentId, BondState)> = fs
                 .instruments
                 .instruments
                 .iter()
                 .filter_map(|(id, inst)| {
-                    if let InstrumentType::Debt(DebtInstrument::Bond(details)) = &inst.instrument_type {
-                        if details.bond_type == BondType::Government {
-                            return Some((*id, details.clone()));
+                    if let InstrumentRuntime::Bond(bond) = inst.state() {
+                        if bond.bond_type() == BondType::Government {
+                            return Some((*id, bond.clone()));
                         }
                     }
                     None
                 })
                 .collect();
 
-            for (inst_id, details) in gov_bonds {
-                let is_coupon = is_coupon_date(current_date, &details);
-                let is_maturity = current_date == details.maturity_date;
+            for (inst_id, bond) in gov_bonds {
+                let is_coupon = is_coupon_date(current_date, bond.clone());
+                let is_maturity = current_date == bond.maturity_date;
 
                 if !is_coupon && !is_maturity {
                     continue;
@@ -195,9 +196,10 @@ impl StepHandler for GovCouponsHandler {
                         };
 
                         if is_coupon {
-                            let coupon_rate = bps_to_decimal(details.coupon_rate_bps);
-                            let payment_per_bond = details.face_value * coupon_rate / details.frequency as f64;
-                            let total_payment = payment_per_bond.to_f64() * quantity;
+                            let coupon_rate = bps_to_decimal(bond.archetype.coupon_rate_bps);
+                            let frequency = bond.archetype.frequency_per_year.max(1) as f64;
+                            let payment_per_bond = (bond.archetype.face_value * coupon_rate) / frequency;
+                            let total_payment = (quantity * payment_per_bond).to_f64();
 
                             effects.push(StateEffect::Financial(FinancialEffect::QueuePayment(PaymentInstruction {
                                 id: Uuid::new_v4(),
@@ -214,7 +216,7 @@ impl StepHandler for GovCouponsHandler {
                         }
 
                         if is_maturity {
-                            let total_principal = details.face_value.to_f64() * quantity;
+                            let total_principal = (quantity * bond.archetype.face_value).to_f64();
                             effects.push(StateEffect::Financial(FinancialEffect::QueuePayment(PaymentInstruction {
                                 id: Uuid::new_v4(),
                                 from_bank: fs.central_bank.id,
@@ -374,19 +376,20 @@ impl StepHandler for CreditServicingHandler {
 
             let mut effects: Vec<StateEffect> = Vec::new();
             for (inst_id, inst) in fs.instruments.instruments.clone() {
-                if let InstrumentType::Debt(DebtInstrument::Loan(details)) = &inst.instrument_type {
+                if let InstrumentRuntime::Credit(CreditState::Loan(loan_state)) = inst.state().clone() {
                     let servicer = LoanServicer::new(state.current_date);
-                    let mut tmp = details.clone();
-                    let interest = servicer.accrue_interest(&mut tmp);
+                    let mut accrual_state = loan_state.clone();
+                    let interest = servicer.accrue_interest(&mut accrual_state);
                     if interest > Money::ZERO {
                         effects.push(StateEffect::Credit(CreditEffect::AccrueLoanInterest {
-                            loan_id: details.loan_id,
+                            loan_id: loan_state.loan_id,
                             interest_amount: interest,
                             accrual_date: state.current_date,
                         }));
                     }
-                    let payer = details.borrower;
-                    let payee = details.lender;
+
+                    let payer = loan_state.borrower;
+                    let payee = loan_state.lender;
                     let (from_bank, to_bank) = {
                         let (_, fb) = fs
                             .find_agent_liquid_account(&payer)
@@ -397,22 +400,23 @@ impl StepHandler for CreditServicingHandler {
                             .ok_or_else(|| "No banks to receive loan payment".to_string())?;
                         (fb, tb)
                     };
+
                     let schedule = fs
                         .credit_registry
                         .payment_schedules
-                        .entry(details.loan_id)
-                        .or_insert_with(|| LoanServicer::new(state.current_date).generate_schedule(details));
+                        .entry(loan_state.loan_id)
+                        .or_insert_with(|| LoanServicer::new(state.current_date).generate_schedule(&loan_state));
 
                     for sp in schedule.scheduled_payments.iter_mut() {
                         if sp.status == PaymentStatus::Scheduled && sp.payment_date <= state.current_date {
-                            let mk_pi = |amount: f64, ctx: TransactionContext| -> PaymentInstruction {
+                            let mk_pi = |amount: Money, ctx: TransactionContext| -> PaymentInstruction {
                                 PaymentInstruction {
                                     id: Uuid::new_v4(),
                                     from_bank,
                                     to_bank,
                                     payer,
                                     payee,
-                                    amount,
+                                    amount: amount.to_f64(),
                                     context: ctx,
                                     priority: PaymentPriority::Normal,
                                     earliest_release_tick: state.ticknum,
@@ -420,12 +424,10 @@ impl StepHandler for CreditServicingHandler {
                                 }
                             };
 
-                            let i_pi = mk_pi(
-                                sp.interest_amount.to_f64(),
-                                TransactionContext::CouponPayment { instrument_id: inst_id },
-                            );
+                            let i_pi =
+                                mk_pi(sp.interest_amount, TransactionContext::CouponPayment { instrument_id: inst_id });
                             let p_pi = mk_pi(
-                                sp.principal_amount.to_f64(),
+                                sp.principal_amount,
                                 TransactionContext::PrincipalRepayment { instrument_id: inst_id },
                             );
 
@@ -463,24 +465,22 @@ impl StepHandler for DepositServicingHandler {
             for (agent_id, bs) in &fs.balance_sheets {
                 for (inst_id, pos) in &bs.assets {
                     if let Some(inst) = fs.instruments.instruments.get(inst_id) {
-                        if let InstrumentType::Cash(details) = &inst.instrument_type {
+                        if let InstrumentRuntime::Cash(cash) = inst.state() {
                             let is_interest_bearing = matches!(
-                                details.cash_type,
+                                cash.cash_type,
                                 CashType::DemandDeposit | CashType::SavingsDeposit | CashType::CentralBankReserves
                             );
 
-                            if is_interest_bearing && details.interest_bps > dec!(0.0) && pos.quantity > 0.0 {
-                                let annual_rate = bps_to_decimal(details.interest_bps);
-                                let interest_amount = pos.quantity * annual_rate.to_f64().unwrap_or(0.0) * year_frac;
+                            if is_interest_bearing && cash.interest_bps > dec!(0.0) && pos.quantity > 0.0 {
+                                let annual_rate = bps_to_decimal(cash.interest_bps).to_f64().unwrap_or(0.0);
+                                let interest_amount = pos.quantity * annual_rate * year_frac;
 
                                 if interest_amount < 0.01 {
                                     continue;
                                 }
-                                let (from_bank, to_bank) = match details.cash_type {
+                                let (from_bank, to_bank) = match cash.cash_type {
                                     CashType::CentralBankReserves => (fs.central_bank.id, fs.central_bank.id),
-                                    CashType::DemandDeposit | CashType::SavingsDeposit => {
-                                        (details.issuer, details.issuer)
-                                    }
+                                    CashType::DemandDeposit | CashType::SavingsDeposit => (cash.issuer, cash.issuer),
                                     _ => continue,
                                 };
 
@@ -488,7 +488,7 @@ impl StepHandler for DepositServicingHandler {
                                     id: Uuid::new_v4(),
                                     from_bank,
                                     to_bank,
-                                    payer: details.issuer,
+                                    payer: cash.issuer,
                                     payee: *agent_id,
                                     amount: interest_amount,
                                     context: TransactionContext::CouponPayment { instrument_id: *inst_id },
@@ -702,11 +702,11 @@ impl StepHandler for DebtAuctionsHandler {
                     let fallback_price = if let Some(inst) =
                         engine.state.financial_system.instruments.instruments.get(&inst_id)
                     {
-                        if let Some(d) = inst.instrument_type.as_bond() {
+                        if let InstrumentRuntime::Bond(b) = &inst.state() {
                             let y_backstop =
                                 (engine.state.financial_system.central_bank.policy_rate_bps - dec!(50)).max(dec!(0));
                             let pricer = GovTermStructurePricer::new(
-                                d.clone(),
+                                b.clone(),
                                 TermStructureMethod::default(),
                                 engine.state.financial_system.pricing_feeds.clone(),
                             );

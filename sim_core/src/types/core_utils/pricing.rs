@@ -32,7 +32,7 @@ pub fn quote_treasury_yields(
 }
 
 pub fn auction_bid_price(
-    bond: &BondDetails, y_bps: BasisPoints, instrument_id: &InstrumentId, feeds: &PricingFeeds, as_of: NaiveDate,
+    bond: &BondState, y_bps: BasisPoints, instrument_id: &InstrumentId, feeds: &PricingFeeds, as_of: NaiveDate,
 ) -> Money {
     let local_feeds = feeds.with_date(as_of);
 

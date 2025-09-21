@@ -325,7 +325,6 @@ pub struct BondArchetype {
     pub face_value: Money,
     pub coupon_rate_bps: BasisPoints,
     pub frequency_per_year: u32,
-    pub rating: Option<CreditRating>,
     pub covenants: Vec<Covenant>,
 }
 

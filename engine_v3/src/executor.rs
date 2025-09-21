@@ -543,7 +543,7 @@ impl SimulationEngine {
                             if let Some(symbol) = fs.exchange.inst_to_symbol.get(inst_id) {
                                 if let Some(market) = fs.exchange.markets.get(symbol) {
                                     if let MarketType::Financial(fin_market) = market {
-                                        if let InstrumentType::Debt(DebtInstrument::Bond(b)) = &inst.instrument_type {
+                                        if let InstrumentRuntime::Bond(b) = &inst.state() {
                                             if let Some(mid) = fin_market.book.mid_price() {
                                                 let tenor = b.remaining_tenor_years(self.state.current_date);
                                                 let tmp = GovTermStructurePricer::new(
@@ -583,7 +583,7 @@ impl SimulationEngine {
         let mut inv_qty: HashMap<GoodId, f64> = HashMap::new();
 
         for (_id, inst) in &self.state.financial_system.instruments.instruments {
-            if let InstrumentType::RealAsset(RealAssetType::Inventory { goods, .. }) = &inst.instrument_type {
+            if let InstrumentRuntime::RealAsset(RealAssetState::Inventory { goods, .. }) = &inst.state() {
                 for (gid, item) in goods {
                     let q = item.quantity.max(0.0);
                     let c = item.unit_cost.to_f64();

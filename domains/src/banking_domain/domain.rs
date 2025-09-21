@@ -104,6 +104,7 @@ impl BankingDomain {
                 }
                 Ok(())
             }
+
             BankingAction::CreateLoanApplication { bank_id, application } => {
                 Validator::bank_exists(*bank_id, state)?;
                 Validator::positive_amount(application.requested_amount)
@@ -174,7 +175,7 @@ impl BankingDomain {
             }
         };
 
-        let loan_id = loan_instrument.id;
+        let loan_id = loan_instrument.instrument_id();
 
         let mut effects = vec![StateEffect::Financial(FinancialEffect::CreateInstrument {
             instrument: loan_instrument,
@@ -260,6 +261,15 @@ impl BankingDomain {
             _ => Amortization::Annuity,
         };
 
+        let loan_purpose = loan_terms.purpose.clone();
+
+        let loan_type = match loan_purpose {
+            LoanPurpose::RealEstate => LoanType::MortgageLoan,
+            LoanPurpose::WorkingCapital => LoanType::WorkingCapital,
+            LoanPurpose::Equipment => LoanType::AssetFinance,
+            _ => LoanType::TermLoan,
+        };
+
         // Determine if the borrower is a consumer from the agent registry
         let is_consumer = state.agents.consumers.contains_key(&borrower_id);
 
@@ -269,82 +279,69 @@ impl BankingDomain {
             Some(CreditRating::Corporate(SpCreditRating::BBB))
         };
 
-        let loan_details = LoanDetails {
-            loan_id: Uuid::new_v4(),
-            lender: lender_id,
-            borrower: borrower_id,
-            // borrower_type field is removed
-            loan_type: LoanType::TermLoan,
-            facility_id: None,
-
-            principal,
-            outstanding_principal: principal,
-            reference_rate: Some(RateIndex::Fixed),
-            spread_bps: loan_terms.annual_rate_bps,
-            rate_floor_bps: None,
-            rate_cap_bps: None,
-
-            day_count: DayCount::ActAct,
-            compounding: Compounding::Simple,
-            payment_frequency: loan_terms.payment_frequency,
-
-            origination_date: issue_date,
-            maturity_date,
-            next_payment_date,
-            last_accrual_date: issue_date,
-
+        let loan_archetype = LoanArchetype {
+            facility_type: FacilityType::TermLoanFacility,
             amortization,
-            prepayment_terms: PrepaymentTerms {
+            prepayment: PrepaymentTerms {
                 allowed: true,
                 penalty_type: PrepaymentPenalty::None,
                 lockout_period_months: None,
             },
-
-            collateral: vec![],
-            covenants: vec![],
-            rating,
-            impairment: ImpairmentState {
-                stage: ImpairmentStage::Stage1Performing,
-                provision_amount: Money::ZERO,
-                days_past_due: 0,
-                probability_of_default: 0.0,
-                loss_given_default: 0.0,
-                exposure_at_default: principal,
+            principal,
+            day_count: DayCount::ActAct,
+            compounding: Compounding::Simple,
+            rate_structure: RateStructure {
+                base_rate: RateIndex::Fixed,
+                spread_bps: loan_terms.annual_rate_bps,
+                floor_bps: None,
+                cap_bps: None,
             },
-
-            accrued_interest: Money::ZERO,
-            unamortized_fees: Money::ZERO,
+            repayment_schedule: LoanRepaymentSchedule {
+                payment_frequency: loan_terms.payment_frequency,
+                term_months: loan_terms.term_months,
+            },
+            collateral_requirements: Vec::new(),
         };
 
-        let loan = Loan {
-            instrument_id: InstrumentId(Uuid::new_v4()),
-            details: loan_details,
-            status: LoanStatus::Current,
-            servicing_history: vec![],
+        let loan_id = Uuid::new_v4();
+        let instrument_id = InstrumentId(Uuid::new_v4());
+
+        let impairment = ImpairmentState {
+            stage: ImpairmentStage::Stage1Performing,
+            provision_amount: Money::ZERO,
+            days_past_due: 0,
+            probability_of_default: 0.0,
+            loss_given_default: 0.0,
+            exposure_at_default: principal,
         };
 
-        let deposit_instrument = Instrument::cash(
-            InstrumentId(Uuid::new_v4()),
-            lender_id, // bank issues the deposit liability
-            CashType::DemandDeposit,
-            Currency::USD,
-            state.financial_system.central_bank.policy_rate_bps,
-        )
-        .build();
+        let loan_state = LoanState::new(
+            loan_id,
+            lender_id,
+            borrower_id,
+            None,
+            loan_type,
+            loan_archetype,
+            principal,
+            issue_date,
+            maturity_date,
+            next_payment_date,
+            issue_date,
+            Vec::new(),
+            Vec::new(),
+            rating,
+            impairment,
+            Money::ZERO,
+            Money::ZERO,
+        );
 
-        let mut effects = vec![
-            StateEffect::Credit(CreditEffect::RegisterLoan {
-                loan: loan.clone(),
-                is_consumer: is_consumer, // Pass the borrower type to the effect
-                purpose: loan_terms.purpose.clone(),
-            }),
-            StateEffect::Financial(FinancialEffect::CreateInstrument {
-                instrument: deposit_instrument,
-                creditor: borrower_id, // borrower has the deposit asset
-                debtor: lender_id,     // bank has the deposit liability
-                quantity: principal.to_f64(),
-            }),
-        ];
+        let loan = Loan { instrument_id, state: loan_state, status: LoanStatus::Current, servicing_history: vec![] };
+
+        let mut effects = vec![StateEffect::Credit(CreditEffect::RegisterLoan {
+            loan: loan.clone(),
+            is_consumer,
+            purpose: loan_purpose,
+        })];
 
         effects.push(StateEffect::Financial(FinancialEffect::RecordTransaction(Transaction {
             id: Uuid::new_v4(),
