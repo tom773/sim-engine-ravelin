@@ -419,7 +419,7 @@ impl TransactionsDomain {
             return DomainResult::empty();
         }
 
-        let (_, from_bank) = match state.financial_system.find_agent_liquid_account(&from) {
+        let (from_account_id, from_bank) = match state.financial_system.find_agent_liquid_account(&from) {
             Some(acc) => acc,
             None => return DomainResult::failure(vec![format!("Sender {} has no liquid account", from)]),
         };
@@ -433,7 +433,6 @@ impl TransactionsDomain {
                 .unwrap(),
         };
 
-        let (from_account_id, _) = state.financial_system.find_agent_liquid_account(&from).unwrap();
         let from_bs = state.financial_system.balance_sheets.get(&from).unwrap();
         if let Some(pos) = from_bs.assets.get(&from_account_id) {
             if pos.quantity < amount {

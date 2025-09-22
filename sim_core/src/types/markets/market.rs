@@ -2,11 +2,12 @@ use crate::prelude::*;
 use crate::types::markets::pricers::BondPricingTerms;
 use chrono::NaiveDate;
 use ordered_float::OrderedFloat;
+use parking_lot::RwLock;
 use serde::{
     de::Deserializer,
     ser::{SerializeStruct, Serializer},
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -415,9 +416,41 @@ pub struct Exchange {
     pub tape: HashMap<Symbol, Vec<TimedTrade>>,
     pub recent_trades: Vec<Trade>,
     pub pricing_feeds: Option<PricingFeeds>,
+    pub labour_offer_cache: Arc<RwLock<Option<HashSet<AgentId>>>>,
 }
 
 impl Exchange {
+    pub fn invalidate_labour_offer_cache(&self) {
+        self.labour_offer_cache.write().take();
+    }
+
+    pub fn firm_has_open_job_offer(&self, firm_id: &AgentId) -> bool {
+        {
+            let guard = self.labour_offer_cache.read();
+            if let Some(cache) = guard.as_ref() {
+                return cache.contains(firm_id);
+            }
+        }
+
+        let mut write_guard = self.labour_offer_cache.write();
+        if let Some(cache) = write_guard.as_ref() {
+            return cache.contains(firm_id);
+        }
+
+        let mut rebuilt = HashSet::new();
+        for market in self.markets.values() {
+            if let MarketType::Labour(labour_market) = market {
+                for offer in labour_market.job_offers.iter().filter(|offer| offer.quantity > 0) {
+                    rebuilt.insert(offer.firm_id);
+                }
+            }
+        }
+
+        let contains = rebuilt.contains(firm_id);
+        *write_guard = Some(rebuilt);
+        contains
+    }
+
     pub fn attach_pricing_feeds(&mut self, feeds: PricingFeeds) {
         self.pricing_feeds = Some(feeds.clone());
         for market in self.markets.values_mut() {

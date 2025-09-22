@@ -218,8 +218,9 @@ fn telemetry_metric_name(step: TickStep, metric: &str) -> Option<&'static str> {
         (ResolveMarketPhase, "effects") => Some("engine.step.resolve_market.effects"),
         (ResolveDependentPhase, "actions") => Some("engine.step.resolve_dependent.actions"),
         (ResolveDependentPhase, "effects") => Some("engine.step.resolve_dependent.effects"),
-        (ApplyMarketEffectsForPriceDiscovery, "market_effects_applied") =>
-            Some("engine.step.apply_market_effects.market_effects_applied"),
+        (ApplyMarketEffectsForPriceDiscovery, "market_effects_applied") => {
+            Some("engine.step.apply_market_effects.market_effects_applied")
+        }
         (ClearMarkets, "trades_generated") => Some("engine.step.clear_markets.trades_generated"),
         (ServiceGovernmentDebt, "payments_generated") => Some("engine.step.service_government_debt.payments_generated"),
         (SettleTrades, "trades_processed") => Some("engine.step.settle_trades.trades_processed"),
@@ -227,8 +228,9 @@ fn telemetry_metric_name(step: TickStep, metric: &str) -> Option<&'static str> {
         (ReconcileCredit, "credit_effects") => Some("engine.step.reconcile_credit.credit_effects"),
         (ServiceCredit, "serviced_loans") => Some("engine.step.service_credit.serviced_loans"),
         (ServiceDeposits, "payments_generated") => Some("engine.step.service_deposits.payments_generated"),
-        (ApplyPaymentQueuing, "payments_and_settlements_queued") =>
-            Some("engine.step.apply_payment_queuing.payments_and_settlements_queued"),
+        (ApplyPaymentQueuing, "payments_and_settlements_queued") => {
+            Some("engine.step.apply_payment_queuing.payments_and_settlements_queued")
+        }
         (RunRTGS, "payments_settled") => Some("engine.step.run_rtgs.payments_settled"),
         (RunRTGS, "payments_remaining") => Some("engine.step.run_rtgs.payments_remaining"),
         (ApplyAllEffects, "total_effects_applied") => Some("engine.step.apply_all_effects.total_effects_applied"),

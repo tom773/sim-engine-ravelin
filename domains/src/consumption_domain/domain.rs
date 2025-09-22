@@ -1,7 +1,6 @@
 use crate::{Any, Domain, DomainResult, ResolutionContext, ResolutionPhase, ResolutionResult, inventory};
 use serde::{Deserialize, Serialize};
 use sim_core::*;
-use std::collections::HashMap;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConsumptionDomain {}
@@ -9,19 +8,6 @@ pub struct ConsumptionDomain {}
 impl ConsumptionDomain {
     pub fn new() -> Self {
         Self {}
-    }
-
-    fn get_agent_inventory(fs: &FinancialSystem, agent_id: &AgentId) -> HashMap<GoodId, InventoryItem> {
-        if let Some(bs) = fs.balance_sheets.get(agent_id) {
-            for inst_id in bs.assets.keys() {
-                if let Some(inst) = fs.instruments.instruments.get(inst_id) {
-                    if let InstrumentRuntime::RealAsset(RealAssetState::Inventory { goods, .. }) = &inst.state() {
-                        return goods.clone();
-                    }
-                }
-            }
-        }
-        HashMap::new()
     }
 }
 
@@ -89,7 +75,7 @@ impl ConsumptionDomain {
                 Validator::agent_exists(*agent_id, state)?;
 
                 let fs = &state.financial_system;
-                let inventory = Self::get_agent_inventory(fs, agent_id);
+                let inventory = fs.get_agent_inventory(agent_id);
 
                 let available = inventory.get(good_id).map_or(0.0, |item| item.quantity);
 

@@ -19,43 +19,56 @@ fn run_pure_rtgs(state: &mut SimState) -> Result<Vec<StateEffect>, EffectError> 
     let current_tick = state.ticknum;
     let mut finalization_effects = Vec::new();
 
+    state.financial_system.rtgs.pending.sort_by(|a, b| {
+        use PaymentPriority::*;
+        let priority_order = |p: &PaymentPriority| match p {
+            Urgent => 0,
+            Normal => 1,
+            Low => 2,
+        };
+        priority_order(&a.priority).cmp(&priority_order(&b.priority)).then(a.id.cmp(&b.id))
+    });
+
+    enum StepDecision {
+        Advance,
+        Settle,
+        Expire,
+    }
+
     loop {
         let mut progressed = false;
-
-        state.financial_system.rtgs.pending.sort_by(|a, b| {
-            use PaymentPriority::*;
-            let priority_order = |p: &PaymentPriority| match p {
-                Urgent => 0,
-                Normal => 1,
-                Low => 2,
-            };
-            priority_order(&a.priority).cmp(&priority_order(&b.priority)).then(a.id.cmp(&b.id))
-        });
-
         let mut i = 0;
+
         while i < state.financial_system.rtgs.pending.len() {
-            let pi = state.financial_system.rtgs.pending[i].clone();
-
-            if current_tick < pi.earliest_release_tick {
-                i += 1;
-                continue;
-            }
-
-            let can_fund_result = can_fund(state, &pi)?;
-            let can_use_credit = can_use_daylight_credit(state, &pi)?;
-
-            if can_fund_result || can_use_credit {
-                apply_cash_movements_immediately(state, &pi)?;
-
-                if let TransactionContext::TradeSettlement { trade_id } = pi.context {
-                    finalization_effects.push(StateEffect::Financial(FinancialEffect::DvPFinalize { trade_id }));
+            let decision = {
+                let pi = &state.financial_system.rtgs.pending[i];
+                if current_tick < pi.earliest_release_tick {
+                    StepDecision::Advance
+                } else if can_fund(state, pi)? || can_use_daylight_credit(state, pi)? {
+                    StepDecision::Settle
+                } else if current_tick >= pi.deadline_tick {
+                    StepDecision::Expire
+                } else {
+                    StepDecision::Advance
                 }
+            };
 
-                let settled_payment = state.financial_system.rtgs.pending.remove(i);
-                state.financial_system.rtgs.settled.push(settled_payment);
-                progressed = true;
-            } else {
-                if current_tick >= pi.deadline_tick {
+            match decision {
+                StepDecision::Advance => {
+                    i += 1;
+                }
+                StepDecision::Settle => {
+                    let pi = state.financial_system.rtgs.pending.remove(i);
+                    apply_cash_movements_immediately(state, &pi)?;
+
+                    if let TransactionContext::TradeSettlement { trade_id } = pi.context {
+                        finalization_effects.push(StateEffect::Financial(FinancialEffect::DvPFinalize { trade_id }));
+                    }
+
+                    state.financial_system.rtgs.settled.push(pi);
+                    progressed = true;
+                }
+                StepDecision::Expire => {
                     let expired_payment = state.financial_system.rtgs.pending.remove(i);
 
                     if let TransactionContext::TradeSettlement { trade_id } = expired_payment.context {
@@ -70,8 +83,6 @@ fn run_pure_rtgs(state: &mut SimState) -> Result<Vec<StateEffect>, EffectError> 
 
                     state.financial_system.rtgs.rejected.push((expired_payment, "Deadline exceeded".to_string()));
                     progressed = true;
-                } else {
-                    i += 1;
                 }
             }
         }

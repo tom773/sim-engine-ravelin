@@ -95,13 +95,7 @@ impl ProductionFirmDecisionModel {
         total_input_cost / output_qty
     }
     pub fn force_handle_hiring(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
-        let has_open_offer = state.financial_system.exchange.markets.values().any(|market| {
-            if let MarketType::Labour(lm) = market {
-                lm.job_offers.iter().any(|offer| offer.firm_id == firm.id && offer.quantity > 0)
-            } else {
-                false
-            }
-        });
+        let has_open_offer = state.financial_system.exchange.firm_has_open_job_offer(&firm.id);
 
         if has_open_offer {
             return;
@@ -126,13 +120,7 @@ impl ProductionFirmDecisionModel {
         }
     }
     pub fn handle_hiring(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
-        let has_open_offer = state.financial_system.exchange.markets.values().any(|market| {
-            if let MarketType::Labour(lm) = market {
-                lm.job_offers.iter().any(|offer| offer.firm_id == firm.id && offer.quantity > 0)
-            } else {
-                false
-            }
-        });
+        let has_open_offer = state.financial_system.exchange.firm_has_open_job_offer(&firm.id);
 
         if has_open_offer {
             return;
@@ -384,7 +372,7 @@ impl ProductionFirmDecisionModel {
             if quantity_to_sell > 1e-6 {
                 intentions.push(SimIntention::Production(ProductionIntention::PostGoodToMarket {
                     agent_id: firm.id,
-                    good_id,
+                    good_id: *good_id,
                     quantity: quantity_to_sell,
                     ask_price,
                 }));

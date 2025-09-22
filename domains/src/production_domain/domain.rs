@@ -1,7 +1,6 @@
 use crate::{Any, Domain, DomainResult, ResolutionContext, ResolutionPhase, ResolutionResult, inventory};
 use serde::{Deserialize, Serialize};
 use sim_core::*;
-use std::collections::HashMap;
 use tracing::{debug, info, trace, warn};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -13,7 +12,7 @@ impl ProductionDomain {
     }
 }
 
-fn get_unit_cost(inventory: &HashMap<GoodId, InventoryItem>, good_id: &GoodId) -> Money {
+fn get_unit_cost(inventory: &AgentInventory<'_>, good_id: &GoodId) -> Money {
     inventory.get(good_id).map_or(Money::ZERO, |item| item.unit_cost)
 }
 

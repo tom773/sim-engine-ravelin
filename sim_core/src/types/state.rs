@@ -2,7 +2,7 @@ use crate::prelude::*;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -111,8 +111,8 @@ impl AgentRegistry {
         self.consumers.get_mut(id)
     }
 
-    pub fn all_agent_ids(&self) -> HashSet<AgentId> {
-        self.banks.keys().cloned().chain(self.consumers.keys().cloned()).chain(self.firms.keys().cloned()).collect()
+    pub fn all_agent_ids(&self) -> impl Iterator<Item = AgentId> + '_ {
+        self.banks.keys().cloned().chain(self.consumers.keys().cloned()).chain(self.firms.keys().cloned())
     }
     pub fn get_agent_type_string(&self, id: &AgentId) -> Option<&'static str> {
         if self.banks.contains_key(id) {

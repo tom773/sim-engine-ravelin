@@ -111,6 +111,7 @@ impl StateEffectApplicator {
                     }
                     LabourMarketUpdate::AddOffer(offer) => market.job_offers.push(offer.clone()),
                 }
+                state.financial_system.exchange.invalidate_labour_offer_cache();
                 Ok(())
             }
             MarketEffect::ClearLabourMarketOrders { market_id, filled_applications } => {

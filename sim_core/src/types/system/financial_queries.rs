@@ -3,7 +3,7 @@ use crate::types::instrument::credit::ConsumerLoanCategory;
 use crate::types::instrument::{CreditState, InstrumentRuntime, RealAssetState};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::Iter as HashMapIter};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -25,6 +25,72 @@ pub struct InstrumentInfo {
     pub maturity_date: Option<NaiveDate>,
     pub remaining_years: Option<f64>,
     pub currency: Option<Currency>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AgentInventory<'a> {
+    goods: Option<&'a HashMap<GoodId, InventoryItem>>,
+}
+
+impl<'a> AgentInventory<'a> {
+    pub fn empty() -> Self {
+        Self { goods: None }
+    }
+
+    pub fn with_goods(goods: &'a HashMap<GoodId, InventoryItem>) -> Self {
+        Self { goods: Some(goods) }
+    }
+
+    pub fn get(&self, good_id: &GoodId) -> Option<&'a InventoryItem> {
+        self.goods.and_then(|map| map.get(good_id))
+    }
+
+    pub fn iter(&self) -> AgentInventoryIter<'a> {
+        AgentInventoryIter::new(self.goods)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.goods.map_or(true, |map| map.is_empty())
+    }
+}
+
+pub struct AgentInventoryIter<'a> {
+    inner: Option<HashMapIter<'a, GoodId, InventoryItem>>,
+}
+
+impl<'a> AgentInventoryIter<'a> {
+    fn new(goods: Option<&'a HashMap<GoodId, InventoryItem>>) -> Self {
+        Self { inner: goods.map(|map| map.iter()) }
+    }
+}
+
+impl<'a> Iterator for AgentInventoryIter<'a> {
+    type Item = (&'a GoodId, &'a InventoryItem);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match &mut self.inner {
+            Some(iter) => iter.next(),
+            None => None,
+        }
+    }
+}
+
+impl<'a> IntoIterator for AgentInventory<'a> {
+    type Item = (&'a GoodId, &'a InventoryItem);
+    type IntoIter = AgentInventoryIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        AgentInventoryIter::new(self.goods)
+    }
+}
+
+impl<'a> IntoIterator for &'a AgentInventory<'a> {
+    type Item = (&'a GoodId, &'a InventoryItem);
+    type IntoIter = AgentInventoryIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        AgentInventoryIter::new(self.goods)
+    }
 }
 
 impl Instrument {
@@ -299,17 +365,17 @@ impl FinancialSystem {
 
         Some(info)
     }
-    pub fn get_agent_inventory(&self, agent_id: &AgentId) -> HashMap<GoodId, InventoryItem> {
+    pub fn get_agent_inventory(&self, agent_id: &AgentId) -> AgentInventory<'_> {
         if let Some(bs) = self.balance_sheets.get(agent_id) {
             for inst_id in bs.assets.keys() {
                 if let Some(inst) = self.instruments.instruments.get(inst_id) {
                     if let InstrumentRuntime::RealAsset(RealAssetState::Inventory { goods, .. }) = inst.state() {
-                        return goods.clone();
+                        return AgentInventory::with_goods(goods);
                     }
                 }
             }
         }
-        HashMap::new()
+        AgentInventory::empty()
     }
     pub fn find_general_labour_market(&self) -> Option<LabourMarketId> {
         self.exchange.labour_to_symbol.keys().next().cloned()
