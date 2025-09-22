@@ -1,207 +1,9 @@
 use crate::prelude::*;
-use crate::types::instrument::archetypes::{BondType, CashFlow, CashType};
-use crate::types::instrument::inst_core::{
-    InstrumentIdentifiers, LegacyInstrumentCore, Listability, MarketProfile, VenueType, legacy_core_from_instrument,
-    legacy_core_from_instrument_with_identifiers, legacy_core_from_owned, legacy_core_from_owned_with_identifiers,
-    legacy_identifiers, update_instrument_from_legacy_core,
-};
-use crate::types::money::{Money, Rate};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Instrument {
-    pub id: InstrumentId,
-    pub instrument_type: InstrumentType,
-    pub market_profile: MarketProfile,
-    pub listability: Listability,
-}
-
-impl Instrument {
-    pub fn new(id: InstrumentId, instrument_type: InstrumentType, market_profile: MarketProfile) -> Self {
-        let listability = match &instrument_type {
-            InstrumentType::Cash(details) => match details.cash_type {
-                CashType::DemandDeposit | CashType::SavingsDeposit => Listability::Unlisted,
-                CashType::Currency | CashType::VaultCash => Listability::Unlisted,
-                CashType::CentralBankReserves => Listability::Listed(VenueType::PostedRates),
-                CashType::TimeDeposit => Listability::Listed(VenueType::PostedRates),
-                CashType::TreasuryGeneralAccount => Listability::Unlisted,
-            },
-            InstrumentType::Debt(debt) => debt.listability(),
-            InstrumentType::Equity(_) => Listability::Listed(VenueType::CentralLimitOrderBook),
-            InstrumentType::RealAsset(_) => Listability::Unlisted,
-            _ => Listability::Listed(VenueType::CentralLimitOrderBook),
-        };
-
-        Self { id, instrument_type, market_profile, listability }
-    }
-
-    pub fn with_listability(mut self, listability: Listability) -> Self {
-        self.listability = listability;
-        self
-    }
-
-    pub fn should_create_order_book(&self) -> bool {
-        self.listability.should_create_order_book()
-    }
-
-    pub fn identifiers(&self) -> InstrumentIdentifiers {
-        legacy_identifiers(self)
-    }
-
-    pub fn to_core_with_identifiers(&self, identifiers: InstrumentIdentifiers) -> LegacyInstrumentCore {
-        legacy_core_from_instrument_with_identifiers(self, identifiers)
-    }
-
-    pub fn into_core_with_identifiers(self, identifiers: InstrumentIdentifiers) -> LegacyInstrumentCore {
-        legacy_core_from_owned_with_identifiers(self, identifiers)
-    }
-
-    pub fn into_core(self) -> LegacyInstrumentCore {
-        legacy_core_from_owned(self)
-    }
-
-    pub fn update_from_core(&mut self, core: &LegacyInstrumentCore) {
-        update_instrument_from_legacy_core(self, core)
-    }
-
-    pub fn face_value(&self) -> Option<Money> {
-        self.instrument_type.face_value()
-    }
-
-    pub fn type_as_string(&self) -> &'static str {
-        self.instrument_type.type_as_string()
-    }
-}
-
-impl From<Instrument> for LegacyInstrumentCore {
-    fn from(value: Instrument) -> Self {
-        value.into_core()
-    }
-}
-
-impl From<LegacyInstrumentCore> for Instrument {
-    fn from(core: LegacyInstrumentCore) -> Self {
-        Self {
-            id: core.identifiers.instrument_id,
-            instrument_type: core.state,
-            market_profile: core.market_profile,
-            listability: core.listability,
-        }
-    }
-}
-
-impl Instrument {
-    pub fn to_core(&self) -> LegacyInstrumentCore {
-        legacy_core_from_instrument(self)
-    }
-
-    pub fn from_core(core: LegacyInstrumentCore) -> Self {
-        core.into()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum InstrumentType {
-    Cash(CashDetails),
-    Debt(DebtInstrument),
-    RealAsset(RealAssetType),
-    Equity(EquityDetails),
-    Derivative(DerivativeDetails),
-    StructuredTranche(StructuredTrancheDetails),
-    Repo(RepoDetails),
-}
-impl InstrumentType {
-    pub fn as_bond(&self) -> Option<&BondDetails> {
-        match self {
-            InstrumentType::Debt(DebtInstrument::Bond(b)) => Some(b),
-            _ => None,
-        }
-    }
-
-    pub fn as_loan(&self) -> Option<&LoanDetails> {
-        match self {
-            InstrumentType::Debt(DebtInstrument::Loan(l)) => Some(l),
-            _ => None,
-        }
-    }
-
-    pub fn as_debt(&self) -> Option<&DebtInstrument> {
-        match self {
-            InstrumentType::Debt(d) => Some(d),
-            _ => None,
-        }
-    }
-
-    pub fn face_value(&self) -> Option<Money> {
-        match self {
-            InstrumentType::Debt(debt) => match debt {
-                DebtInstrument::Bond(d) => Some(d.face_value),
-                DebtInstrument::Loan(d) => Some(d.principal),
-                DebtInstrument::Consumer(c) => match c {
-                    ConsumerDebt::ResidentialMortgage(l)
-                    | ConsumerDebt::AutoLoan(l)
-                    | ConsumerDebt::PersonalLoan(l)
-                    | ConsumerDebt::StudentLoan(l) => Some(l.principal),
-                    ConsumerDebt::CreditCard(cl) => Some(cl.commitment_amount),
-                },
-                _ => None,
-            },
-            InstrumentType::StructuredTranche(d) => Some(d.face_value),
-            _ => None,
-        }
-    }
-
-    pub fn type_as_string(&self) -> &'static str {
-        match self {
-            InstrumentType::Cash(details) => match details.cash_type {
-                CashType::DemandDeposit => "Demand Deposit",
-                CashType::SavingsDeposit => "Savings Deposit",
-                CashType::TimeDeposit => "Time Deposit",
-                CashType::Currency => "Physical Currency",
-                CashType::CentralBankReserves => "Central Bank Reserves",
-                CashType::VaultCash => "Vault Cash",
-                CashType::TreasuryGeneralAccount => "Treasury General Account",
-            },
-            InstrumentType::Debt(debt) => match debt {
-                DebtInstrument::Bond(details) => match details.bond_type {
-                    BondType::Corporate => "Corporate Bond",
-                    BondType::Government => "Government Bond",
-                    BondType::InterbankLoan => "Interbank Loan",
-                    BondType::Municipal => "Municipal Bond",
-                    BondType::Agency => "Agency Bond",
-                    BondType::Supranational => "Supranational Bond",
-                },
-                DebtInstrument::Loan(_) => "Loan",
-                DebtInstrument::Consumer(c) => match c {
-                    ConsumerDebt::ResidentialMortgage(_) => "Residential Mortgage",
-                    ConsumerDebt::AutoLoan(_) => "Auto Loan",
-                    ConsumerDebt::PersonalLoan(_) => "Personal Loan",
-                    ConsumerDebt::CreditCard(_) => "Credit Card",
-                    ConsumerDebt::StudentLoan(_) => "Student Loan",
-                },
-                DebtInstrument::CreditLine(_) => "Credit Facility",
-                DebtInstrument::TradeCredit(_) => "Trade Credit",
-            },
-            InstrumentType::RealAsset(details) => match details {
-                RealAssetType::Inventory { .. } => "Inventory",
-                RealAssetType::Property { .. } => "Property",
-            },
-            InstrumentType::Equity(_) => "Equity",
-            InstrumentType::Derivative(_) => "Derivative",
-            InstrumentType::StructuredTranche(_) => "Structured Tranche",
-            InstrumentType::Repo(_) => "Repurchase Agreement",
-        }
-    }
-}
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CashDetails {
-    pub issuer: AgentId,
-    pub cash_type: CashType,
-    pub currency: Currency,
-    pub interest_bps: BasisPoints,
-}
+pub type Instrument = InstrumentCore<InstrumentRuntime>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Currency {
@@ -213,99 +15,110 @@ pub enum Currency {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct BondDetails {
-    pub bond_type: BondType,
-    pub issuer: AgentId,
-    pub cash_flow: CashFlow,
-    pub coupon_rate_bps: BasisPoints,
-    pub face_value: Money,
-    pub issue_date: NaiveDate,
-    pub maturity_date: NaiveDate,
-    pub frequency: u32,
-    pub day_count: DayCount,
-    pub rating: CreditRating,
-    pub last_accrual_date: Option<NaiveDate>,
+pub struct DividendPolicy {
+    pub last_dividend: Option<Money>,
+    pub next_dividend_date: Option<NaiveDate>,
+    pub frequency: Option<PaymentFrequency>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct EquityDetails {
+pub struct EquityProfile {
     pub issuer: AgentId,
+    pub share_class: EquityClass,
+    pub authorized_shares: Option<u64>,
+    pub par_value: Option<Money>,
+    pub dividend_policy: Option<DividendPolicy>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum EquityClass {
+    Common,
+    Preferred,
+    Restricted,
+    Treasury,
+    DepositaryReceipt,
+    Custom(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EquityState {
+    pub profile: EquityProfile,
     pub outstanding_shares: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct DerivativeDetails {
-    pub derivative_type: DerivativeType,
-    pub underlying: UnderlyingAsset,
-    pub expiry_date: NaiveDate,
-    pub contract_size: f64,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq, Hash)]
-pub enum UnderlyingAsset {
-    Instrument(InstrumentId),
-    Good(GoodId),
-    Index(String),
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum DerivativeType {
-    Option(OptionDetails),
-    Future(FutureDetails),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum OptionStyle {
-    Call,
-    Put,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct OptionDetails {
-    pub style: OptionStyle,
-    pub strike_price: Money,
-    pub european: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct FutureDetails {}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct StructuredTrancheDetails {
+pub struct StructuredTrancheState {
     pub issuer: AgentId,
-    pub tranche_type: TrancheType,
+    pub tranche_label: Option<String>,
+    pub tranche_type: StructuredTrancheType,
     pub attachment_point: Rate,
     pub detachment_point: Rate,
     pub face_value: Money,
+    pub outstanding_notional: Money,
     pub coupon_rate_bps: BasisPoints,
     pub maturity_date: NaiveDate,
     pub rating: CreditRating,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum TrancheType {
+pub enum StructuredTrancheType {
     Senior,
     Mezzanine,
     Equity,
+    Custom,
+}
+
+impl StructuredTrancheType {
+    pub fn label(&self) -> &'static str {
+        match self {
+            StructuredTrancheType::Senior => "Senior Tranche",
+            StructuredTrancheType::Mezzanine => "Mezzanine Tranche",
+            StructuredTrancheType::Equity => "Equity Tranche",
+            StructuredTrancheType::Custom => "Structured Tranche",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RepoDetails {
+pub struct RepoState {
     pub lender: AgentId,
     pub borrower: AgentId,
     pub collateral_id: InstrumentId,
     pub collateral_quantity: f64,
-    pub loan_amount: Money,
+    pub cash_principal: Money,
     pub interest_bps: BasisPoints,
     pub start_date: NaiveDate,
     pub end_date: NaiveDate,
     pub haircut: Rate,
+    pub open_term: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum RealAssetType {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum RealAssetState {
     Inventory { owner: AgentId, goods: HashMap<GoodId, InventoryItem> },
     Property { owner: AgentId, address: String, sq_ft: u32, market_value: Money },
+    Custom { owner: AgentId, description: String, metadata: HashMap<String, String> },
+}
+
+impl RealAssetState {
+    pub fn label(&self) -> &'static str {
+        match self {
+            RealAssetState::Inventory { .. } => "Inventory",
+            RealAssetState::Property { .. } => "Property",
+            RealAssetState::Custom { .. } => "Real Asset",
+        }
+    }
+
+    pub fn face_value(&self) -> Option<Money> {
+        match self {
+            RealAssetState::Inventory { goods, .. } => {
+                let total = goods.values().fold(Money::ZERO, |acc, item| acc + (item.unit_cost * item.quantity));
+                Some(total)
+            }
+            RealAssetState::Property { market_value, .. } => Some(*market_value),
+            RealAssetState::Custom { .. } => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
@@ -316,21 +129,68 @@ pub struct InventoryItem {
 }
 
 impl InventoryItem {
-    pub fn age(&self, as_of: NaiveDate) -> i64 {
+    pub fn age_days(&self, as_of: NaiveDate) -> i64 {
         (as_of - self.date_acquired).num_days()
     }
 }
 
-impl BondDetails {
-    pub fn original_tenor_years(&self) -> f64 {
-        self.day_count.year_fraction(self.issue_date, self.maturity_date)
-    }
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum DerivativeContract {
+    Option(OptionContract),
+    Future(FutureContract),
+    Custom { description: String },
+}
 
-    pub fn remaining_tenor_years(&self, as_of: NaiveDate) -> f64 {
-        self.day_count.year_fraction(as_of, self.maturity_date).max(0.0)
-    }
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OptionContract {
+    pub style: OptionStyle,
+    pub strike_price: Money,
+    pub european: bool,
+}
 
-    pub fn tenor_bucket(&self) -> TenorBucket {
-        TenorBucket::from_years(self.original_tenor_years())
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FutureContract {
+    pub contract_size: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DerivativeState {
+    pub issuer: AgentId,
+    pub counterparty: Option<AgentId>,
+    pub contract: DerivativeContract,
+    pub underlying: UnderlyingAsset,
+    pub trade_date: Option<NaiveDate>,
+    pub expiry_date: Option<NaiveDate>,
+    pub settlement_date: Option<NaiveDate>,
+    pub notional: Option<Money>,
+    pub margin_requirement: Option<Money>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum OptionStyle {
+    Call,
+    Put,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq, Hash)]
+pub enum UnderlyingAsset {
+    Instrument(InstrumentId),
+    Good(GoodId),
+    Index(String),
+}
+
+impl DerivativeContract {
+    pub fn describe(&self) -> &'static str {
+        match self {
+            DerivativeContract::Option(_) => "Option",
+            DerivativeContract::Future(_) => "Future",
+            DerivativeContract::Custom { .. } => "Custom Derivative",
+        }
+    }
+}
+
+impl DerivativeState {
+    pub fn label(&self) -> &'static str {
+        self.contract.describe()
     }
 }

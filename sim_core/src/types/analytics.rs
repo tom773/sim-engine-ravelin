@@ -247,17 +247,18 @@ impl EconomicAnalytics for SimState {
 
 impl FinancialSystem {
     pub fn m0(&self) -> f64 {
+        // Updated cash detection to interrogate InstrumentRuntime instead of legacy InstrumentType wrappers.
         self.balance_sheets
             .values()
             .flat_map(|bs| bs.assets.iter())
             .filter_map(|(id, pos)| {
-                self.instruments.instruments.get(id).and_then(|inst| {
-                    if let InstrumentType::Cash(d) = &inst.instrument_type {
-                        if matches!(d.cash_type, CashType::CentralBankReserves | CashType::Currency) {
-                            return Some(pos.quantity);
-                        }
+                self.instruments.instruments.get(id).and_then(|inst| match inst.state() {
+                    InstrumentRuntime::Cash(details)
+                        if matches!(details.cash_type, CashType::CentralBankReserves | CashType::Currency) =>
+                    {
+                        Some(pos.quantity)
                     }
-                    None
+                    _ => None,
                 })
             })
             .sum()
@@ -269,37 +270,36 @@ impl FinancialSystem {
             .filter(|(id, _)| !bank_ids.contains(id) && **id != self.central_bank.id)
             .flat_map(|(_, bs)| bs.assets.iter())
             .filter_map(|(id, pos)| {
-                self.instruments.instruments.get(id).and_then(|inst| {
-                    if let InstrumentType::Cash(d) = &inst.instrument_type {
-                        if matches!(d.cash_type, CashType::Currency | CashType::DemandDeposit) {
-                            return Some(pos.quantity);
-                        }
+                self.instruments.instruments.get(id).and_then(|inst| match inst.state() {
+                    InstrumentRuntime::Cash(details)
+                        if matches!(details.cash_type, CashType::Currency | CashType::DemandDeposit) =>
+                    {
+                        Some(pos.quantity)
                     }
-                    None
+                    _ => None,
                 })
             })
             .sum()
     }
-
     pub fn m2(&self, bank_ids: &std::collections::HashSet<AgentId>) -> f64 {
         self.balance_sheets
             .iter()
             .filter(|(id, _)| !bank_ids.contains(id) && **id != self.central_bank.id)
             .flat_map(|(_, bs)| bs.assets.iter())
             .filter_map(|(id, pos)| {
-                self.instruments.instruments.get(id).and_then(|inst| {
-                    if let InstrumentType::Cash(d) = &inst.instrument_type {
+                self.instruments.instruments.get(id).and_then(|inst| match inst.state() {
+                    InstrumentRuntime::Cash(details)
                         if matches!(
-                            d.cash_type,
+                            details.cash_type,
                             CashType::Currency
                                 | CashType::DemandDeposit
                                 | CashType::SavingsDeposit
                                 | CashType::TimeDeposit
-                        ) {
-                            return Some(pos.quantity);
-                        }
+                        ) =>
+                    {
+                        Some(pos.quantity)
                     }
-                    None
+                    _ => None,
                 })
             })
             .sum()
@@ -311,13 +311,11 @@ impl FinancialSystem {
     pub fn get_bank_reserves(&self, bank_id: &AgentId) -> Option<f64> {
         let bs = self.balance_sheets.get(bank_id)?;
         bs.assets.iter().find_map(|(id, pos)| {
-            self.instruments.instruments.get(id).and_then(|inst| {
-                if let InstrumentType::Cash(d) = &inst.instrument_type {
-                    if d.cash_type == CashType::CentralBankReserves {
-                        return Some(pos.quantity);
-                    }
+            self.instruments.instruments.get(id).and_then(|inst| match inst.state() {
+                InstrumentRuntime::Cash(details) if details.cash_type == CashType::CentralBankReserves => {
+                    Some(pos.quantity)
                 }
-                None
+                _ => None,
             })
         })
     }
@@ -334,16 +332,16 @@ impl FinancialSystem {
         bs.liabilities
             .iter()
             .filter_map(|(id, pos)| {
-                self.instruments.instruments.get(id).and_then(|inst| {
-                    if let InstrumentType::Cash(d) = &inst.instrument_type {
+                self.instruments.instruments.get(id).and_then(|inst| match inst.state() {
+                    InstrumentRuntime::Cash(details)
                         if matches!(
-                            d.cash_type,
+                            details.cash_type,
                             CashType::DemandDeposit | CashType::SavingsDeposit | CashType::TimeDeposit
-                        ) {
-                            return Some(pos.quantity);
-                        }
+                        ) =>
+                    {
+                        Some(pos.quantity)
                     }
-                    None
+                    _ => None,
                 })
             })
             .sum()

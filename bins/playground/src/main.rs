@@ -40,7 +40,6 @@ fn make_template() -> InstrumentTemplate {
             face_value: Money::from(1_000_i64),
             coupon_rate_bps: BasisPoints::new(500, 1),
             frequency_per_year: 2,
-            rating: Some(CreditRating::Corporate(SpCreditRating::BBB)),
             covenants: Vec::new(),
         }),
         market_profile: MarketProfile::from_market(InstrumentMarket::MoneyMarket(

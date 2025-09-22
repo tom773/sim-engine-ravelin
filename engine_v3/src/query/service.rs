@@ -5,7 +5,11 @@ use parking_lot::{RwLock, RwLockReadGuard};
 use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
 use sim_core::prelude::*;
-use sim_core::types::instrument::inst_core::MarketProfile;
+use sim_core::types::instrument::{
+    InstrumentIdentifiers, Listability, MarketProfile,
+    archetypes::{ConsumerCreditRating, CreditRating, SpCreditRating},
+};
+use sim_core::types::markets::market::{ListingKey, TenorBucket, listing_key_from_instrument};
 use std::sync::Arc;
 use std::{cmp::Ordering, collections::HashMap};
 use uuid::Uuid;
@@ -76,9 +80,35 @@ impl AggregatedAccumulator {
     }
 }
 
-fn safe_book_value(position: &Position) -> f64 {
-    let per_unit = position.book_value_per_unit.to_f64();
-    if per_unit.is_finite() { position.quantity * per_unit } else { position.quantity }
+fn safe_book_value(position: &PopulatedPositionDto) -> f64 {
+    let quantity = position.position.quantity;
+
+    if let Some(price) = position.market_price.as_ref() {
+        return price.to_f64() * quantity;
+    }
+
+    if let Some(unit_value) = position.instrument.unit_par_value() {
+        return unit_value.to_f64() * quantity;
+    }
+
+    let per_unit = position.position.book_value_per_unit.to_f64();
+    if per_unit.is_finite() { quantity * per_unit } else { quantity }
+}
+
+fn validate_aggregate_totals(
+    agent_id: &AgentId, positions: &[PopulatedPositionDto], aggregates: &[AggregatedBookEntryDto], side: &'static str,
+) {
+    let raw_total: f64 = positions.iter().map(|pos| safe_book_value(pos)).sum();
+    let aggregated_total: f64 = aggregates.iter().map(|entry| entry.total_book_value).sum();
+    if (raw_total - aggregated_total).abs() > 1e-2 {
+        tracing::warn!(
+            %side,
+            ?agent_id,
+            raw_total,
+            aggregated_total,
+            "balance sheet aggregate totals diverge",
+        );
+    }
 }
 
 fn loan_type_label(loan_type: LoanType) -> &'static str {
@@ -93,13 +123,12 @@ fn loan_type_label(loan_type: LoanType) -> &'static str {
     }
 }
 
-fn consumer_debt_label(debt: &ConsumerDebt) -> &'static str {
-    match debt {
-        ConsumerDebt::ResidentialMortgage(_) => "Residential Mortgages",
-        ConsumerDebt::AutoLoan(_) => "Auto Loans",
-        ConsumerDebt::PersonalLoan(_) => "Consumer Personal Loans",
-        ConsumerDebt::StudentLoan(_) => "Student Loans",
-        ConsumerDebt::CreditCard(_) => "Consumer Credit Cards",
+fn consumer_loan_label(category: ConsumerLoanCategory) -> &'static str {
+    match category {
+        ConsumerLoanCategory::ResidentialMortgage => "Residential Mortgages",
+        ConsumerLoanCategory::AutoLoan => "Auto Loans",
+        ConsumerLoanCategory::PersonalLoan => "Consumer Personal Loans",
+        ConsumerLoanCategory::StudentLoan => "Student Loans",
     }
 }
 
@@ -113,23 +142,97 @@ fn facility_type_label(facility_type: FacilityType) -> &'static str {
     }
 }
 
-fn bond_type_label(bond_type: BondType) -> &'static str {
-    match bond_type {
-        BondType::Corporate => "Corporate Bonds",
-        BondType::Government => "Government Bonds",
-        BondType::InterbankLoan => "Interbank Loans",
-        BondType::Municipal => "Municipal Bonds",
-        BondType::Agency => "Agency Bonds",
-        BondType::Supranational => "Supranational Bonds",
-    }
-}
-
 fn cash_bucket_label(cash_type: CashType) -> Option<&'static str> {
     match cash_type {
         CashType::DemandDeposit => Some("Demand Deposits"),
         CashType::SavingsDeposit => Some("Savings Deposits"),
         CashType::TimeDeposit => Some("Time Deposits"),
         _ => None,
+    }
+}
+
+fn tenor_bucket_label(bucket: &TenorBucket) -> &'static str {
+    match bucket {
+        TenorBucket::LT1Y => "<1Y",
+        TenorBucket::Y1_3 => "1-3Y",
+        TenorBucket::Y3_5 => "3-5Y",
+        TenorBucket::Y5_7 => "5-7Y",
+        TenorBucket::Y7_10 => "7-10Y",
+        TenorBucket::GT10 => ">10Y",
+    }
+}
+
+fn sp_rating_label(rating: SpCreditRating) -> &'static str {
+    match rating {
+        SpCreditRating::AAA => "AAA",
+        SpCreditRating::AA => "AA",
+        SpCreditRating::A => "A",
+        SpCreditRating::BBB => "BBB",
+        SpCreditRating::BB => "BB",
+        SpCreditRating::B => "B",
+        SpCreditRating::CCC => "CCC",
+    }
+}
+
+fn consumer_rating_label(rating: ConsumerCreditRating) -> &'static str {
+    match rating {
+        ConsumerCreditRating::Prime => "Prime",
+        ConsumerCreditRating::NearPrime => "Near-Prime",
+        ConsumerCreditRating::Subprime => "Subprime",
+        ConsumerCreditRating::DeepSubprime => "Deep Subprime",
+    }
+}
+
+fn credit_rating_symbol(rating: CreditRating) -> String {
+    match rating {
+        CreditRating::Government(sp) | CreditRating::Corporate(sp) => sp_rating_label(sp).to_string(),
+        CreditRating::Consumer(consumer) => consumer_rating_label(consumer).to_string(),
+    }
+}
+
+fn listing_asset_label(key: &ListingKey) -> Option<String> {
+    match key {
+        ListingKey::Cash { .. } => None,
+        ListingKey::CreditLoan { loan_type } => Some(format!("{} Loan Book", loan_type_label(*loan_type))),
+        ListingKey::ConsumerLoan { category } => Some(format!("{} Portfolio", consumer_loan_label(*category))),
+        ListingKey::CreditFacility { facility_type } => {
+            Some(format!("{} Portfolio", facility_type_label(*facility_type)))
+        }
+        ListingKey::CreditCard => Some("Consumer Credit Cards".to_string()),
+        ListingKey::TradeCredit => Some("Trade Credit Assets".to_string()),
+        ListingKey::GovBond { tenor_years } => Some(format!("Government Bonds {}Y", tenor_years)),
+        ListingKey::CorpBond { rating, tenor_bucket } => {
+            Some(format!("Corporate Bonds {} {}", credit_rating_symbol(*rating), tenor_bucket_label(tenor_bucket)))
+        }
+        ListingKey::StructuredProduct { rating, tranche_type } => {
+            Some(format!("Structured {} {}", credit_rating_symbol(*rating), tranche_type.label()))
+        }
+        ListingKey::Equity { .. } => Some("Equity Holdings".to_string()),
+        ListingKey::Derivative { .. } => Some("Derivatives".to_string()),
+        ListingKey::RealAsset => Some("Real Assets".to_string()),
+        ListingKey::Repo => Some("Repo Financing".to_string()),
+    }
+}
+
+fn listing_liability_label(key: &ListingKey) -> Option<String> {
+    match key {
+        ListingKey::Cash { cash_type } => cash_bucket_label(*cash_type).map(|s| s.to_string()),
+        ListingKey::CreditLoan { loan_type } => Some(loan_type_label(*loan_type).to_string()),
+        ListingKey::CreditFacility { facility_type } => Some(facility_type_label(*facility_type).to_string()),
+        ListingKey::TradeCredit => Some("Trade Payables".to_string()),
+        ListingKey::GovBond { tenor_years } => Some(format!("Government Bonds {}Y", tenor_years)),
+        ListingKey::CorpBond { rating, tenor_bucket } => {
+            Some(format!("Corporate Bonds {} {}", credit_rating_symbol(*rating), tenor_bucket_label(tenor_bucket)))
+        }
+        ListingKey::StructuredProduct { rating, tranche_type } => {
+            Some(format!("Structured {} {}", credit_rating_symbol(*rating), tranche_type.label()))
+        }
+        ListingKey::Derivative { .. } => Some("Derivative Exposures".to_string()),
+        ListingKey::Repo => Some("Repo Obligations".to_string()),
+        ListingKey::ConsumerLoan { .. }
+        | ListingKey::CreditCard
+        | ListingKey::Equity { .. }
+        | ListingKey::RealAsset => None,
     }
 }
 
@@ -140,13 +243,111 @@ struct AggregationDescriptor {
     remaining_term_days: Option<f64>,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn listing_labels_match_expected_categories() {
+        let term_loan_key = ListingKey::CreditLoan { loan_type: LoanType::TermLoan };
+        assert_eq!(listing_asset_label(&term_loan_key).as_deref(), Some("Term Loans Loan Book"));
+        assert_eq!(listing_liability_label(&term_loan_key).as_deref(), Some("Term Loans"));
+
+        let cash_key = ListingKey::Cash { cash_type: CashType::DemandDeposit };
+        assert!(listing_asset_label(&cash_key).is_none());
+        assert_eq!(listing_liability_label(&cash_key).as_deref(), Some("Demand Deposits"));
+
+        let corp_bond_key =
+            ListingKey::CorpBond { rating: CreditRating::corporate_bbb(), tenor_bucket: TenorBucket::Y3_5 };
+        assert!(listing_asset_label(&corp_bond_key).unwrap().contains("Corporate Bonds"));
+        assert!(listing_liability_label(&corp_bond_key).unwrap().contains("Corporate Bonds"));
+    }
+
+    #[test]
+    fn listing_bucket_aggregates_match_raw_totals() {
+        fn make_position(inst: &Instrument, quantity: f64) -> PopulatedPositionDto {
+            let unit = inst.unit_par_value().expect("bond has par value");
+            PopulatedPositionDto {
+                position: Position { quantity, book_value_per_unit: unit, cost_basis_per_unit: unit },
+                instrument: inst.clone(),
+                market_price: None,
+            }
+        }
+
+        let issuer = AgentId(Uuid::new_v4());
+        let issue_date = NaiveDate::from_ymd_opt(2020, 1, 1).unwrap();
+        let maturity_date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let face_value = Money::from(1_000_i64);
+        let coupon_bps = dec!(500.0);
+
+        let build_corp_bond = |outstanding_units: f64| {
+            Instrument::bond(
+                InstrumentId(Uuid::new_v4()),
+                issuer,
+                BondType::Corporate,
+                face_value,
+                issue_date,
+                maturity_date,
+            )
+            .coupon_bps(coupon_bps)
+            .frequency(2)
+            .rating(CreditRating::Corporate(SpCreditRating::BBB))
+            .outstanding_units(outstanding_units)
+            .auto_market()
+            .build()
+            .expect("corporate bond builds")
+        };
+
+        let bond_a = build_corp_bond(150.0);
+        let bond_b = build_corp_bond(90.0);
+        let current_date = NaiveDate::from_ymd_opt(2023, 1, 1).unwrap();
+
+        let asset_positions = vec![make_position(&bond_a, 10.0), make_position(&bond_b, 4.0)];
+
+        let mut asset_groups: HashMap<String, AggregatedAccumulator> = HashMap::new();
+        for position in &asset_positions {
+            let descriptor = classify_asset_position(position, current_date).expect("should classify asset");
+            accumulate_entry(&mut asset_groups, descriptor, position);
+        }
+        let asset_aggregates: Vec<_> = asset_groups.into_iter().map(|(label, acc)| acc.into_entry(label)).collect();
+
+        assert_eq!(asset_aggregates.len(), 1);
+        let asset_entry = &asset_aggregates[0];
+        let expected_assets: f64 = asset_positions.iter().map(|pos| safe_book_value(pos)).sum();
+        assert_eq!(asset_entry.position_count, asset_positions.len());
+        assert!((asset_entry.total_book_value - expected_assets).abs() < 1e-6);
+        assert!((asset_entry.total_quantity - 14.0).abs() < 1e-6);
+        let avg_rate = asset_entry.average_rate_bps.expect("avg rate");
+        assert!((avg_rate - 500.0).abs() < 1e-6);
+        assert!(asset_entry.label.contains("Corporate Bonds"));
+        validate_aggregate_totals(&AgentId::default(), &asset_positions, &asset_aggregates, "assets");
+
+        let liability_positions = vec![make_position(&bond_a, 6.0), make_position(&bond_b, 2.5)];
+        let mut liability_groups: HashMap<String, AggregatedAccumulator> = HashMap::new();
+        for position in &liability_positions {
+            let descriptor = classify_liability_position(position, current_date).expect("should classify liability");
+            accumulate_entry(&mut liability_groups, descriptor, position);
+        }
+        let liability_aggregates: Vec<_> =
+            liability_groups.into_iter().map(|(label, acc)| acc.into_entry(label)).collect();
+
+        assert_eq!(liability_aggregates.len(), 1);
+        let liability_entry = &liability_aggregates[0];
+        let expected_liabilities: f64 = liability_positions.iter().map(|pos| safe_book_value(pos)).sum();
+        assert_eq!(liability_entry.position_count, liability_positions.len());
+        assert!((liability_entry.total_book_value - expected_liabilities).abs() < 1e-6);
+        validate_aggregate_totals(&AgentId::default(), &liability_positions, &liability_aggregates, "liabilities");
+    }
+}
+
 fn accumulate_entry(
-    groups: &mut HashMap<String, AggregatedAccumulator>, descriptor: AggregationDescriptor, position: &Position,
+    groups: &mut HashMap<String, AggregatedAccumulator>, descriptor: AggregationDescriptor,
+    position: &PopulatedPositionDto,
 ) {
     let AggregationDescriptor { label, rate_bps, original_term_days, remaining_term_days } = descriptor;
     let book_value = safe_book_value(position);
     groups.entry(label).or_default().add(
-        position.quantity,
+        position.position.quantity,
         book_value,
         rate_bps,
         original_term_days,
@@ -176,9 +377,9 @@ where
 
 fn total_book_value<'a, I>(positions: I) -> f64
 where
-    I: IntoIterator<Item = &'a Position>,
+    I: IntoIterator<Item = &'a PopulatedPositionDto>,
 {
-    positions.into_iter().map(|pos| pos.quantity * pos.book_value_per_unit.to_f64()).sum()
+    positions.into_iter().map(|pos| safe_book_value(pos)).sum()
 }
 
 fn build_agent_name_map(engine: &SimulationEngine) -> HashMap<AgentId, String> {
@@ -240,151 +441,121 @@ fn derive_overnight_rates(base: BasisPoints) -> OvernightRatesDto {
 }
 
 fn classify_asset_position(position: &PopulatedPositionDto, current_date: NaiveDate) -> Option<AggregationDescriptor> {
-    match &position.instrument.instrument_type {
-        InstrumentType::Debt(debt) => match debt {
-            DebtInstrument::Loan(details) => Some(AggregationDescriptor {
-                label: format!("{} Loan Book", loan_type_label(details.loan_type)),
-                rate_bps: details.spread_bps.to_f64(),
-                original_term_days: Some(non_negative_days(
-                    (details.maturity_date - details.origination_date).num_days(),
-                )),
-                remaining_term_days: Some(non_negative_days((details.maturity_date - current_date).num_days())),
-            }),
-            DebtInstrument::Consumer(consumer) => match consumer {
-                ConsumerDebt::CreditCard(details) => Some(AggregationDescriptor {
-                    label: format!("{} Portfolio", consumer_debt_label(consumer)),
-                    rate_bps: details.spread_bps.to_f64(),
-                    original_term_days: Some(non_negative_days(
-                        (details.expiry_date - details.commitment_date).num_days(),
-                    )),
-                    remaining_term_days: Some(non_negative_days((details.expiry_date - current_date).num_days())),
-                }),
-                ConsumerDebt::ResidentialMortgage(details)
-                | ConsumerDebt::AutoLoan(details)
-                | ConsumerDebt::PersonalLoan(details)
-                | ConsumerDebt::StudentLoan(details) => Some(AggregationDescriptor {
-                    label: format!("{} Portfolio", consumer_debt_label(consumer)),
-                    rate_bps: details.spread_bps.to_f64(),
-                    original_term_days: Some(non_negative_days(
-                        (details.maturity_date - details.origination_date).num_days(),
-                    )),
-                    remaining_term_days: Some(non_negative_days((details.maturity_date - current_date).num_days())),
-                }),
-            },
-            DebtInstrument::CreditLine(details) => Some(AggregationDescriptor {
-                label: format!("{} Portfolio", facility_type_label(details.facility_type)),
-                rate_bps: details.spread_bps.to_f64(),
-                original_term_days: Some(non_negative_days((details.expiry_date - details.commitment_date).num_days())),
-                remaining_term_days: Some(non_negative_days((details.expiry_date - current_date).num_days())),
-            }),
-            DebtInstrument::Bond(details) => Some(AggregationDescriptor {
-                label: format!("{}", bond_type_label(details.bond_type)),
-                rate_bps: details.coupon_rate_bps.to_f64(),
-                original_term_days: Some(non_negative_days((details.maturity_date - details.issue_date).num_days())),
-                remaining_term_days: Some(non_negative_days((details.maturity_date - current_date).num_days())),
-            }),
-            DebtInstrument::TradeCredit(details) => Some(AggregationDescriptor {
-                label: "Trade Credit Assets".to_string(),
-                rate_bps: None,
-                original_term_days: Some(non_negative_days((details.due_date - details.invoice_date).num_days())),
-                remaining_term_days: Some(non_negative_days((details.due_date - current_date).num_days())),
-            }),
-        },
-        InstrumentType::StructuredTranche(details) => Some(AggregationDescriptor {
-            label: "Structured Finance".to_string(),
-            rate_bps: details.coupon_rate_bps.to_f64(),
-            original_term_days: Some(non_negative_days((details.maturity_date - current_date).num_days())),
-            remaining_term_days: Some(non_negative_days((details.maturity_date - current_date).num_days())),
-        }),
-        InstrumentType::Equity(_) => Some(AggregationDescriptor {
-            label: "Equity Holdings".to_string(),
-            rate_bps: None,
-            original_term_days: None,
-            remaining_term_days: None,
-        }),
-        InstrumentType::RealAsset(real) => match real {
-            RealAssetType::Inventory { .. } => Some(AggregationDescriptor {
-                label: "Inventory".to_string(),
-                rate_bps: None,
-                original_term_days: None,
-                remaining_term_days: None,
-            }),
-            RealAssetType::Property { .. } => Some(AggregationDescriptor {
-                label: "Property Holdings".to_string(),
-                rate_bps: None,
-                original_term_days: None,
-                remaining_term_days: None,
-            }),
-        },
-        InstrumentType::Derivative(details) => Some(AggregationDescriptor {
-            label: "Derivatives".to_string(),
-            rate_bps: None,
-            original_term_days: Some(non_negative_days((details.expiry_date - current_date).num_days())),
-            remaining_term_days: Some(non_negative_days((details.expiry_date - current_date).num_days())),
-        }),
-        InstrumentType::Repo(details) => Some(AggregationDescriptor {
-            label: "Repo Financing".to_string(),
-            rate_bps: details.interest_bps.to_f64(),
-            original_term_days: Some(non_negative_days((details.end_date - details.start_date).num_days())),
-            remaining_term_days: Some(non_negative_days((details.end_date - current_date).num_days())),
-        }),
-        _ => None,
-    }
+    let inst = &position.instrument;
+    let listing_key = listing_key_from_instrument(inst);
+    let label = listing_asset_label(&listing_key)?;
+    let runtime = inst.state();
+
+    let (rate_bps, original_term_days, remaining_term_days) = match (&listing_key, runtime) {
+        (ListingKey::CreditLoan { .. }, InstrumentRuntime::Credit(CreditState::Loan(loan))) => (
+            loan.spread_bps().to_f64(),
+            Some(non_negative_days((loan.maturity_date - loan.origination_date).num_days())),
+            Some(non_negative_days((loan.maturity_date - current_date).num_days())),
+        ),
+        (ListingKey::ConsumerLoan { .. }, InstrumentRuntime::Credit(CreditState::ConsumerLoan { loan, .. })) => (
+            loan.spread_bps().to_f64(),
+            Some(non_negative_days((loan.maturity_date - loan.origination_date).num_days())),
+            Some(non_negative_days((loan.maturity_date - current_date).num_days())),
+        ),
+        (ListingKey::CreditCard, InstrumentRuntime::Credit(CreditState::ConsumerCreditCard(facility))) => (
+            facility.spread_bps.to_f64(),
+            Some(non_negative_days((facility.expiry_date - facility.commitment_date).num_days())),
+            Some(non_negative_days((facility.expiry_date - current_date).num_days())),
+        ),
+        (ListingKey::CreditFacility { .. }, InstrumentRuntime::Credit(CreditState::Facility(facility))) => (
+            facility.spread_bps.to_f64(),
+            Some(non_negative_days((facility.expiry_date - facility.commitment_date).num_days())),
+            Some(non_negative_days((facility.expiry_date - current_date).num_days())),
+        ),
+        (ListingKey::TradeCredit, InstrumentRuntime::Credit(CreditState::TradeCredit(details))) => (
+            None,
+            Some(non_negative_days((details.due_date - details.invoice_date).num_days())),
+            Some(non_negative_days((details.due_date - current_date).num_days())),
+        ),
+        (ListingKey::GovBond { .. }, InstrumentRuntime::Bond(bond))
+        | (ListingKey::CorpBond { .. }, InstrumentRuntime::Bond(bond)) => (
+            bond.archetype.coupon_rate_bps.to_f64(),
+            Some(non_negative_days((bond.maturity_date - bond.issue_date).num_days())),
+            Some(non_negative_days((bond.maturity_date - current_date).num_days())),
+        ),
+        (ListingKey::StructuredProduct { .. }, InstrumentRuntime::Structured(tranche)) => (
+            tranche.coupon_rate_bps.to_f64(),
+            Some(non_negative_days((tranche.maturity_date - current_date).num_days())),
+            Some(non_negative_days((tranche.maturity_date - current_date).num_days())),
+        ),
+        (ListingKey::Equity { .. }, InstrumentRuntime::Equity(_)) => (None, None, None),
+        (ListingKey::RealAsset, InstrumentRuntime::RealAsset(_)) => (None, None, None),
+        (ListingKey::Derivative { .. }, InstrumentRuntime::Derivative(derivative)) => {
+            let term = derivative.expiry_date.map(|expiry| non_negative_days((expiry - current_date).num_days()));
+            (None, term, term)
+        }
+        (ListingKey::Repo, InstrumentRuntime::Repo(repo)) => (
+            repo.interest_bps.to_f64(),
+            Some(non_negative_days((repo.end_date - repo.start_date).num_days())),
+            Some(non_negative_days((repo.end_date - current_date).num_days())),
+        ),
+        (ListingKey::Cash { .. }, _) => return None,
+        _ => return None,
+    };
+
+    Some(AggregationDescriptor { label, rate_bps, original_term_days, remaining_term_days })
 }
 
 fn classify_liability_position(
     position: &PopulatedPositionDto, current_date: NaiveDate,
 ) -> Option<AggregationDescriptor> {
-    match &position.instrument.instrument_type {
-        InstrumentType::Cash(details) => {
+    let inst = &position.instrument;
+    let listing_key = listing_key_from_instrument(inst);
+    let label = listing_liability_label(&listing_key)?;
+    let runtime = inst.state();
+
+    let (rate_bps, original_term_days, remaining_term_days) = match (&listing_key, runtime) {
+        (ListingKey::Cash { .. }, InstrumentRuntime::Cash(details)) => {
             if details.cash_type == CashType::TreasuryGeneralAccount {
                 return None;
-            } else {
-                cash_bucket_label(details.cash_type).map(|base| AggregationDescriptor {
-                    label: format!("{}", base),
-                    rate_bps: details.interest_bps.to_f64(),
-                    original_term_days: None,
-                    remaining_term_days: None,
-                })
             }
+            (details.interest_bps.to_f64(), None, None)
         }
-        InstrumentType::Debt(debt) => match debt {
-            DebtInstrument::Bond(details) => Some(AggregationDescriptor {
-                label: format!("{}", bond_type_label(details.bond_type)),
-                rate_bps: details.coupon_rate_bps.to_f64(),
-                original_term_days: Some(non_negative_days((details.maturity_date - details.issue_date).num_days())),
-                remaining_term_days: Some(non_negative_days((details.maturity_date - current_date).num_days())),
-            }),
-            DebtInstrument::Loan(details) => Some(AggregationDescriptor {
-                label: format!("{}", loan_type_label(details.loan_type)),
-                rate_bps: details.spread_bps.to_f64(),
-                original_term_days: Some(non_negative_days(
-                    (details.maturity_date - details.origination_date).num_days(),
-                )),
-                remaining_term_days: Some(non_negative_days((details.maturity_date - current_date).num_days())),
-            }),
-            DebtInstrument::CreditLine(details) => Some(AggregationDescriptor {
-                label: format!("{}", facility_type_label(details.facility_type)),
-                rate_bps: details.spread_bps.to_f64(),
-                original_term_days: Some(non_negative_days((details.expiry_date - details.commitment_date).num_days())),
-                remaining_term_days: Some(non_negative_days((details.expiry_date - current_date).num_days())),
-            }),
-            DebtInstrument::TradeCredit(details) => Some(AggregationDescriptor {
-                label: "Trade Payables".to_string(),
-                rate_bps: None,
-                original_term_days: Some(non_negative_days((details.due_date - details.invoice_date).num_days())),
-                remaining_term_days: Some(non_negative_days((details.due_date - current_date).num_days())),
-            }),
-            DebtInstrument::Consumer(_) => None,
-        },
-        InstrumentType::Repo(details) => Some(AggregationDescriptor {
-            label: "Repo Obligations".to_string(),
-            rate_bps: details.interest_bps.to_f64(),
-            original_term_days: Some(non_negative_days((details.end_date - details.start_date).num_days())),
-            remaining_term_days: Some(non_negative_days((details.end_date - current_date).num_days())),
-        }),
-        _ => None,
-    }
+        (ListingKey::CreditLoan { .. }, InstrumentRuntime::Credit(CreditState::Loan(loan))) => (
+            loan.spread_bps().to_f64(),
+            Some(non_negative_days((loan.maturity_date - loan.origination_date).num_days())),
+            Some(non_negative_days((loan.maturity_date - current_date).num_days())),
+        ),
+        (ListingKey::CreditFacility { .. }, InstrumentRuntime::Credit(CreditState::Facility(facility))) => (
+            facility.spread_bps.to_f64(),
+            Some(non_negative_days((facility.expiry_date - facility.commitment_date).num_days())),
+            Some(non_negative_days((facility.expiry_date - current_date).num_days())),
+        ),
+        (ListingKey::TradeCredit, InstrumentRuntime::Credit(CreditState::TradeCredit(details))) => (
+            None,
+            Some(non_negative_days((details.due_date - details.invoice_date).num_days())),
+            Some(non_negative_days((details.due_date - current_date).num_days())),
+        ),
+        (ListingKey::GovBond { .. }, InstrumentRuntime::Bond(bond))
+        | (ListingKey::CorpBond { .. }, InstrumentRuntime::Bond(bond)) => (
+            bond.archetype.coupon_rate_bps.to_f64(),
+            Some(non_negative_days((bond.maturity_date - bond.issue_date).num_days())),
+            Some(non_negative_days((bond.maturity_date - current_date).num_days())),
+        ),
+        (ListingKey::StructuredProduct { .. }, InstrumentRuntime::Structured(tranche)) => (
+            tranche.coupon_rate_bps.to_f64(),
+            Some(non_negative_days((tranche.maturity_date - current_date).num_days())),
+            Some(non_negative_days((tranche.maturity_date - current_date).num_days())),
+        ),
+        (ListingKey::Derivative { .. }, InstrumentRuntime::Derivative(derivative)) => {
+            let term = derivative.expiry_date.map(|expiry| non_negative_days((expiry - current_date).num_days()));
+            (None, term, term)
+        }
+        (ListingKey::Repo, InstrumentRuntime::Repo(repo)) => (
+            repo.interest_bps.to_f64(),
+            Some(non_negative_days((repo.end_date - repo.start_date).num_days())),
+            Some(non_negative_days((repo.end_date - current_date).num_days())),
+        ),
+        (ListingKey::Cash { .. }, _) => return None,
+        _ => (None, None, None),
+    };
+
+    Some(AggregationDescriptor { label, rate_bps, original_term_days, remaining_term_days })
 }
 
 type QueryResult<T> = Result<T, (axum::http::StatusCode, String)>;
@@ -411,14 +582,14 @@ impl QueryService {
         let mut asset_groups: HashMap<String, AggregatedAccumulator> = HashMap::new();
         for asset in assets {
             if let Some(descriptor) = classify_asset_position(asset, current_date) {
-                accumulate_entry(&mut asset_groups, descriptor, &asset.position);
+                accumulate_entry(&mut asset_groups, descriptor, asset);
             }
         }
 
         let mut liability_groups: HashMap<String, AggregatedAccumulator> = HashMap::new();
         for liability in liabilities {
             if let Some(descriptor) = classify_liability_position(liability, current_date) {
-                accumulate_entry(&mut liability_groups, descriptor, &liability.position);
+                accumulate_entry(&mut liability_groups, descriptor, liability);
             }
         }
 
@@ -428,6 +599,9 @@ impl QueryService {
         let mut liability_books: Vec<_> =
             liability_groups.into_iter().map(|(label, acc)| acc.into_entry(label)).collect();
         liability_books.sort_by(|a, b| b.total_book_value.partial_cmp(&a.total_book_value).unwrap_or(Ordering::Equal));
+
+        validate_aggregate_totals(agent_id, assets, &asset_books, "assets");
+        validate_aggregate_totals(agent_id, liabilities, &liability_books, "liabilities");
 
         if asset_books.is_empty() && liability_books.is_empty() {
             None
@@ -442,8 +616,8 @@ impl QueryService {
         let bs = state.financial_system.balance_sheets.get(agent_id).unwrap();
         let liabilities = populate_positions(state, bs.liabilities.iter());
 
-        let total_assets = total_book_value(all_assets_map.values());
-        let total_liabilities = total_book_value(bs.liabilities.values());
+        let total_assets = total_book_value(assets.iter());
+        let total_liabilities = total_book_value(liabilities.iter());
 
         let net_worth = total_assets - total_liabilities;
 
@@ -452,9 +626,19 @@ impl QueryService {
             let position =
                 Position { quantity: net_worth, book_value_per_unit: unit_money, cost_basis_per_unit: unit_money };
             let instrument = Instrument::new(
-                InstrumentId(Uuid::new_v4()),
-                InstrumentType::Equity(EquityDetails { issuer: *agent_id, outstanding_shares: 1 }),
+                InstrumentIdentifiers::from(InstrumentId(Uuid::new_v4())),
                 MarketProfile::from_market(InstrumentMarket::CapitalMarket(CapitalMarketSegment::Equity)),
+                Listability::Unlisted,
+                InstrumentRuntime::Equity(EquityState {
+                    profile: EquityProfile {
+                        issuer: *agent_id,
+                        share_class: EquityClass::Common,
+                        authorized_shares: Some(1),
+                        par_value: Some(unit_money),
+                        dividend_policy: None,
+                    },
+                    outstanding_shares: 1,
+                }),
             );
 
             Some(PopulatedPositionDto { position, instrument, market_price: None })
@@ -703,6 +887,7 @@ impl QueryService {
             templates: registry.templates.values().cloned().collect(),
             series: registry.series.values().cloned().collect(),
             lots: registry.lots.values().cloned().collect(),
+            market_index: MarketIndexDto::from(&engine.state.financial_system.exchange.index),
         })
     }
 

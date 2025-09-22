@@ -1,11 +1,8 @@
 use crate::prelude::*;
 use chrono::NaiveDate;
 use thiserror::Error;
-use uuid::Uuid;
 
-use super::inst_core::{InstrumentIdentifiers, legacy_instrument_from_runtime_core, runtime_core_from_legacy_bond};
-use super::inst_registry::{InstrumentCatalog, InstrumentRegistry, LotId, LotQuantity, LotType, SeriesId, TemplateId};
-use super::{BondType, Instrument, InstrumentArchetype};
+use super::*;
 
 #[derive(Debug, Clone)]
 pub struct BondIssuanceSpec {
@@ -44,65 +41,41 @@ pub fn issue_corporate_bond(
 ) -> Result<IssuedBond, IssuanceError> {
     let template = registry.get_template(&spec.template_id).ok_or(IssuanceError::MissingTemplate(spec.template_id))?;
 
-    if !matches!(template.archetype, InstrumentArchetype::Bond(_)) {
-        return Err(IssuanceError::UnsupportedTemplate);
-    }
+    let base_archetype = match &template.archetype {
+        InstrumentArchetype::Bond(archetype) => archetype.clone(),
+        _ => return Err(IssuanceError::UnsupportedTemplate),
+    };
 
-    let built_instrument = Instrument::bond(
-        InstrumentId(Uuid::new_v4()),
-        issuer,
-        spec.bond_type,
-        spec.face_value,
-        spec.issue_date,
-        spec.maturity_date,
-    )
-    .coupon_bps(spec.coupon_rate_bps)
-    .frequency(spec.frequency_per_year)
-    .rating(spec.rating)
-    .auto_market()
-    .build()?;
-
-    let bond_details = built_instrument.instrument_type.as_bond().expect("builder produced bond").clone();
-    let market_profile = built_instrument.market_profile.clone();
-    let listability = built_instrument.listability.clone();
-
+    let mut issuance_archetype = base_archetype.clone();
+    issuance_archetype.face_value = spec.face_value;
+    issuance_archetype.coupon_rate_bps = spec.coupon_rate_bps;
+    issuance_archetype.frequency_per_year = spec.frequency_per_year;
     let series_id = registry
-        .find_or_create_series_for_bond(spec.template_id, issuer, &bond_details)
+        .ensure_bond_series(spec.template_id, issuer, issuance_archetype.clone(), spec.issue_date, spec.maturity_date)
         .map_err(IssuanceError::Registry)?;
 
-    let lot_id = registry
+    let instrument_id = registry
         .mint_lot(series_id, LotType::Fungible { lot_size: spec.face_value.to_f64() }, LotQuantity::Units(spec.units))
         .map_err(IssuanceError::Registry)?;
 
-    let bond_archetype = registry
-        .series
-        .get(&series_id)
-        .and_then(|series| match &series.archetype {
-            InstrumentArchetype::Bond(archetype) => Some(archetype.clone()),
-            _ => None,
-        })
-        .ok_or(IssuanceError::UnsupportedTemplate)?;
+    let lot_id = LotId(instrument_id.0);
 
-    let identifiers = InstrumentIdentifiers::new(lot_id)
-        .with_template(spec.template_id)
-        .with_series(series_id)
-        .with_lot(LotId(lot_id.0));
+    let instrument =
+        Instrument::bond(instrument_id, issuer, spec.bond_type, spec.face_value, spec.issue_date, spec.maturity_date)
+            .template(spec.template_id)
+            .series(series_id)
+            .lot(lot_id)
+            .coupon_bps(spec.coupon_rate_bps)
+            .frequency(spec.frequency_per_year)
+            .rating(spec.rating)
+            .outstanding_units(spec.units)
+            .auto_market()
+            .build()?;
 
-    let runtime_core = runtime_core_from_legacy_bond(
-        identifiers,
-        market_profile,
-        listability,
-        &bond_details,
-        bond_archetype,
-        spec.units,
-    );
+    let instrument_id = instrument.instrument_id();
 
-    let instrument = legacy_instrument_from_runtime_core(&runtime_core);
-    catalog.insert(lot_id, instrument.clone());
-    catalog.insert_core(lot_id, runtime_core.clone());
+    let catalog_instrument = instrument.clone();
+    catalog.insert(instrument_id, catalog_instrument);
 
-    registry.update_cache(instrument);
-    registry.update_core_cache(runtime_core);
-
-    Ok(IssuedBond { template_id: spec.template_id, series_id, instrument_id: lot_id })
+    Ok(IssuedBond { template_id: spec.template_id, series_id, instrument_id })
 }

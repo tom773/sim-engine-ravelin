@@ -531,7 +531,7 @@ fn compact_state_effect(effect: &StateEffect) -> Value {
 fn compact_financial_effect(effect: &FinancialEffect) -> Value {
     match effect {
         FinancialEffect::CreateInstrument { instrument, creditor, debtor, quantity } => json!({
-            "instrument": short_instrument(instrument.id),
+            "instrument": short_instrument(instrument.instrument_id()),
             "instrument_type": instrument.type_as_string(),
             "creditor": short_agent(*creditor),
             "debtor": short_agent(*debtor),
@@ -747,24 +747,24 @@ fn compact_credit_effect(effect: &CreditEffect) -> Value {
 
 fn compact_credit_facility(facility: &CreditFacility) -> Value {
     json!({
-        "facility": short_uuid(facility.details.facility_id),
-        "lender": short_agent(facility.details.lender),
-        "borrower": short_agent(facility.details.borrower),
-        "commitment": round_money(facility.details.commitment_amount),
-        "available": round_money(facility.details.available_amount),
-        "drawn": round_money(facility.details.drawn_amount),
+        "facility": short_uuid(facility.state.facility_id),
+        "lender": short_agent(facility.state.lender),
+        "borrower": short_agent(facility.state.borrower),
+        "commitment": round_money(facility.state.commitment_amount),
+        "available": round_money(facility.state.available_amount),
+        "drawn": round_money(facility.state.drawn_amount),
         "status": format!("{:?}", facility.status),
     })
 }
 
 fn compact_credit_loan(loan: &Loan, is_consumer: bool, purpose: &LoanPurpose) -> Value {
     json!({
-        "loan": short_uuid(loan.details.loan_id),
-        "lender": short_agent(loan.details.lender),
-        "borrower": short_agent(loan.details.borrower),
-        "principal": round_money(loan.details.principal),
-        "outstanding": round_money(loan.details.outstanding_principal),
-        "type": format!("{:?}", loan.details.loan_type),
+        "loan": short_uuid(loan.state.loan_id),
+        "lender": short_agent(loan.state.lender),
+        "borrower": short_agent(loan.state.borrower),
+        "principal": round_money(loan.state.principal()),
+        "outstanding": round_money(loan.state.outstanding_principal),
+        "type": format!("{:?}", loan.state.loan_type),
         "consumer": is_consumer,
         "purpose": format!("{:?}", purpose),
         "status": format!("{:?}", loan.status),

@@ -1,4 +1,5 @@
 use crate::prelude::*;
+use crate::types::instrument::inst_core::LoanState;
 use chrono::NaiveDate;
 use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
@@ -103,151 +104,7 @@ pub struct CreditHistory {
     pub payment_performance: f64,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum ConsumerDebt {
-    ResidentialMortgage(LoanDetails),
-    AutoLoan(LoanDetails),
-    CreditCard(CreditLineDetails),
-    PersonalLoan(LoanDetails),
-    StudentLoan(LoanDetails),
-}
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum DebtInstrument {
-    Bond(BondDetails),
-    Loan(LoanDetails),
-    Consumer(ConsumerDebt),
-    CreditLine(CreditLineDetails),
-    TradeCredit(TradeCreditDetails),
-}
-
-impl DebtInstrument {
-    pub fn listability(&self) -> Listability {
-        match self {
-            DebtInstrument::Bond(_) => Listability::Listed(VenueType::CentralLimitOrderBook),
-            DebtInstrument::Loan(_) => Listability::Unlisted,
-            DebtInstrument::Consumer(_) => Listability::Unlisted,
-            DebtInstrument::CreditLine(_) => Listability::Unlisted,
-            DebtInstrument::TradeCredit(_) => Listability::Unlisted,
-        }
-    }
-
-    pub fn issuer(&self) -> AgentId {
-        match self {
-            DebtInstrument::Bond(b) => b.issuer,
-            DebtInstrument::Loan(l) => l.lender,
-            DebtInstrument::Consumer(c) => match c {
-                ConsumerDebt::ResidentialMortgage(l) | ConsumerDebt::AutoLoan(l) | ConsumerDebt::PersonalLoan(l) => {
-                    l.lender
-                }
-                ConsumerDebt::CreditCard(cl) => cl.lender,
-                ConsumerDebt::StudentLoan(l) => l.lender,
-            },
-            DebtInstrument::CreditLine(c) => c.lender,
-            DebtInstrument::TradeCredit(t) => t.creditor,
-        }
-    }
-
-    pub fn debtor(&self) -> AgentId {
-        match self {
-            DebtInstrument::Bond(b) => b.issuer,
-            DebtInstrument::Loan(l) => l.borrower,
-            DebtInstrument::Consumer(c) => match c {
-                ConsumerDebt::ResidentialMortgage(l) | ConsumerDebt::AutoLoan(l) | ConsumerDebt::PersonalLoan(l) => {
-                    l.borrower
-                }
-                ConsumerDebt::CreditCard(cl) => cl.borrower,
-                ConsumerDebt::StudentLoan(l) => l.borrower,
-            },
-            DebtInstrument::CreditLine(c) => c.borrower,
-            DebtInstrument::TradeCredit(t) => t.debtor,
-        }
-    }
-
-    pub fn as_bond(&self) -> Option<&BondDetails> {
-        if let DebtInstrument::Bond(b) = self { Some(b) } else { None }
-    }
-}
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct LoanDetails {
-    pub loan_id: Uuid,
-    pub lender: AgentId,
-    pub borrower: AgentId,
-    pub loan_type: LoanType,
-    pub facility_id: Option<Uuid>,
-    pub principal: Money,
-    pub outstanding_principal: Money,
-    pub reference_rate: Option<RateIndex>,
-    pub spread_bps: BasisPoints,
-    pub rate_floor_bps: Option<BasisPoints>,
-    pub rate_cap_bps: Option<BasisPoints>,
-
-    pub day_count: DayCount,
-    pub compounding: Compounding,
-    pub payment_frequency: PaymentFrequency,
-
-    pub origination_date: NaiveDate,
-    pub maturity_date: NaiveDate,
-    pub next_payment_date: NaiveDate,
-    pub last_accrual_date: NaiveDate,
-
-    pub amortization: Amortization,
-    pub prepayment_terms: PrepaymentTerms,
-
-    pub collateral: Vec<LienId>,
-    pub covenants: Vec<Covenant>,
-    pub rating: Option<CreditRating>,
-
-    pub impairment: ImpairmentState,
-
-    pub accrued_interest: Money,
-    pub unamortized_fees: Money,
-}
-
-impl Default for LoanDetails {
-    fn default() -> Self {
-        let now = chrono::Utc::now().date_naive();
-        Self {
-            loan_id: Uuid::new_v4(),
-            lender: AgentId(Uuid::nil()),
-            borrower: AgentId(Uuid::nil()),
-            loan_type: LoanType::TermLoan,
-            facility_id: None,
-            principal: Money::ZERO,
-            outstanding_principal: Money::ZERO,
-            reference_rate: Some(RateIndex::Fixed),
-            spread_bps: dec!(500),
-            rate_floor_bps: None,
-            rate_cap_bps: None,
-            day_count: DayCount::ActAct,
-            compounding: Compounding::Simple,
-            payment_frequency: PaymentFrequency::Monthly,
-            origination_date: now,
-            maturity_date: now + chrono::Duration::days(365 * 5),
-            next_payment_date: now + chrono::Duration::days(30),
-            last_accrual_date: now,
-            amortization: Amortization::Annuity,
-            prepayment_terms: PrepaymentTerms {
-                allowed: true,
-                penalty_type: PrepaymentPenalty::None,
-                lockout_period_months: None,
-            },
-            collateral: Vec::new(),
-            covenants: Vec::new(),
-            rating: Some(CreditRating::consumer_prime()),
-            impairment: ImpairmentState {
-                stage: ImpairmentStage::Stage1Performing,
-                provision_amount: Money::ZERO,
-                days_past_due: 0,
-                probability_of_default: 0.0,
-                loss_given_default: 0.0,
-                exposure_at_default: Money::ZERO,
-            },
-            accrued_interest: Money::ZERO,
-            unamortized_fees: Money::ZERO,
-        }
-    }
-}
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CreditLineDetails {
+pub struct CreditFacilityState {
     pub facility_id: Uuid,
     pub lender: AgentId,
     pub borrower: AgentId,
@@ -271,7 +128,20 @@ pub struct CreditLineDetails {
 
     pub drawn_loans: Vec<Uuid>,
 }
-impl Default for CreditLineDetails {
+impl CreditFacilityState {
+    pub fn utilization_ratio(&self) -> f64 {
+        if self.commitment_amount == Money::ZERO {
+            return 0.0;
+        }
+        (self.drawn_amount / self.commitment_amount).to_f64().unwrap_or(0.0)
+    }
+
+    pub fn remaining_capacity(&self) -> Money {
+        self.available_amount
+    }
+}
+
+impl Default for CreditFacilityState {
     fn default() -> Self {
         let now = chrono::Utc::now().date_naive();
         Self {
@@ -297,7 +167,7 @@ impl Default for CreditLineDetails {
     }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TradeCreditDetails {
+pub struct TradeCreditState {
     pub creditor: AgentId,
     pub debtor: AgentId,
     pub amount: Money,
@@ -399,14 +269,14 @@ pub struct CreditRegistry {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreditFacility {
     pub instrument_id: InstrumentId,
-    pub details: CreditLineDetails,
+    pub state: CreditFacilityState,
     pub status: FacilityStatus,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Loan {
     pub instrument_id: InstrumentId,
-    pub details: LoanDetails,
+    pub state: LoanState,
     pub status: LoanStatus,
     pub servicing_history: Vec<PaymentRecord>,
 }
@@ -454,9 +324,9 @@ impl CreditRegistry {
     }
 
     pub fn register_facility(&mut self, facility: CreditFacility) -> Result<(), String> {
-        let facility_id = facility.details.facility_id;
-        let lender = facility.details.lender;
-        let borrower = facility.details.borrower;
+        let facility_id = facility.state.facility_id;
+        let lender = facility.state.lender;
+        let borrower = facility.state.borrower;
 
         if self.facilities.contains_key(&facility_id) {
             return Err(format!("Facility {} already exists", facility_id));
@@ -473,20 +343,19 @@ impl CreditRegistry {
         let facility =
             self.facilities.get_mut(&facility_id).ok_or_else(|| format!("Facility {} not found", facility_id))?;
 
-        if facility.details.available_amount < amount {
+        if facility.state.available_amount < amount {
             return Err(format!(
                 "Insufficient availability: {} available, {} requested",
-                facility.details.available_amount, amount
+                facility.state.available_amount, amount
             ));
         }
+        facility.state.available_amount -= amount;
+        facility.state.drawn_amount += amount;
+        facility.state.drawn_loans.push(loan.state.loan_id);
 
-        facility.details.available_amount -= amount;
-        facility.details.drawn_amount += amount;
-        facility.details.drawn_loans.push(loan.details.loan_id);
-
-        let loan_id = loan.details.loan_id;
-        let lender = loan.details.lender;
-        let borrower = loan.details.borrower;
+        let loan_id = loan.state.loan_id;
+        let lender = loan.state.lender;
+        let borrower = loan.state.borrower;
 
         self.loans.insert(loan_id, loan);
         self.loans_by_lender.entry(lender).or_default().push(loan_id);
@@ -497,9 +366,9 @@ impl CreditRegistry {
     }
 
     pub fn register_loan(&mut self, loan: Loan) -> Result<(), String> {
-        let loan_id = loan.details.loan_id;
-        let lender = loan.details.lender;
-        let borrower = loan.details.borrower;
+        let loan_id = loan.state.loan_id;
+        let lender = loan.state.lender;
+        let borrower = loan.state.borrower;
 
         if self.loans.contains_key(&loan_id) {
             return Err(format!("Loan {} already exists", loan_id));
@@ -540,15 +409,15 @@ impl CreditRegistry {
         self.loans_by_lender
             .get(lender)
             .map(|ids| {
-                ids.iter().filter_map(|id| self.loans.get(id)).map(|loan| loan.details.outstanding_principal).sum()
+                ids.iter().filter_map(|id| self.loans.get(id)).map(|loan| loan.state.outstanding_principal).sum()
             })
             .unwrap_or(Money::ZERO)
     }
 
     pub fn get_facility_utilization(&self, facility_id: &Uuid) -> Option<f64> {
         self.facilities.get(facility_id).map(|f| {
-            let total = f.details.commitment_amount.to_f64();
-            let drawn = f.details.drawn_amount.to_f64();
+            let total = f.state.commitment_amount.to_f64();
+            let drawn = f.state.drawn_amount.to_f64();
             if total > 0.0 { drawn / total } else { 0.0 }
         })
     }
@@ -556,10 +425,10 @@ impl CreditRegistry {
     pub fn update_impairment(&mut self, loan_id: &Uuid, new_stage: ImpairmentStage) -> Result<(), String> {
         let loan = self.loans.get_mut(loan_id).ok_or_else(|| format!("Loan {} not found", loan_id))?;
 
-        loan.details.impairment.stage = new_stage;
+        loan.state.impairment.stage = new_stage;
 
         if new_stage == ImpairmentStage::WrittenOff {
-            let borrower = loan.details.borrower;
+            let borrower = loan.state.borrower;
             let history = self.credit_histories.entry(borrower).or_default();
             history.total_defaults += 1;
         }
@@ -583,13 +452,13 @@ impl LoanServicer {
         Self { current_date, rate_environment: RateEnvironment::default() }
     }
 
-    pub fn accrue_interest(&self, loan: &mut LoanDetails) -> Money {
+    pub fn accrue_interest(&self, loan: &mut LoanState) -> Money {
         if self.current_date <= loan.last_accrual_date {
             return Money::ZERO;
         }
 
         let _days = (self.current_date - loan.last_accrual_date).num_days() as f64;
-        let year_frac = loan.day_count.year_fraction(loan.last_accrual_date, self.current_date);
+        let year_frac = loan.archetype.day_count.year_fraction(loan.last_accrual_date, self.current_date);
 
         let rate = self.calculate_rate(loan);
         let interest = loan.outstanding_principal * rate * Rate::from_f64(year_frac).unwrap_or(Rate::ZERO);
@@ -600,32 +469,35 @@ impl LoanServicer {
         interest
     }
 
-    pub fn calculate_rate(&self, loan: &LoanDetails) -> Rate {
-        let base_rate = match &loan.reference_rate {
-            Some(index) => self.rate_environment.rates.get(index).copied().unwrap_or(Rate::ZERO),
-            None => Rate::ZERO,
+    pub fn calculate_rate(&self, loan: &LoanState) -> Rate {
+        let reference_index = loan.rate_index();
+        let base_rate = match reference_index {
+            RateIndex::Fixed => Rate::ZERO,
+            index => self.rate_environment.rates.get(&index).copied().unwrap_or(Rate::ZERO),
         };
 
-        let total_rate = base_rate + bps_to_decimal(loan.spread_bps);
+        let total_rate = base_rate + bps_to_decimal(loan.spread_bps());
 
         let mut final_rate = total_rate;
-        if let Some(floor) = loan.rate_floor_bps {
+        if let Some(floor) = loan.rate_floor_bps() {
             final_rate = final_rate.max(bps_to_decimal(floor));
         }
-        if let Some(cap) = loan.rate_cap_bps {
+        if let Some(cap) = loan.rate_cap_bps() {
             final_rate = final_rate.min(bps_to_decimal(cap));
         }
 
         final_rate
     }
 
-    pub fn generate_schedule(&self, loan: &LoanDetails) -> PaymentSchedule {
+    pub fn generate_schedule(&self, loan: &LoanState) -> PaymentSchedule {
         let mut scheduled_payments = Vec::new();
         let mut remaining_principal = loan.outstanding_principal;
         let mut current_date = loan.next_payment_date;
 
+        let frequency = loan.archetype.repayment_schedule.payment_frequency;
+
         while current_date <= loan.maturity_date && remaining_principal > Money::ZERO {
-            let (principal_payment, interest_payment) = match loan.amortization {
+            let (principal_payment, interest_payment) = match loan.archetype.amortization {
                 Amortization::Bullet => {
                     let interest = self.calculate_period_interest(loan, remaining_principal);
                     if current_date == loan.maturity_date {
@@ -636,7 +508,7 @@ impl LoanServicer {
                 }
                 Amortization::Linear => {
                     let periods = self.count_payment_periods(loan);
-                    let principal = loan.principal / periods as f64;
+                    let principal = loan.principal() / periods as f64;
                     let interest = self.calculate_period_interest(loan, remaining_principal);
                     (principal, interest)
                 }
@@ -671,22 +543,23 @@ impl LoanServicer {
             });
 
             remaining_principal -= principal_payment;
-            current_date = self.next_payment_date(current_date, &loan.payment_frequency);
+            current_date = self.next_payment_date(current_date, &frequency);
         }
 
         PaymentSchedule { loan_id: loan.loan_id, scheduled_payments }
     }
 
-    fn calculate_period_interest(&self, loan: &LoanDetails, principal: Money) -> Money {
+    fn calculate_period_interest(&self, loan: &LoanState, principal: Money) -> Money {
         let rate = self.calculate_rate(loan);
-        let period_frac = self.payment_frequency_to_year_frac(&loan.payment_frequency);
+        let period_frac = self.payment_frequency_to_year_frac(&loan.archetype.repayment_schedule.payment_frequency);
         principal * rate * Rate::from_f64(period_frac).unwrap_or(Rate::ZERO)
     }
 
-    fn calculate_annuity_payment(&self, loan: &LoanDetails) -> Money {
+    fn calculate_annuity_payment(&self, loan: &LoanState) -> Money {
         let rate = self.calculate_rate(loan);
-        let period_rate =
-            rate * Rate::from_f64(self.payment_frequency_to_year_frac(&loan.payment_frequency)).unwrap_or(Rate::ZERO);
+        let period_rate = rate
+            * Rate::from_f64(self.payment_frequency_to_year_frac(&loan.archetype.repayment_schedule.payment_frequency))
+                .unwrap_or(Rate::ZERO);
         let n = self.count_payment_periods(loan) as i64;
 
         if n <= 0 {
@@ -712,9 +585,9 @@ impl LoanServicer {
         loan.outstanding_principal * factor
     }
 
-    fn count_payment_periods(&self, loan: &LoanDetails) -> u32 {
-        let months = ((loan.maturity_date - self.current_date).num_days() as f64 / 30.0).ceil() as u32;
-        match loan.payment_frequency {
+    fn count_payment_periods(&self, loan: &LoanState) -> u32 {
+        let months = loan.archetype.repayment_schedule.term_months;
+        match loan.archetype.repayment_schedule.payment_frequency {
             PaymentFrequency::Monthly => months,
             PaymentFrequency::Quarterly => months / 3,
             PaymentFrequency::SemiAnnual => months / 6,

@@ -1,17 +1,23 @@
 use crate::prelude::*;
-use chrono::Months;
+use crate::types::instrument::archetypes::{
+    BondArchetype, BondType, CashFlow, CashType, CreditRating, InstrumentMarket, MoneyMarketSegment,
+};
+use crate::types::instrument::inst_core::{
+    BondState, CapitalMarketSegment, CashState, InstrumentIdentifiers, Listability, MarketProfile, VenueType,
+};
+use crate::types::instrument::inst_registry::{LotId, SeriesId, TemplateId};
+use crate::types::instrument::instrument::{DividendPolicy, EquityClass, EquityProfile, EquityState};
+use crate::types::instrument::{Instrument, InstrumentRuntime};
 use chrono::NaiveDate;
 use rust_decimal_macros::dec;
-use std::num::NonZeroU32;
-use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
 pub enum BuildError {
     #[error("maturity must be after issue (issue={0}, maturity={1})")]
     BadDates(NaiveDate, NaiveDate),
-    #[error("frequency must be > 0 for coupon_rate_bpsed bonds")]
+    #[error("coupon-bearing bonds must have payment frequency > 0")]
     BadFrequency,
-    #[error("zero-coupon_rate_bps bonds must have coupon == 0 bps")]
+    #[error("zero-coupon bonds must have coupon == 0 bps")]
     ZeroCouponHasCoupon,
 }
 
@@ -39,10 +45,10 @@ fn profile_for_market(market: InstrumentMarket) -> MarketProfile {
 }
 
 pub struct CashBuilder {
-    id: InstrumentId,
-    market: Option<MarketProfile>,
-    details: CashDetails,
+    identifiers: InstrumentIdentifiers,
+    market_profile: Option<MarketProfile>,
     listability: Listability,
+    state: CashState,
 }
 
 impl Instrument {
@@ -50,32 +56,66 @@ impl Instrument {
         id: InstrumentId, issuer: AgentId, cash_type: CashType, currency: Currency, rate: BasisPoints,
     ) -> CashBuilder {
         CashBuilder {
-            id,
-            market: None,
-            details: CashDetails { issuer, cash_type, currency, interest_bps: rate },
+            identifiers: InstrumentIdentifiers::new(id),
+            market_profile: None,
             listability: Listability::Unlisted,
+            state: CashState::new(issuer, cash_type, currency, rate),
         }
     }
 }
 
 impl CashBuilder {
-    pub fn market(mut self, m: InstrumentMarket) -> Self {
-        self.market = Some(profile_for_market(m));
+    pub fn template(mut self, template_id: TemplateId) -> Self {
+        self.identifiers = self.identifiers.with_template(template_id);
         self
     }
+
+    pub fn series(mut self, series_id: SeriesId) -> Self {
+        self.identifiers = self.identifiers.with_series(series_id);
+        self
+    }
+
+    pub fn lot(mut self, lot_id: LotId) -> Self {
+        self.identifiers = self.identifiers.with_lot(lot_id);
+        self
+    }
+
+    pub fn market(mut self, market: InstrumentMarket) -> Self {
+        self.market_profile = Some(profile_for_market(market));
+        self
+    }
+
+    pub fn market_profile(mut self, profile: MarketProfile) -> Self {
+        self.market_profile = Some(profile);
+        self
+    }
+
+    pub fn listability(mut self, listability: Listability) -> Self {
+        self.listability = listability;
+        self
+    }
+
     pub fn build(self) -> Instrument {
-        let profile = self
-            .market
+        let Self { identifiers, market_profile, listability, state } = self;
+
+        let market_profile = market_profile
             .unwrap_or_else(|| profile_for_market(InstrumentMarket::MoneyMarket(MoneyMarketSegment::Interbank)));
-        Instrument::new(self.id, InstrumentType::Cash(self.details), profile).with_listability(self.listability)
+
+        Instrument::new(identifiers, market_profile, listability, InstrumentRuntime::Cash(state))
     }
 }
 
 pub struct BondBuilder {
-    id: InstrumentId,
-    market: Option<MarketProfile>,
-    details: BondDetails,
+    identifiers: InstrumentIdentifiers,
+    market_profile: Option<MarketProfile>,
     listability: Listability,
+    issuer: AgentId,
+    issue_date: NaiveDate,
+    maturity_date: NaiveDate,
+    archetype: BondArchetype,
+    outstanding_units: f64,
+    last_accrual_date: Option<NaiveDate>,
+    rating: Option<CreditRating>,
 }
 
 impl Instrument {
@@ -83,299 +123,242 @@ impl Instrument {
         id: InstrumentId, issuer: AgentId, bond_type: BondType, face_value: Money, issue_date: NaiveDate,
         maturity_date: NaiveDate,
     ) -> BondBuilder {
+        let archetype = BondArchetype {
+            bond_type,
+            cash_flow_type: CashFlow::Fixed,
+            day_count: DayCount::ActAct,
+            face_value,
+            coupon_rate_bps: dec!(0.0),
+            frequency_per_year: 2,
+            covenants: Vec::new(),
+        };
+
         BondBuilder {
-            id,
-            market: None,
-            details: BondDetails {
-                bond_type,
-                issuer,
-                cash_flow: CashFlow::Fixed,
-                coupon_rate_bps: BasisPoints::abs(&dec!(0.0)),
-                face_value,
-                issue_date,
-                maturity_date,
-                frequency: 2,
-                day_count: DayCount::ActAct,
-                rating: CreditRating::Corporate(SpCreditRating::BBB),
-                last_accrual_date: Some(maturity_date - chrono::Duration::days(1)),
-            },
+            identifiers: InstrumentIdentifiers::new(id),
+            market_profile: None,
             listability: Listability::Unlisted,
+            issuer,
+            issue_date,
+            maturity_date,
+            archetype,
+            outstanding_units: 0.0,
+            last_accrual_date: None,
+            rating: None,
         }
     }
 }
 
 impl BondBuilder {
-    pub fn zero_coupon_rate_bps(mut self) -> Self {
-        self.details.cash_flow = CashFlow::Zero;
-        self.details.coupon_rate_bps = BasisPoints::abs(&dec!(0.0));
-        self.details.frequency = 0;
+    pub fn template(mut self, template_id: TemplateId) -> Self {
+        self.identifiers = self.identifiers.with_template(template_id);
         self
     }
+
+    pub fn series(mut self, series_id: SeriesId) -> Self {
+        self.identifiers = self.identifiers.with_series(series_id);
+        self
+    }
+
+    pub fn lot(mut self, lot_id: LotId) -> Self {
+        self.identifiers = self.identifiers.with_lot(lot_id);
+        self
+    }
+
+    pub fn zero_coupon(mut self) -> Self {
+        self.archetype.cash_flow_type = CashFlow::Zero;
+        self.archetype.coupon_rate_bps = dec!(0.0);
+        self.archetype.frequency_per_year = 0;
+        self
+    }
+
     pub fn fixed(mut self) -> Self {
-        self.details.cash_flow = CashFlow::Fixed;
+        self.archetype.cash_flow_type = CashFlow::Fixed;
         self
     }
+
     pub fn floating(mut self) -> Self {
-        self.details.cash_flow = CashFlow::Floating;
+        self.archetype.cash_flow_type = CashFlow::Floating;
         self
     }
 
     pub fn coupon_bps(mut self, bps: BasisPoints) -> Self {
-        self.details.coupon_rate_bps = bps;
+        self.archetype.coupon_rate_bps = bps;
         self
     }
+
     pub fn frequency(mut self, per_year: u32) -> Self {
-        self.details.frequency = per_year;
+        self.archetype.frequency_per_year = per_year;
         self
     }
-    pub fn day_count(mut self, dc: DayCount) -> Self {
-        self.details.day_count = dc;
+
+    pub fn day_count(mut self, day_count: DayCount) -> Self {
+        self.archetype.day_count = day_count;
         self
     }
-    pub fn rating(mut self, r: CreditRating) -> Self {
-        self.details.rating = r;
+
+    pub fn rating(mut self, rating: CreditRating) -> Self {
+        self.rating = Some(rating);
         self
     }
-    pub fn market(mut self, m: InstrumentMarket) -> Self {
-        self.market = Some(profile_for_market(m));
+
+    pub fn outstanding_units(mut self, units: f64) -> Self {
+        self.outstanding_units = units;
+        self
+    }
+
+    pub fn last_accrual_date(mut self, date: NaiveDate) -> Self {
+        self.last_accrual_date = Some(date);
+        self
+    }
+
+    pub fn market(mut self, market: InstrumentMarket) -> Self {
+        self.market_profile = Some(profile_for_market(market));
+        self
+    }
+
+    pub fn market_profile(mut self, profile: MarketProfile) -> Self {
+        self.market_profile = Some(profile);
+        self
+    }
+
+    pub fn listability(mut self, listability: Listability) -> Self {
+        self.listability = listability;
         self
     }
 
     pub fn auto_market(mut self) -> Self {
-        let m = classify_market(self.details.bond_type, self.details.issue_date, self.details.maturity_date);
-        self.market = Some(profile_for_market(m));
+        let market = classify_market(self.archetype.bond_type, self.issue_date, self.maturity_date);
+        self.market_profile = Some(profile_for_market(market));
         self.listability = Listability::Listed(VenueType::CentralLimitOrderBook);
         self
     }
 
     pub fn build(self) -> Result<Instrument, BuildError> {
-        let d = &self.details.clone();
-
-        if d.maturity_date <= d.issue_date {
-            return Err(BuildError::BadDates(d.issue_date, d.maturity_date));
+        if self.maturity_date <= self.issue_date {
+            return Err(BuildError::BadDates(self.issue_date, self.maturity_date));
         }
-        if matches!(d.cash_flow, CashFlow::Zero) && d.coupon_rate_bps != dec!(0.0) {
+
+        if matches!(self.archetype.cash_flow_type, CashFlow::Zero) && self.archetype.coupon_rate_bps != dec!(0.0) {
             return Err(BuildError::ZeroCouponHasCoupon);
         }
-        if matches!(d.cash_flow, CashFlow::Fixed | CashFlow::Floating) && d.frequency == 0 {
+
+        if matches!(self.archetype.cash_flow_type, CashFlow::Fixed | CashFlow::Floating)
+            && self.archetype.frequency_per_year == 0
+        {
             return Err(BuildError::BadFrequency);
         }
 
-        let profile = self
-            .market
-            .unwrap_or_else(|| profile_for_market(classify_market(d.bond_type, d.issue_date, d.maturity_date)));
+        let market_profile = self.market_profile.unwrap_or_else(|| {
+            profile_for_market(classify_market(self.archetype.bond_type, self.issue_date, self.maturity_date))
+        });
 
-        Ok(Instrument::new(self.id, InstrumentType::Debt(DebtInstrument::Bond(self.details)), profile)
-            .with_listability(self.listability))
+        let archetype = self.archetype;
+
+        let state = BondState::new(
+            self.issuer,
+            archetype,
+            self.issue_date,
+            self.maturity_date,
+            self.outstanding_units,
+            self.last_accrual_date,
+            self.rating,
+        );
+
+        Ok(Instrument::new(self.identifiers, market_profile, self.listability, InstrumentRuntime::Bond(state)))
     }
 }
 
-pub fn today() -> NaiveDate {
-    chrono::Utc::now().date_naive()
-}
-
-#[derive(Debug, Clone)]
-pub enum MarketChoice {
-    Auto,
-    Set(MarketProfile),
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum BondTerms {
-    Zero,
-    Fixed { coupon_rate_bps_bps: BasisPoints, frequency: NonZeroU32, day_count: DayCount },
-    Floating { spread_bps: BasisPoints, reset_freq: NonZeroU32, day_count: DayCount },
-}
-
-impl Instrument {
-    #[allow(clippy::too_many_arguments)]
-    pub fn bond_full(
-        id: InstrumentId, issuer: AgentId, bond_type: BondType, face_value: Money, issue_date: NaiveDate,
-        maturity_date: NaiveDate, terms: BondTerms, rating: CreditRating, market: MarketChoice,
-    ) -> Result<Self, BuildError> {
-        if maturity_date <= issue_date {
-            return Err(BuildError::BadDates(issue_date, maturity_date));
-        }
-
-        let (cash_flow, coupon_rate_bps, frequency, day_count) = match terms {
-            BondTerms::Zero => (CashFlow::Zero, BasisPoints::abs(&dec!(0.0)), 0u32, DayCount::ActAct),
-            BondTerms::Fixed { coupon_rate_bps_bps, frequency, day_count } => {
-                (CashFlow::Fixed, coupon_rate_bps_bps, frequency.get(), day_count)
-            }
-            BondTerms::Floating { spread_bps, reset_freq, day_count } => {
-                (CashFlow::Floating, spread_bps, reset_freq.get(), day_count)
-            }
-        };
-
-        if matches!(cash_flow, CashFlow::Fixed | CashFlow::Floating) && frequency == 0 {
-            return Err(BuildError::BadFrequency);
-        }
-
-        let details = BondDetails {
-            bond_type,
-            issuer,
-            cash_flow,
-            coupon_rate_bps,
-            face_value,
-            issue_date,
-            maturity_date,
-            frequency,
-            day_count,
-            rating,
-            last_accrual_date: Some(maturity_date - chrono::Duration::days(1)),
-        };
-
-        let market_profile = match market {
-            MarketChoice::Set(profile) => profile,
-            MarketChoice::Auto => profile_for_market(classify_market(bond_type, issue_date, maturity_date)),
-        };
-
-        Ok(Instrument::new(id, InstrumentType::Debt(DebtInstrument::Bond(details)), market_profile)
-            .with_listability(Listability::Listed(VenueType::CentralLimitOrderBook)))
-    }
-
-    pub fn bond_fixed(
-        id: InstrumentId, issuer: AgentId, bond_type: BondType, face_value: Money, issue_date: NaiveDate,
-        maturity_date: NaiveDate, coupon_rate_bps_bps: BasisPoints, frequency: NonZeroU32, day_count: DayCount,
-        rating: CreditRating, market: MarketChoice,
-    ) -> Result<Self, BuildError> {
-        Self::bond_full(
-            id,
-            issuer,
-            bond_type,
-            face_value,
-            issue_date,
-            maturity_date,
-            BondTerms::Fixed { coupon_rate_bps_bps, frequency, day_count },
-            rating,
-            market,
-        )
-    }
-
-    pub fn gov_bond(tenor_years: f64, coupon_rate_bps_bps: BasisPoints) -> Result<Self, BuildError> {
-        let issue = today();
-        let years = years_from_f64(tenor_years).ok_or_else(|| BuildError::BadDates(issue, issue))?;
-
-        let maturity = add_years(issue, years).ok_or_else(|| BuildError::BadDates(issue, issue))?;
-
-        Self::bond_full(
-            InstrumentId(Uuid::new_v4()),
-            AgentId(Uuid::new_v4()),
-            BondType::Government,
-            Money::from(1_000 as i64),
-            issue,
-            maturity,
-            BondTerms::Fixed {
-                coupon_rate_bps_bps,
-                frequency: NonZeroU32::new(2).unwrap(),
-                day_count: DayCount::ActAct,
-            },
-            CreditRating::Government(SpCreditRating::AAA),
-            MarketChoice::Auto,
-        )
-    }
-
-    pub fn gov_bill_months(gov: Government, months: NonZeroU32) -> Result<Self, BuildError> {
-        let issue = today();
-        let maturity =
-            issue.checked_add_months(Months::new(months.get())).ok_or_else(|| BuildError::BadDates(issue, issue))?;
-
-        Self::bond_full(
-            InstrumentId(Uuid::new_v4()),
-            gov.id,
-            BondType::Government,
-            Money::from(1_000 as i64),
-            issue,
-            maturity,
-            BondTerms::Zero,
-            CreditRating::Government(SpCreditRating::AAA),
-            MarketChoice::Auto,
-        )
-    }
-
-    pub fn corp_bond(issuer: AgentId, tenor_years: f64) -> Result<Self, BuildError> {
-        let issue = today();
-        let maturity = add_years(issue, years_from_f64(tenor_years).unwrap()).unwrap();
-        Self::bond_full(
-            InstrumentId(Uuid::new_v4()),
-            issuer,
-            BondType::Corporate,
-            Money::from(1_000 as i64),
-            issue,
-            maturity,
-            BondTerms::Fixed {
-                coupon_rate_bps_bps: BasisPoints::abs(&dec!(500.0)),
-                frequency: NonZeroU32::new(2).unwrap(),
-                day_count: DayCount::ActAct,
-            },
-            CreditRating::Corporate(SpCreditRating::BBB),
-            MarketChoice::Auto,
-        )
-    }
+pub struct EquityBuilder {
+    identifiers: InstrumentIdentifiers,
+    market_profile: Option<MarketProfile>,
+    listability: Listability,
+    profile: EquityProfile,
+    outstanding_shares: u64,
 }
 
 impl Instrument {
-    pub fn loan(id: InstrumentId, loan_details: LoanDetails) -> Self {
-        Instrument::new(id, InstrumentType::Debt(DebtInstrument::Loan(loan_details)), MarketProfile::unlisted())
-            .with_listability(Listability::Unlisted)
-    }
-
-    pub fn credit_line(id: InstrumentId, credit_line_details: CreditLineDetails) -> Self {
-        Instrument::new(
-            id,
-            InstrumentType::Debt(DebtInstrument::CreditLine(credit_line_details)),
-            MarketProfile::unlisted(),
-        )
-        .with_listability(Listability::Unlisted)
-    }
-    pub fn consumer_mortgage(id: InstrumentId, details: LoanDetails) -> Self {
-        Instrument::new(
-            id,
-            InstrumentType::Debt(DebtInstrument::Consumer(ConsumerDebt::ResidentialMortgage(details))),
-            MarketProfile::unlisted(),
-        )
-        .with_listability(Listability::Unlisted)
-    }
-
-    pub fn consumer_auto(id: InstrumentId, details: LoanDetails) -> Self {
-        Instrument::new(
-            id,
-            InstrumentType::Debt(DebtInstrument::Consumer(ConsumerDebt::AutoLoan(details))),
-            MarketProfile::unlisted(),
-        )
-        .with_listability(Listability::Unlisted)
-    }
-
-    pub fn consumer_personal(id: InstrumentId, details: LoanDetails) -> Self {
-        Instrument::new(
-            id,
-            InstrumentType::Debt(DebtInstrument::Consumer(ConsumerDebt::PersonalLoan(details))),
-            MarketProfile::unlisted(),
-        )
-        .with_listability(Listability::Unlisted)
-    }
-
-    pub fn consumer_credit_card(id: InstrumentId, details: CreditLineDetails) -> Self {
-        Instrument::new(
-            id,
-            InstrumentType::Debt(DebtInstrument::Consumer(ConsumerDebt::CreditCard(details))),
-            MarketProfile::unlisted(),
-        )
-        .with_listability(Listability::Unlisted)
+    pub fn equity(
+        id: InstrumentId, issuer: AgentId, share_class: EquityClass, outstanding_shares: u64,
+    ) -> EquityBuilder {
+        EquityBuilder {
+            identifiers: InstrumentIdentifiers::new(id),
+            market_profile: None,
+            listability: Listability::Listed(VenueType::CentralLimitOrderBook),
+            profile: EquityProfile {
+                issuer,
+                share_class,
+                authorized_shares: None,
+                par_value: None,
+                dividend_policy: None,
+            },
+            outstanding_shares,
+        }
     }
 }
 
-fn years_from_f64(t: f64) -> Option<NonZeroU32> {
-    if !t.is_finite() || t < 1.0 {
-        return None;
+impl EquityBuilder {
+    pub fn template(mut self, template_id: TemplateId) -> Self {
+        self.identifiers = self.identifiers.with_template(template_id);
+        self
     }
-    let r = t.round();
-    if (t - r).abs() > 1e-9 {
-        return None;
-    }
-    NonZeroU32::new(r as u32)
-}
 
-fn add_years(start: NaiveDate, years: NonZeroU32) -> Option<NaiveDate> {
-    start.checked_add_months(Months::new(years.get() * 12))
+    pub fn series(mut self, series_id: SeriesId) -> Self {
+        self.identifiers = self.identifiers.with_series(series_id);
+        self
+    }
+
+    pub fn lot(mut self, lot_id: LotId) -> Self {
+        self.identifiers = self.identifiers.with_lot(lot_id);
+        self
+    }
+
+    pub fn authorized_shares(mut self, shares: u64) -> Self {
+        self.profile.authorized_shares = Some(shares);
+        self
+    }
+
+    pub fn par_value(mut self, value: Money) -> Self {
+        self.profile.par_value = Some(value);
+        self
+    }
+
+    pub fn dividend_policy(mut self, policy: DividendPolicy) -> Self {
+        self.profile.dividend_policy = Some(policy);
+        self
+    }
+
+    pub fn share_class(mut self, class: EquityClass) -> Self {
+        self.profile.share_class = class;
+        self
+    }
+
+    pub fn outstanding_shares(mut self, shares: u64) -> Self {
+        self.outstanding_shares = shares;
+        self
+    }
+
+    pub fn market(mut self, market: InstrumentMarket) -> Self {
+        self.market_profile = Some(profile_for_market(market));
+        self
+    }
+
+    pub fn market_profile(mut self, profile: MarketProfile) -> Self {
+        self.market_profile = Some(profile);
+        self
+    }
+
+    pub fn listability(mut self, listability: Listability) -> Self {
+        self.listability = listability;
+        self
+    }
+
+    pub fn build(self) -> Instrument {
+        let market_profile = self
+            .market_profile
+            .unwrap_or_else(|| profile_for_market(InstrumentMarket::CapitalMarket(CapitalMarketSegment::Equity)));
+
+        let state = EquityState { profile: self.profile, outstanding_shares: self.outstanding_shares };
+
+        Instrument::new(self.identifiers, market_profile, self.listability, InstrumentRuntime::Equity(state))
+    }
 }

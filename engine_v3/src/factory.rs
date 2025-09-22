@@ -122,7 +122,7 @@ impl<'a> AgentFactory<'a> {
             }
             AssetConfig::Bond { tenor, quantity } => {
                 let gov_id = self.state.financial_system.government.id;
-                let instrument = self.get_or_create_bond_instrument(tenor, gov_id);
+                let instrument = self.get_or_create_bond_instrument(tenor, gov_id, *quantity as f64);
                 self.pending_effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument {
                     instrument: instrument.clone(),
                     creditor: owner_id,
@@ -180,38 +180,87 @@ impl<'a> AgentFactory<'a> {
         let maturity_date = issue_date + Duration::days(maturity_days as i64);
         let is_consumer = self.state.agents.consumers.contains_key(&borrower);
 
-        let loan_details = LoanDetails {
-            loan_id: Uuid::new_v4(),
-            lender,
-            borrower,
-            loan_type: match purpose {
-                LoanPurpose::RealEstate => LoanType::MortgageLoan,
-                LoanPurpose::WorkingCapital => LoanType::WorkingCapital,
-                LoanPurpose::Equipment => LoanType::AssetFinance,
-                _ => LoanType::TermLoan,
-            },
-            principal: Money::from_f64(principal).unwrap(),
-            outstanding_principal: Money::from_f64(principal).unwrap(),
-            spread_bps: rate_bps,
-            origination_date: issue_date,
-            maturity_date,
-            next_payment_date: issue_date + Duration::days(30),
-            last_accrual_date: issue_date,
-            payment_frequency: PaymentFrequency::Monthly,
-            rating: Some(CreditRating::consumer_prime()),
-            ..Default::default()
-        };
-        let loan = Loan {
-            instrument_id: InstrumentId(uuid::Uuid::new_v4()),
-            details: loan_details,
-            status: LoanStatus::Current,
-            servicing_history: vec![],
+        let principal_money = Money::from_f64(principal).unwrap_or(Money::ZERO);
+        let next_payment_date = issue_date + Duration::days(30);
+
+        let loan_purpose = purpose.clone();
+        let loan_type = match &loan_purpose {
+            LoanPurpose::RealEstate => LoanType::MortgageLoan,
+            LoanPurpose::WorkingCapital => LoanType::WorkingCapital,
+            LoanPurpose::Equipment => LoanType::AssetFinance,
+            _ => LoanType::TermLoan,
         };
 
+        let amortization = Amortization::Annuity;
+
+        let loan_archetype = LoanArchetype {
+            facility_type: FacilityType::TermLoanFacility,
+            amortization,
+            prepayment: PrepaymentTerms {
+                allowed: true,
+                penalty_type: PrepaymentPenalty::None,
+                lockout_period_months: None,
+            },
+            principal: principal_money,
+            day_count: DayCount::ActAct,
+            compounding: Compounding::Simple,
+            rate_structure: RateStructure {
+                base_rate: RateIndex::Fixed,
+                spread_bps: rate_bps,
+                floor_bps: None,
+                cap_bps: None,
+            },
+            repayment_schedule: LoanRepaymentSchedule {
+                payment_frequency: PaymentFrequency::Monthly,
+                term_months: (maturity_days / 30).max(1),
+            },
+            collateral_requirements: Vec::new(),
+        };
+
+        let loan_id = Uuid::new_v4();
+        let instrument_id = InstrumentId(uuid::Uuid::new_v4());
+
+        let rating = if is_consumer {
+            Some(CreditRating::Consumer(ConsumerCreditRating::Prime))
+        } else {
+            Some(CreditRating::Corporate(SpCreditRating::BBB))
+        };
+
+        let impairment = ImpairmentState {
+            stage: ImpairmentStage::Stage1Performing,
+            provision_amount: Money::ZERO,
+            days_past_due: 0,
+            probability_of_default: 0.0,
+            loss_given_default: 0.0,
+            exposure_at_default: principal_money,
+        };
+
+        let loan_state = LoanState::new(
+            loan_id,
+            lender,
+            borrower,
+            None,
+            loan_type,
+            loan_archetype,
+            principal_money,
+            issue_date,
+            maturity_date,
+            next_payment_date,
+            issue_date,
+            Vec::new(),
+            Vec::new(),
+            rating,
+            impairment,
+            Money::ZERO,
+            Money::ZERO,
+        );
+
+        let loan = Loan { instrument_id, state: loan_state, status: LoanStatus::Current, servicing_history: vec![] };
+
         self.pending_effects.push(StateEffect::Credit(CreditEffect::RegisterLoan {
-            loan: loan.clone(),
+            loan,
             is_consumer,
-            purpose,
+            purpose: loan_purpose,
         }));
     }
 
@@ -247,9 +296,9 @@ impl<'a> AgentFactory<'a> {
 
         let cb_id = self.state.financial_system.central_bank.id;
         let gov_id = self.state.financial_system.government.id;
-        let bond = self.get_or_create_bond_instrument("CB_BALANCE", gov_id);
+        let sample_bond = self.get_or_create_bond_instrument("CB_BALANCE", gov_id, 1.0);
 
-        let face_value = bond.face_value().map(|m| m.to_f64()).unwrap_or(1_000.0);
+        let face_value = sample_bond.unit_par_value().map(|m| m.to_f64()).unwrap_or(1_000.0);
         if face_value <= 0.0 {
             return;
         }
@@ -258,6 +307,12 @@ impl<'a> AgentFactory<'a> {
         if quantity <= 0.0 {
             return;
         }
+
+        let bond = if (quantity - 1.0).abs() < f64::EPSILON {
+            sample_bond
+        } else {
+            self.get_or_create_bond_instrument("CB_BALANCE", gov_id, quantity)
+        };
 
         self.pending_effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument {
             instrument: bond,
@@ -302,7 +357,7 @@ impl<'a> AgentFactory<'a> {
         tga
     }
 
-    fn get_or_create_bond_instrument(&mut self, tenor: &str, issuer_id: AgentId) -> Instrument {
+    fn get_or_create_bond_instrument(&mut self, tenor: &str, issuer_id: AgentId, units: f64) -> Instrument {
         let issue = self.state.current_date;
         let maturity = Self::tenor_to_maturity(issue, tenor).unwrap_or_else(|| issue + Duration::days(365 * 2));
         let bond = Instrument::bond(
@@ -315,6 +370,7 @@ impl<'a> AgentFactory<'a> {
         )
         .coupon_bps(dec!(250.0))
         .rating(CreditRating::government_aaa())
+        .outstanding_units(units)
         .auto_market()
         .build()
         .unwrap();
@@ -430,7 +486,7 @@ impl<'a> AgentFactory<'a> {
         if let Some(bs) = system.balance_sheets.get(&bank_id) {
             for (inst_id, pos) in &bs.liabilities {
                 if let Some(inst) = system.instruments.instruments.get(inst_id) {
-                    if let InstrumentType::Cash(cash) = &inst.instrument_type {
+                    if let InstrumentRuntime::Cash(cash) = inst.state() {
                         if matches!(cash.cash_type, CashType::DemandDeposit | CashType::SavingsDeposit) {
                             let per_unit = pos.book_value_per_unit.to_f64();
                             if per_unit.is_finite() {

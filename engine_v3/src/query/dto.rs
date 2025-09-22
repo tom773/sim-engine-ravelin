@@ -199,6 +199,7 @@ pub struct PopulatedBalanceSheetDto {
 #[derive(Serialize, Debug, Clone)]
 pub struct MarketIndexDto {
     pub by_issuer: HashMap<AgentId, Vec<InstrumentId>>,
+    pub by_listing: HashMap<String, Vec<InstrumentId>>,
     pub by_rating_and_tenor: HashMap<String, Vec<InstrumentId>>,
     pub by_bond_type: HashMap<BondType, Vec<InstrumentId>>,
 }
@@ -211,6 +212,7 @@ pub struct InstrumentRegistryDto {
     pub templates: Vec<InstrumentTemplate>,
     pub series: Vec<InstrumentSeries>,
     pub lots: Vec<InstrumentLot>,
+    pub market_index: MarketIndexDto,
 }
 
 #[serde_as]
@@ -270,8 +272,12 @@ impl From<&MarketIndex> for MarketIndexDto {
             })
             .collect();
 
+        let by_listing =
+            market_index.by_listing.iter().map(|(key, instruments)| (key.label(), instruments.clone())).collect();
+
         Self {
             by_issuer: market_index.by_issuer.clone(),
+            by_listing,
             by_rating_and_tenor: by_rating_and_tenor_dto,
             by_bond_type: market_index.by_bond_type.clone(),
         }

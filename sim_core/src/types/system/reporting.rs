@@ -151,7 +151,7 @@ impl FinancialSystem {
                         vec![
                             format!("{}:{}", code, &inst_id.0.to_string()[0..4]),
                             format!("{:.2}", holding.total_position()),
-                            format!("{:.0}", inst.face_value().map(|v| v.to_f64()).unwrap_or(1000.0)),
+                            format!("{:.0}", inst.unit_par_value().map(|v| v.to_f64()).unwrap_or(1.0)),
                         ]
                     })
                     .collect();
@@ -313,7 +313,7 @@ impl FinancialSystem {
         let id_short = format!("{:.6}", inst_id.0.to_string());
         let key = format!("{}:{}", type_code, id_short);
 
-        let book_value = inst.face_value().unwrap_or(Money::from(1000)).to_f64();
+        let book_value = inst.unit_par_value().unwrap_or(Money::ONE).to_f64();
 
         Some(CompactPosition {
             k: key,
@@ -336,8 +336,9 @@ impl FinancialSystem {
     }
 
     fn get_instrument_type_code(&self, inst: &Instrument) -> &str {
-        match &inst.instrument_type {
-            InstrumentType::Cash(d) => match d.cash_type {
+        // Runtime-based codes now that InstrumentType wrappers are gone.
+        match inst.state() {
+            InstrumentRuntime::Cash(d) => match d.cash_type {
                 CashType::DemandDeposit => "DD",
                 CashType::SavingsDeposit => "SD",
                 CashType::TimeDeposit => "TD",
@@ -346,34 +347,30 @@ impl FinancialSystem {
                 CashType::VaultCash => "VC",
                 CashType::TreasuryGeneralAccount => "TGA",
             },
-            InstrumentType::Debt(debt) => match debt {
-                DebtInstrument::Bond(b) => match b.bond_type {
-                    BondType::Corporate => "CB",
-                    BondType::Government => "GB",
-                    BondType::InterbankLoan => "IB",
-                    BondType::Municipal => "MB",
-                    BondType::Agency => "AG",
-                    BondType::Supranational => "SB",
-                },
-                DebtInstrument::Consumer(c) => match c {
-                    ConsumerDebt::ResidentialMortgage(_)
-                    | ConsumerDebt::AutoLoan(_)
-                    | ConsumerDebt::PersonalLoan(_) => "LN",
-                    ConsumerDebt::CreditCard(_) => "CL",
-                    ConsumerDebt::StudentLoan(_) => "LN",
-                },
-                DebtInstrument::Loan(_) => "LN",
-                DebtInstrument::CreditLine(_) => "CL",
-                DebtInstrument::TradeCredit(_) => "TC",
+            InstrumentRuntime::Bond(b) => match b.bond_type() {
+                BondType::Corporate => "CB",
+                BondType::Government => "GB",
+                BondType::InterbankLoan => "IB",
+                BondType::Municipal => "MB",
+                BondType::Agency => "AG",
+                BondType::Supranational => "SB",
             },
-            InstrumentType::RealAsset(r) => match r {
-                RealAssetType::Inventory { .. } => "INV",
-                RealAssetType::Property { .. } => "PRO",
+            InstrumentRuntime::Credit(credit) => match credit {
+                CreditState::Loan(_) => "LN",
+                CreditState::ConsumerLoan { .. } => "LN",
+                CreditState::ConsumerCreditCard(_) => "CL",
+                CreditState::Facility(_) => "CL",
+                CreditState::TradeCredit(_) => "TC",
             },
-            InstrumentType::Equity(_) => "EQ",
-            InstrumentType::Derivative(_) => "DER",
-            InstrumentType::StructuredTranche(_) => "ST",
-            InstrumentType::Repo(_) => "RP",
+            InstrumentRuntime::RealAsset(asset) => match asset {
+                RealAssetState::Inventory { .. } => "INV",
+                RealAssetState::Property { .. } => "PRO",
+                RealAssetState::Custom { .. } => "REAL",
+            },
+            InstrumentRuntime::Equity(_) => "EQ",
+            InstrumentRuntime::Derivative(_) => "DER",
+            InstrumentRuntime::Structured(_) => "ST",
+            InstrumentRuntime::Repo(_) => "RP",
         }
     }
 
@@ -440,7 +437,7 @@ impl FinancialSystem {
                     .map(|(inst_id, holding)| {
                         let inst = &self.instruments.instruments[inst_id];
                         let code = self.get_instrument_type_code(inst);
-                        let book = inst.face_value().map(|v| v.to_f64()).unwrap_or(1000.0);
+                        let book = inst.unit_par_value().map(|v| v.to_f64()).unwrap_or(1.0);
                         securities_total += holding.total_position() * book;
                         json!([
                             format!("{}:{}", code, &inst_id.0.to_string()[0..4]),

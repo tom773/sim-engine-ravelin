@@ -133,15 +133,13 @@ impl CentralSecuritiesDepository {
     pub fn register_security(
         &mut self, instrument_id: InstrumentId, instrument: &Instrument, issue_date: NaiveDate,
     ) -> Result<(), CSDError> {
-        let (security_type, issuer, maturity) = match &instrument.instrument_type {
-            InstrumentType::Debt(DebtInstrument::Bond(details)) => {
-                (SecurityType::Bond, details.issuer, Some(details.maturity_date))
-            }
-            InstrumentType::Equity(details) => (SecurityType::Equity, details.issuer, None),
-            InstrumentType::StructuredTranche(details) => {
+        let (security_type, issuer, maturity) = match &instrument.state() {
+            InstrumentRuntime::Bond(details) => (SecurityType::Bond, details.issuer, Some(details.maturity_date)),
+            InstrumentRuntime::Equity(details) => (SecurityType::Equity, details.profile.issuer, None),
+            InstrumentRuntime::Structured(details) => {
                 (SecurityType::StructuredProduct, details.issuer, Some(details.maturity_date))
             }
-            InstrumentType::Derivative(_) => (SecurityType::Derivative, AgentId::default(), None),
+            InstrumentRuntime::Derivative(_) => (SecurityType::Derivative, AgentId::default(), None),
             _ => return Ok(()),
         };
 

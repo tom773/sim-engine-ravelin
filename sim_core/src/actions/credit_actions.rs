@@ -8,11 +8,11 @@ pub enum CreditAction {
 
     ProcessLoanApplication { application_id: Uuid, decision: LoanDecision },
 
-    OriginateLoan { loan: LoanDetails, funding_amount: Money },
+    OriginateLoan { loan: Loan, funding_amount: Money },
 
-    OpenCreditFacility { facility: CreditLineDetails },
+    OpenCreditFacility { facility: CreditFacilityState },
 
-    FundDrawdown { facility_id: Uuid, loan: LoanDetails, amount: Money },
+    FundDrawdown { facility_id: Uuid, loan: Loan, amount: Money },
 
     AccrueInterest { loan_id: Uuid },
 
@@ -59,9 +59,9 @@ impl CreditAction {
         match self {
             CreditAction::CreateLoanApplication { application } => application.borrower_id,
             CreditAction::ProcessLoanApplication { .. } => AgentId::default(), // Bank agent would be needed here
-            CreditAction::OriginateLoan { loan, .. } => loan.lender,
+            CreditAction::OriginateLoan { loan, .. } => loan.state.lender,
             CreditAction::OpenCreditFacility { facility } => facility.borrower,
-            CreditAction::FundDrawdown { loan, .. } => loan.lender,
+            CreditAction::FundDrawdown { loan, .. } => loan.state.lender,
             CreditAction::AccrueInterest { .. } => AgentId::default(),
             CreditAction::ProcessScheduledPayment { .. } => AgentId::default(),
             CreditAction::ApplyPayment { .. } => AgentId::default(),

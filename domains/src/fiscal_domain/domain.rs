@@ -39,6 +39,7 @@ impl Domain for FiscalDomain {
                 .coupon_bps(*coupon_rate)
                 .frequency(2)
                 .rating(CreditRating::Government(SpCreditRating::AAA))
+                .outstanding_units(*quantity_to_issue as f64)
                 .auto_market()
                 .build()
                 {
@@ -98,6 +99,7 @@ impl Domain for FiscalDomain {
                 .coupon_bps(*coupon_rate)
                 .frequency(2)
                 .rating(CreditRating::Government(SpCreditRating::AAA))
+                .outstanding_units(*quantity as f64)
                 .auto_market()
                 .build()
                 {
@@ -107,7 +109,7 @@ impl Domain for FiscalDomain {
 
                 let auction = DebtAuction {
                     auction_id: Uuid::new_v4(),
-                    instrument_id: new_instrument.id,
+                    instrument_id: new_instrument.instrument_id(),
                     quantity_offered: *quantity,
                     status: AuctionStatus::Open,
                     bids: vec![],

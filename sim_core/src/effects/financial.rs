@@ -1,4 +1,5 @@
 use crate::types::money::Money;
+use crate::types::system::balance_sheet::Position;
 use crate::*;
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::Entry;
@@ -35,11 +36,11 @@ impl FinancialEffect {
 
 fn is_security(inst: &Instrument) -> bool {
     matches!(
-        inst.instrument_type,
-        InstrumentType::Debt(DebtInstrument::Bond(_))  // Only bonds are securities in debt
-            | InstrumentType::Equity(_)
-            | InstrumentType::StructuredTranche(_)
-            | InstrumentType::Derivative(_)
+        inst.state(),
+        InstrumentRuntime::Bond(_)
+            | InstrumentRuntime::Equity(_)
+            | InstrumentRuntime::Structured(_)
+            | InstrumentRuntime::Derivative(_)
     )
 }
 
@@ -47,8 +48,10 @@ impl StateEffectApplicator {
     pub fn apply_financial_effect(state: &mut SimState, effect: &FinancialEffect) -> Result<(), EffectError> {
         match effect {
             FinancialEffect::CreateInstrument { instrument: inst, creditor, debtor, quantity } => {
-                let instrument_id = inst.id;
+                let instrument_id = inst.instrument_id();
                 state.financial_system.instruments.instruments.insert(instrument_id, inst.clone());
+
+                let par_value = inst.unit_par_value().unwrap_or(Money::ONE);
 
                 if is_security(inst) {
                     state
@@ -67,17 +70,21 @@ impl StateEffectApplicator {
                             .map_err(|e| EffectError::FinancialSystemError(e.to_string()))?;
                     }
 
-                    let book_value = inst.face_value().unwrap_or(Money::ZERO);
                     let debtor_bs = state
                         .financial_system
                         .balance_sheets
                         .entry(*debtor)
                         .or_insert_with(|| BalanceSheet::new(*debtor));
-                    let pos = debtor_bs.liabilities.entry(instrument_id).or_insert_with(Default::default);
+                    let pos = debtor_bs.liabilities.entry(instrument_id).or_insert_with(|| Position {
+                        quantity: 0.0,
+                        book_value_per_unit: par_value,
+                        cost_basis_per_unit: par_value,
+                    });
                     pos.quantity += quantity;
-                    pos.book_value_per_unit = book_value;
+                    pos.book_value_per_unit = par_value;
+                    pos.cost_basis_per_unit = par_value;
                 } else {
-                    let book_value = Money::from(1); // Deposits are 1-to-1 with currency
+                    let book_value = par_value; // deposits and other cash-like instruments use par-per-unit
 
                     if *quantity > 0.0 {
                         state
@@ -94,7 +101,7 @@ impl StateEffectApplicator {
                 }
 
                 let final_inst = state.financial_system.instruments.instruments.get(&instrument_id).unwrap();
-                if final_inst.should_create_order_book() {
+                if final_inst.listability().should_create_order_book() {
                     state.financial_system.exchange.ensure_listed(instrument_id, final_inst);
                 }
 
@@ -152,7 +159,6 @@ impl StateEffectApplicator {
             }
         }
     }
-
     pub fn apply_cash_position_adjustment(
         state: &mut SimState, agent_id: AgentId, instrument_id: InstrumentId, quantity_change: f64,
         side: &PositionSide, book_value: Option<f64>,
@@ -164,28 +170,23 @@ impl StateEffectApplicator {
             .get(&instrument_id)
             .ok_or_else(|| EffectError::InstrumentNotFound { id: instrument_id })?;
 
-        match &instrument.instrument_type {
-            InstrumentType::Cash(_) => {}
-            InstrumentType::RealAsset(_) => {}
-            InstrumentType::Debt(debt) => match debt {
-                DebtInstrument::Bond(_) => {
-                    return Err(EffectError::FinancialSystemError(format!(
-                        "Bond {} cannot be adjusted via balance sheet - must use CSD",
-                        instrument_id
-                    )));
-                }
-                DebtInstrument::Loan(_)
-                | DebtInstrument::CreditLine(_)
-                | DebtInstrument::Consumer(_)
-                | DebtInstrument::TradeCredit(_) => {}
-            },
-            InstrumentType::Equity(_) | InstrumentType::StructuredTranche(_) | InstrumentType::Derivative(_) => {
+        match instrument.state() {
+            InstrumentRuntime::Cash(_) => {}
+            InstrumentRuntime::RealAsset(_) => {}
+            InstrumentRuntime::Bond(_) => {
+                return Err(EffectError::FinancialSystemError(format!(
+                    "Bond {} cannot be adjusted via balance sheet - must use CSD",
+                    instrument_id
+                )));
+            }
+            InstrumentRuntime::Equity(_) | InstrumentRuntime::Structured(_) | InstrumentRuntime::Derivative(_) => {
                 return Err(EffectError::FinancialSystemError(format!(
                     "Security {} cannot be adjusted via balance sheet - must use CSD",
                     instrument_id
                 )));
             }
-            InstrumentType::Repo(_) => {}
+            InstrumentRuntime::Credit(_) => {}
+            InstrumentRuntime::Repo(_) => {}
         }
 
         let bs = state.financial_system.balance_sheets.entry(agent_id).or_insert_with(|| BalanceSheet::new(agent_id));

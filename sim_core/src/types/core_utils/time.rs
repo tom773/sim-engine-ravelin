@@ -123,13 +123,15 @@ pub fn days_in_month(year: i32, month: u32) -> u32 {
         _ => 30,
     }
 }
-pub fn is_coupon_date(date: NaiveDate, bond: &BondDetails) -> bool {
-    if bond.frequency == 0 {
+pub fn is_coupon_date(date: NaiveDate, bond: BondState) -> bool {
+    if bond.archetype.frequency_per_year == 0 {
         return false;
     }
     let months_since_issue =
         ((date.year() - bond.issue_date.year()) * 12 + date.month() as i32 - bond.issue_date.month() as i32) as u32;
-    date.day() == bond.issue_date.day() && months_since_issue > 0 && months_since_issue % (12 / bond.frequency) == 0
+    date.day() == bond.issue_date.day()
+        && months_since_issue > 0
+        && months_since_issue % (12 / bond.archetype.frequency_per_year) == 0
 }
 pub fn is_leap_year(year: i32) -> bool {
     (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)

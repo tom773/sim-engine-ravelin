@@ -5,6 +5,7 @@ use ordered_float::NotNan;
 use rand::RngCore;
 use rand::prelude::ThreadRng;
 use rust_decimal::prelude::*;
+use sim_core::types::markets::BondPricingTerms;
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -543,11 +544,11 @@ impl SimulationEngine {
                             if let Some(symbol) = fs.exchange.inst_to_symbol.get(inst_id) {
                                 if let Some(market) = fs.exchange.markets.get(symbol) {
                                     if let MarketType::Financial(fin_market) = market {
-                                        if let InstrumentType::Debt(DebtInstrument::Bond(b)) = &inst.instrument_type {
+                                        if let InstrumentRuntime::Bond(b) = &inst.state() {
                                             if let Some(mid) = fin_market.book.mid_price() {
                                                 let tenor = b.remaining_tenor_years(self.state.current_date);
                                                 let tmp = GovTermStructurePricer::new(
-                                                    b.clone(),
+                                                    BondPricingTerms::from(b),
                                                     TermStructureMethod::Bootstrapped,
                                                     fs.pricing_feeds.clone(),
                                                 );
@@ -583,7 +584,7 @@ impl SimulationEngine {
         let mut inv_qty: HashMap<GoodId, f64> = HashMap::new();
 
         for (_id, inst) in &self.state.financial_system.instruments.instruments {
-            if let InstrumentType::RealAsset(RealAssetType::Inventory { goods, .. }) = &inst.instrument_type {
+            if let InstrumentRuntime::RealAsset(RealAssetState::Inventory { goods, .. }) = &inst.state() {
                 for (gid, item) in goods {
                     let q = item.quantity.max(0.0);
                     let c = item.unit_cost.to_f64();
