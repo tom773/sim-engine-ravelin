@@ -50,13 +50,20 @@ impl StepHandler for GatherIntentionsHandler {
             let intentions = engine.gather_intentions(rng);
             let categorized = engine.domain_registry.categorize_intentions_by_phase(intentions.clone());
 
-            context.store("intentions", &intentions)?;
-            context.store("categorized_intentions", &categorized)?;
+            context.set_intentions(intentions);
+            context.set_categorized_intentions(categorized);
+
             let mut concatted = String::new();
-            for intention in &intentions {
-                concatted.push_str(&format!("{}; ", intention.name()));
-            }
-            Ok(serde_json::json!({ "total_intentions": intentions.len() }))
+            let total_intentions = if let Some(stored) = context.intentions() {
+                for intention in stored {
+                    concatted.push_str(&format!("{}; ", intention.name()));
+                }
+                stored.len()
+            } else {
+                0
+            };
+
+            Ok(serde_json::json!({ "total_intentions": total_intentions }))
         })
     }
 }
@@ -82,15 +89,15 @@ impl StepHandler for PhaseResolutionHandler {
 
             let mut all_actions = context.get_all_actions().unwrap_or_default();
             all_actions.extend(action_records.clone());
-            context.store("all_actions", &all_actions)?;
+            context.set_all_actions(all_actions);
 
             let mut all_effects = context.get_all_effects().unwrap_or_default();
             all_effects.extend(effects.clone());
-            context.store("all_effects", &all_effects)?;
+            context.set_all_effects(all_effects);
 
             let mut mapping = context.get_action_to_effect_indices().unwrap_or_default();
             mapping.extend(action_to_effect_indices);
-            context.store("action_to_effect_indices", &mapping)?;
+            context.set_action_to_effect_indices(mapping);
 
             Ok(serde_json::json!({"actions": action_records.len(), "effects": effects.len()}))
         })
@@ -112,7 +119,7 @@ impl StepHandler for ApplyMarketEffectsHandler {
             if !staged.is_empty() {
                 let mut all_trades = context.get_trades().unwrap_or_default();
                 all_trades.extend(staged);
-                context.store("trades", &all_trades)?;
+                context.set_trades(all_trades);
             }
             Ok(serde_json::json!({ "market_effects_applied": market_effects.len() }))
         })
@@ -132,17 +139,14 @@ impl StepHandler for ClearMarketsHandler {
                     tape.entry(t.market_id.clone()).or_default().push(TimedTrade { ts: now, trade: t.clone() });
                 }
             }
-            let snapshots_s: std::collections::HashMap<String, MarketView> =
-                snapshots.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
-
             let mut all_trades = context.get_trades().unwrap_or_default();
 
             let trades_generated = market_trades.len();
             all_trades.extend(market_trades);
 
-            context.store("trades", &all_trades)?;
+            context.set_trades(all_trades);
 
-            context.store("market_snapshots", &snapshots_s)?;
+            context.set_market_snapshots(snapshots);
             Ok(serde_json::json!({ "trades_generated": trades_generated }))
         })
     }
@@ -250,7 +254,7 @@ pub struct SettleTradesHandler;
 impl StepHandler for SettleTradesHandler {
     fn execute(&self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
         execute_step(|| {
-            let trades: Vec<Trade> = context.get("trades").unwrap_or_default();
+            let trades: Vec<Trade> = context.get_trades().unwrap_or_default();
 
             if trades.is_empty() {
                 return Ok(serde_json::json!({
@@ -264,7 +268,7 @@ impl StepHandler for SettleTradesHandler {
             let mut all_effects = context.get_all_effects().unwrap_or_default();
             let effect_count = settlement_effects.len();
             all_effects.extend(settlement_effects);
-            context.store("all_effects", &all_effects)?;
+            context.set_all_effects(all_effects);
 
             Ok(serde_json::json!({
                 "trades_processed": trades.len(),
@@ -543,9 +547,9 @@ impl StepHandler for RunRTGSHandler {
             let finalization_effects =
                 run_rtgs(&mut engine.state).map_err(|e| format!("RTGS execution failed: {:?}", e))?;
 
-            let mut all_effects: Vec<StateEffect> = context.get("all_effects").unwrap_or_default();
+            let mut all_effects: Vec<StateEffect> = context.get_all_effects().unwrap_or_default();
             all_effects.extend(finalization_effects);
-            context.store("all_effects", &all_effects)?;
+            context.set_all_effects(all_effects);
 
             let final_pending = engine.state.financial_system.rtgs.pending.len();
             let settled_this_tick = initial_pending - final_pending;
@@ -608,8 +612,10 @@ impl StepHandler for ApplyAllEffectsHandler {
 
             engine.state.apply_effects(&all_effects).map_err(|e| e.to_string())?;
 
-            context.store("all_effects", &all_effects)?;
-            Ok(serde_json::json!({"total_effects_applied": all_effects.len()}))
+            let total_effects = all_effects.len();
+            context.set_all_effects(all_effects);
+
+            Ok(serde_json::json!({"total_effects_applied": total_effects}))
         })
     }
 }
@@ -749,7 +755,7 @@ impl StepHandler for DebtAuctionsHandler {
 
                 let mut all_trades = context.get_trades().unwrap_or_default();
                 all_trades.extend(all_auction_trades);
-                context.store("trades", &all_trades)?;
+                context.set_trades(all_trades);
             }
 
             Ok(serde_json::json!({ "auctions_processed": true }))

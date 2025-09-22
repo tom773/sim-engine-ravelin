@@ -289,7 +289,7 @@ decision_model = { type = "ProductionFirm" }
 
 [[consumer_groups]]
 id_prefix="HH"
-count=5
+count=50
 bank_mix = { bank_a = 0.5, bank_b = 0.5 }
 income = { type = "normal", mean = 60_000.0, stdev = 10_000.0 }
 deposit = { type = "pct_of_income", pct = 0.10 }
@@ -297,7 +297,7 @@ consumption_basket = { bread = 0.1, electronics = 0.05, diesel = 0.02, car = 0.0
 
 [[consumer_groups]]
 id_prefix = "mortgage_holders"
-count = 10
+count = 100
 bank_mix = { bank_a = 0.8, bank_b = 0.2 }
 income = { type = "log_normal", mu = 12.0, sigma = 0.5 } # Higher income
 deposit = { type = "pct_of_income", pct = 0.05 }
@@ -308,7 +308,7 @@ initial_liabilities = [
 
 [[consumer_groups]]
 id_prefix = "credit_card_users"
-count = 5
+count = 50
 bank_mix = { bank_a = 0.4, bank_b = 0.6 }
 income = { type = "normal", mean = 75000.0, stdev = 15000.0 }
 deposit = { type = "pct_of_income", pct = 0.08 }

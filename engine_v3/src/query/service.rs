@@ -95,22 +95,6 @@ fn safe_book_value(position: &PopulatedPositionDto) -> f64 {
     if per_unit.is_finite() { quantity * per_unit } else { quantity }
 }
 
-fn validate_aggregate_totals(
-    agent_id: &AgentId, positions: &[PopulatedPositionDto], aggregates: &[AggregatedBookEntryDto], side: &'static str,
-) {
-    let raw_total: f64 = positions.iter().map(|pos| safe_book_value(pos)).sum();
-    let aggregated_total: f64 = aggregates.iter().map(|entry| entry.total_book_value).sum();
-    if (raw_total - aggregated_total).abs() > 1e-2 {
-        tracing::warn!(
-            %side,
-            ?agent_id,
-            raw_total,
-            aggregated_total,
-            "balance sheet aggregate totals diverge",
-        );
-    }
-}
-
 fn loan_type_label(loan_type: LoanType) -> &'static str {
     match loan_type {
         LoanType::TermLoan => "Term Loans",
@@ -320,7 +304,6 @@ mod tests {
         let avg_rate = asset_entry.average_rate_bps.expect("avg rate");
         assert!((avg_rate - 500.0).abs() < 1e-6);
         assert!(asset_entry.label.contains("Corporate Bonds"));
-        validate_aggregate_totals(&AgentId::default(), &asset_positions, &asset_aggregates, "assets");
 
         let liability_positions = vec![make_position(&bond_a, 6.0), make_position(&bond_b, 2.5)];
         let mut liability_groups: HashMap<String, AggregatedAccumulator> = HashMap::new();
@@ -336,7 +319,6 @@ mod tests {
         let expected_liabilities: f64 = liability_positions.iter().map(|pos| safe_book_value(pos)).sum();
         assert_eq!(liability_entry.position_count, liability_positions.len());
         assert!((liability_entry.total_book_value - expected_liabilities).abs() < 1e-6);
-        validate_aggregate_totals(&AgentId::default(), &liability_positions, &liability_aggregates, "liabilities");
     }
 }
 
@@ -599,9 +581,6 @@ impl QueryService {
         let mut liability_books: Vec<_> =
             liability_groups.into_iter().map(|(label, acc)| acc.into_entry(label)).collect();
         liability_books.sort_by(|a, b| b.total_book_value.partial_cmp(&a.total_book_value).unwrap_or(Ordering::Equal));
-
-        validate_aggregate_totals(agent_id, assets, &asset_books, "assets");
-        validate_aggregate_totals(agent_id, liabilities, &liability_books, "liabilities");
 
         if asset_books.is_empty() && liability_books.is_empty() {
             None

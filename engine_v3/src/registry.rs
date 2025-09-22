@@ -44,8 +44,10 @@ impl DomainRegistry {
         }
     }
 
-    pub fn categorize_intentions_by_phase(&self, intentions: Vec<SimIntention>) -> HashMap<String, Vec<SimIntention>> {
-        let mut categorized: HashMap<String, Vec<SimIntention>> = HashMap::new();
+    pub fn categorize_intentions_by_phase(
+        &self, intentions: Vec<SimIntention>,
+    ) -> HashMap<ResolutionPhase, Vec<SimIntention>> {
+        let mut categorized: HashMap<ResolutionPhase, Vec<SimIntention>> = HashMap::new();
         for intention in intentions {
             let mut found: Option<ResolutionPhase> = None;
             for domain in self.domains.values() {
@@ -62,13 +64,7 @@ impl DomainRegistry {
                 }
             }
             if let Some(phase) = found {
-                let k = match phase {
-                    ResolutionPhase::Independent => "Independent",
-                    ResolutionPhase::Market => "Market",
-                    ResolutionPhase::Dependent => "Dependent",
-                }
-                .to_string();
-                categorized.entry(k).or_default().push(intention);
+                categorized.entry(phase).or_default().push(intention);
             } else {
                 tracing::warn!("No resolution phase found for intention: {}", intention.name());
             }

@@ -93,6 +93,7 @@ impl SimulationEngine {
             self.state.ticknum += 1;
         }
         tracing::warn!("Failed Steps: {:?}", execution_result.failed_steps);
+        tracing::info!("Tick Completed in {:?} ms", execution_result.total_duration);
         (execution_result, std::mem::take(&mut self.event_log))
     }
     pub fn run_day(&mut self, rng: &mut dyn rand::RngCore) -> (Vec<TickExecutionResult>, Vec<SimEvent>) {
@@ -519,7 +520,7 @@ impl SimulationEngine {
 
         self.state.apply_effects(&effects_to_apply).map_err(|e| e.to_string())?;
 
-        context.store("all_effects", &remaining_effects)?;
+        context.set_all_effects(remaining_effects);
 
         Ok(effects_to_apply.len())
     }
