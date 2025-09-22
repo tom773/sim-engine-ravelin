@@ -633,7 +633,6 @@ impl StepHandler for UpdateHistoryHandler {
                 trades,
                 events: engine.event_log.clone(),
             };
-            tracing::info!("Reg: {:#?}", engine.state.financial_system.instrument_registry);
             engine.state.history.add_tick_record(tick_record);
             Ok(serde_json::Value::Null)
         })

@@ -262,6 +262,82 @@ mod tests {
         assert!(listing_asset_label(&corp_bond_key).unwrap().contains("Corporate Bonds"));
         assert!(listing_liability_label(&corp_bond_key).unwrap().contains("Corporate Bonds"));
     }
+
+    #[test]
+    fn listing_bucket_aggregates_match_raw_totals() {
+        fn make_position(inst: &Instrument, quantity: f64) -> PopulatedPositionDto {
+            let unit = inst.unit_par_value().expect("bond has par value");
+            PopulatedPositionDto {
+                position: Position { quantity, book_value_per_unit: unit, cost_basis_per_unit: unit },
+                instrument: inst.clone(),
+                market_price: None,
+            }
+        }
+
+        let issuer = AgentId(Uuid::new_v4());
+        let issue_date = NaiveDate::from_ymd_opt(2020, 1, 1).unwrap();
+        let maturity_date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let face_value = Money::from(1_000_i64);
+        let coupon_bps = dec!(500.0);
+
+        let build_corp_bond = |outstanding_units: f64| {
+            Instrument::bond(
+                InstrumentId(Uuid::new_v4()),
+                issuer,
+                BondType::Corporate,
+                face_value,
+                issue_date,
+                maturity_date,
+            )
+            .coupon_bps(coupon_bps)
+            .frequency(2)
+            .rating(CreditRating::Corporate(SpCreditRating::BBB))
+            .outstanding_units(outstanding_units)
+            .auto_market()
+            .build()
+            .expect("corporate bond builds")
+        };
+
+        let bond_a = build_corp_bond(150.0);
+        let bond_b = build_corp_bond(90.0);
+        let current_date = NaiveDate::from_ymd_opt(2023, 1, 1).unwrap();
+
+        let asset_positions = vec![make_position(&bond_a, 10.0), make_position(&bond_b, 4.0)];
+
+        let mut asset_groups: HashMap<String, AggregatedAccumulator> = HashMap::new();
+        for position in &asset_positions {
+            let descriptor = classify_asset_position(position, current_date).expect("should classify asset");
+            accumulate_entry(&mut asset_groups, descriptor, position);
+        }
+        let asset_aggregates: Vec<_> = asset_groups.into_iter().map(|(label, acc)| acc.into_entry(label)).collect();
+
+        assert_eq!(asset_aggregates.len(), 1);
+        let asset_entry = &asset_aggregates[0];
+        let expected_assets: f64 = asset_positions.iter().map(|pos| safe_book_value(pos)).sum();
+        assert_eq!(asset_entry.position_count, asset_positions.len());
+        assert!((asset_entry.total_book_value - expected_assets).abs() < 1e-6);
+        assert!((asset_entry.total_quantity - 14.0).abs() < 1e-6);
+        let avg_rate = asset_entry.average_rate_bps.expect("avg rate");
+        assert!((avg_rate - 500.0).abs() < 1e-6);
+        assert!(asset_entry.label.contains("Corporate Bonds"));
+        validate_aggregate_totals(&AgentId::default(), &asset_positions, &asset_aggregates, "assets");
+
+        let liability_positions = vec![make_position(&bond_a, 6.0), make_position(&bond_b, 2.5)];
+        let mut liability_groups: HashMap<String, AggregatedAccumulator> = HashMap::new();
+        for position in &liability_positions {
+            let descriptor = classify_liability_position(position, current_date).expect("should classify liability");
+            accumulate_entry(&mut liability_groups, descriptor, position);
+        }
+        let liability_aggregates: Vec<_> =
+            liability_groups.into_iter().map(|(label, acc)| acc.into_entry(label)).collect();
+
+        assert_eq!(liability_aggregates.len(), 1);
+        let liability_entry = &liability_aggregates[0];
+        let expected_liabilities: f64 = liability_positions.iter().map(|pos| safe_book_value(pos)).sum();
+        assert_eq!(liability_entry.position_count, liability_positions.len());
+        assert!((liability_entry.total_book_value - expected_liabilities).abs() < 1e-6);
+        validate_aggregate_totals(&AgentId::default(), &liability_positions, &liability_aggregates, "liabilities");
+    }
 }
 
 fn accumulate_entry(
