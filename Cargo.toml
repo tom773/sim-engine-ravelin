@@ -33,6 +33,11 @@ tower-http = { version = "0.6", features = ["cors"] }
 rust_decimal = { version = "1.37.0", features = ["serde", "maths"] }
 rust_decimal_macros = "1.37"
 petgraph = "0.8.2"
+ahash = { version = "0.8", features = ["serde"] }
+smallvec = "1.13"
+rayon = "1.10"
+metrics = "0.21"
+metrics-exporter-prometheus = "0.11"
 [profile.dev]
 incremental = true
 

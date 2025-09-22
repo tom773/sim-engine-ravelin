@@ -8,13 +8,13 @@ pub use dag::*;
 pub use handler::*;
 pub use steps::*;
 
-use std::collections::HashMap;
+use ahash::AHashMap;
 
 #[derive(Debug, Default)]
 pub struct SchedulerMetrics {
     pub tick_durations: std::collections::VecDeque<std::time::Duration>,
-    pub step_durations: HashMap<TickStep, std::collections::VecDeque<std::time::Duration>>,
-    pub failure_counts: HashMap<TickStep, u64>,
+    pub step_durations: AHashMap<TickStep, std::collections::VecDeque<std::time::Duration>>,
+    pub failure_counts: AHashMap<TickStep, u64>,
     pub max_history: usize,
 }
 
@@ -22,13 +22,14 @@ impl SchedulerMetrics {
     pub fn new() -> Self {
         Self {
             tick_durations: std::collections::VecDeque::new(),
-            step_durations: HashMap::new(),
-            failure_counts: HashMap::new(),
+            step_durations: AHashMap::new(),
+            failure_counts: AHashMap::new(),
             max_history: 1000,
         }
     }
 
     pub fn record_tick(&mut self, result: &TickExecutionResult) {
+        metrics::histogram!("engine.tick.duration_ms", result.total_duration.as_secs_f64() * 1_000.0);
         self.tick_durations.push_back(result.total_duration);
         if self.tick_durations.len() > self.max_history {
             self.tick_durations.pop_front();
@@ -46,6 +47,8 @@ impl SchedulerMetrics {
             if !step_result.success {
                 *self.failure_counts.entry(*step).or_insert(0) += 1;
             }
+
+            step_result.record_metrics(*step);
         }
     }
 

@@ -1,4 +1,4 @@
-use super::{StepContext, StepHandler, StepResult};
+use super::{StepContext, StepHandler, StepResult, StepTelemetry};
 use crate::executor::SimulationEngine;
 use domains::{ResolutionContext, ResolutionPhase};
 use rand::prelude::*;
@@ -7,17 +7,18 @@ use rust_decimal_macros::dec;
 use sim_core::types::core_utils::time::is_coupon_date;
 use sim_core::types::markets::BondPricingTerms;
 use sim_core::*;
+use std::collections::HashMap as StdHashMap;
 use std::time::Instant;
 use tracing::instrument;
 use uuid::Uuid;
 
 fn execute_step<F>(step_fn: F) -> StepResult
 where
-    F: FnOnce() -> Result<serde_json::Value, String>,
+    F: FnOnce() -> Result<StepTelemetry, String>,
 {
     let start = Instant::now();
     match step_fn() {
-        Ok(metadata) => StepResult::success(start.elapsed().as_millis() as u64, metadata),
+        Ok(telemetry) => StepResult::success(start.elapsed().as_millis() as u64, telemetry),
         Err(e) => StepResult::failure(start.elapsed().as_millis() as u64, e),
     }
 }
@@ -34,11 +35,12 @@ impl StepHandler for UpkeepHandler {
             //if let Err(e) = engine.state.financial_system.validate_accounting_identity() {
             //    return Err(format!("Accounting validation failed on tick {}: {}", engine.state.ticknum, e));
             //}
-            Ok(serde_json::json!({
-                "current_date": engine.state.current_date,
-                "tick_number": engine.state.ticknum,
-                "session": format!("{:?}", engine.state.current_session),
-            }))
+            let mut telemetry = StepTelemetry::new();
+            telemetry.push_metric("current_date", engine.state.current_date.to_string());
+            telemetry.push_metric("tick_number", engine.state.ticknum);
+            telemetry.push_metric("session", format!("{:?}", engine.state.current_session));
+
+            Ok(telemetry)
         })
     }
 }
@@ -63,7 +65,7 @@ impl StepHandler for GatherIntentionsHandler {
                 0
             };
 
-            Ok(serde_json::json!({ "total_intentions": total_intentions }))
+            Ok(StepTelemetry::single("total_intentions", total_intentions))
         })
     }
 }
@@ -74,32 +76,28 @@ pub struct PhaseResolutionHandler {
 impl StepHandler for PhaseResolutionHandler {
     fn execute(&self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
         execute_step(|| {
-            let categorized = context.get_categorized_intentions()?;
-            let intentions = categorized.get(&self.phase).cloned().unwrap_or_default();
-            if intentions.is_empty() {
-                return Ok(serde_json::json!({ "actions": 0, "effects": 0 }));
-            }
+            let intentions = match context.categorized_intentions().and_then(|categorized| categorized.get(&self.phase))
+            {
+                Some(list) if !list.is_empty() => list,
+                _ => return Ok(StepTelemetry::single("actions", 0usize).with_metric("effects", 0usize)),
+            };
 
             let resolution_context = ResolutionContext { state: &engine.state, current_tick: engine.state.ticknum };
-            let action_offset = context.get_all_actions().unwrap_or_default().len();
-            let effect_offset = context.get_all_effects().unwrap_or_default().len();
+            let action_offset = context.actions_len();
+            let effect_offset = context.effects_len();
 
             let (action_records, action_to_effect_indices, effects) =
-                engine.resolve_and_execute_phase(&intentions, &resolution_context, action_offset, effect_offset);
+                engine.resolve_and_execute_phase(intentions, &resolution_context, action_offset, effect_offset);
 
-            let mut all_actions = context.get_all_actions().unwrap_or_default();
-            all_actions.extend(action_records.clone());
-            context.set_all_actions(all_actions);
+            let action_count = action_records.len();
+            context.actions_mut().extend(action_records.into_iter());
 
-            let mut all_effects = context.get_all_effects().unwrap_or_default();
-            all_effects.extend(effects.clone());
-            context.set_all_effects(all_effects);
+            let effect_count = effects.len();
+            context.effects_mut().extend(effects.into_iter());
 
-            let mut mapping = context.get_action_to_effect_indices().unwrap_or_default();
-            mapping.extend(action_to_effect_indices);
-            context.set_action_to_effect_indices(mapping);
+            context.action_to_effect_indices_mut().extend(action_to_effect_indices);
 
-            Ok(serde_json::json!({"actions": action_records.len(), "effects": effects.len()}))
+            Ok(StepTelemetry::single("actions", action_count).with_metric("effects", effect_count))
         })
     }
 }
@@ -109,19 +107,16 @@ impl StepHandler for ApplyMarketEffectsHandler {
     #[instrument(skip(self, engine, context, _rng))]
     fn execute(&self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
         execute_step(|| {
-            let all_effects = context.get_all_effects().unwrap_or_default();
             let market_effects: Vec<StateEffect> =
-                all_effects.into_iter().filter(|e| matches!(e, StateEffect::Market(_))).collect();
+                context.effects().iter().filter(|e| matches!(e, StateEffect::Market(_))).cloned().collect();
 
             engine.state.apply_effects(&market_effects).map_err(|e| e.to_string())?;
 
             let staged = std::mem::take(&mut engine.state.financial_system.exchange.recent_trades);
             if !staged.is_empty() {
-                let mut all_trades = context.get_trades().unwrap_or_default();
-                all_trades.extend(staged);
-                context.set_trades(all_trades);
+                context.trades_mut().extend(staged);
             }
-            Ok(serde_json::json!({ "market_effects_applied": market_effects.len() }))
+            Ok(StepTelemetry::single("market_effects_applied", market_effects.len()))
         })
     }
 }
@@ -139,15 +134,11 @@ impl StepHandler for ClearMarketsHandler {
                     tape.entry(t.market_id.clone()).or_default().push(TimedTrade { ts: now, trade: t.clone() });
                 }
             }
-            let mut all_trades = context.get_trades().unwrap_or_default();
-
             let trades_generated = market_trades.len();
-            all_trades.extend(market_trades);
-
-            context.set_trades(all_trades);
+            context.trades_mut().extend(market_trades.into_iter());
 
             context.set_market_snapshots(snapshots);
-            Ok(serde_json::json!({ "trades_generated": trades_generated }))
+            Ok(StepTelemetry::single("trades_generated", trades_generated))
         })
     }
 }
@@ -243,7 +234,7 @@ impl StepHandler for GovCouponsHandler {
             if payment_count > 0 {
                 engine.state.apply_effects(&effects).map_err(|e| e.to_string())?;
             }
-            Ok(serde_json::json!({ "payments_generated": payment_count }))
+            Ok(StepTelemetry::single("payments_generated", payment_count))
         })
     }
 }
@@ -254,26 +245,21 @@ pub struct SettleTradesHandler;
 impl StepHandler for SettleTradesHandler {
     fn execute(&self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
         execute_step(|| {
-            let trades: Vec<Trade> = context.get_trades().unwrap_or_default();
+            let settlement_effects = {
+                let trades = context.trades();
+                if trades.is_empty() {
+                    return Ok(
+                        StepTelemetry::single("trades_processed", 0usize).with_metric("settlement_effects", 0usize)
+                    );
+                }
+                engine.settle_trades(trades)
+            };
 
-            if trades.is_empty() {
-                return Ok(serde_json::json!({
-                    "trades_processed": 0,
-                    "settlement_effects": 0
-                }));
-            }
-
-            let settlement_effects = engine.settle_trades(&trades);
-
-            let mut all_effects = context.get_all_effects().unwrap_or_default();
             let effect_count = settlement_effects.len();
-            all_effects.extend(settlement_effects);
-            context.set_all_effects(all_effects);
+            context.effects_mut().extend(settlement_effects.into_iter());
 
-            Ok(serde_json::json!({
-                "trades_processed": trades.len(),
-                "settlement_effects": effect_count
-            }))
+            Ok(StepTelemetry::single("trades_processed", context.trades().len())
+                .with_metric("settlement_effects", effect_count))
         })
     }
 }
@@ -363,7 +349,7 @@ impl StepHandler for CreditReconciliationHandler {
             }
 
             engine.state.apply_effects(&effects).map_err(|e| e.to_string())?;
-            Ok(serde_json::json!({ "credit_effects": effects.len() }))
+            Ok(StepTelemetry::single("credit_effects", effects.len()))
         })
     }
 }
@@ -447,7 +433,7 @@ impl StepHandler for CreditServicingHandler {
             }
 
             engine.state.apply_effects(&effects).map_err(|e| e.to_string())?;
-            Ok(serde_json::json!({ "serviced_loans": effects.len() }))
+            Ok(StepTelemetry::single("serviced_loans", effects.len()))
         })
     }
 }
@@ -459,7 +445,7 @@ impl StepHandler for DepositServicingHandler {
     fn execute(&self, engine: &mut SimulationEngine, _ctx: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
         execute_step(|| {
             if !is_last_day_of_month(engine.state.current_date) {
-                return Ok(serde_json::json!({ "payments_generated": 0 }));
+                return Ok(StepTelemetry::single("payments_generated", 0usize));
             }
 
             let mut effects: Vec<StateEffect> = Vec::new();
@@ -512,7 +498,7 @@ impl StepHandler for DepositServicingHandler {
             if payment_count > 0 {
                 engine.state.apply_effects(&effects).map_err(|e| e.to_string())?;
             }
-            Ok(serde_json::json!({ "payments_generated": payment_count }))
+            Ok(StepTelemetry::single("payments_generated", payment_count))
         })
     }
 }
@@ -530,7 +516,7 @@ impl StepHandler for ApplyPaymentQueuingHandler {
                     ) | StateEffect::Inventory(_)
                 )
             })?;
-            Ok(serde_json::json!({ "payments_and_settlements_queued": count }))
+            Ok(StepTelemetry::single("payments_and_settlements_queued", count))
         })
     }
 }
@@ -547,17 +533,13 @@ impl StepHandler for RunRTGSHandler {
             let finalization_effects =
                 run_rtgs(&mut engine.state).map_err(|e| format!("RTGS execution failed: {:?}", e))?;
 
-            let mut all_effects: Vec<StateEffect> = context.get_all_effects().unwrap_or_default();
-            all_effects.extend(finalization_effects);
-            context.set_all_effects(all_effects);
+            context.effects_mut().extend(finalization_effects.into_iter());
 
             let final_pending = engine.state.financial_system.rtgs.pending.len();
             let settled_this_tick = initial_pending - final_pending;
 
-            Ok(serde_json::json!({
-                "payments_settled": settled_this_tick,
-                "payments_remaining": final_pending
-            }))
+            Ok(StepTelemetry::single("payments_settled", settled_this_tick)
+                .with_metric("payments_remaining", final_pending))
         })
     }
 }
@@ -567,26 +549,30 @@ impl StepHandler for ApplyAllEffectsHandler {
     #[instrument(skip(self, engine, context, rng))]
     fn execute(&self, engine: &mut SimulationEngine, context: &mut StepContext, rng: &mut dyn RngCore) -> StepResult {
         execute_step(|| {
-            let mut all_effects = context.get_all_effects().unwrap_or_default();
             let labour_effects = engine.match_labour_markets(rng);
-            all_effects.extend(labour_effects);
+            let total_effects = {
+                let effects = context.effects_mut();
+                effects.extend(labour_effects.into_iter());
+                effects.len()
+            };
 
-            let all_actions = context.get_all_actions().unwrap_or_default();
-            let all_intentions = context.get_intentions().unwrap_or_default();
-            let mapping = context.get_action_to_effect_indices().unwrap_or_default();
+            let actions = context.actions();
+            let intentions = context.intentions_slice();
+            let effects_snapshot = context.effects();
+            let mapping = context.action_to_effect_indices_ref();
 
             let mut new_events: Vec<SimEvent> = Vec::new();
 
-            new_events.extend(all_intentions.into_iter().map(SimEvent::Intention));
-            new_events.extend(all_actions.clone().into_iter().map(SimEvent::Action));
-            new_events.extend(all_effects.clone().into_iter().map(SimEvent::Effect));
+            new_events.extend(intentions.iter().cloned().map(SimEvent::Intention));
+            new_events.extend(actions.iter().cloned().map(SimEvent::Action));
+            new_events.extend(effects_snapshot.iter().cloned().map(SimEvent::Effect));
 
-            for (action_idx, action_record) in all_actions.iter().enumerate() {
+            for (action_idx, action_record) in actions.iter().enumerate() {
                 if let Some(effect_indices) = mapping.get(&action_idx) {
                     let financial_effects: Vec<FinancialEffect> = effect_indices
                         .iter()
                         .filter_map(|&effect_idx| {
-                            all_effects.get(effect_idx).and_then(|eff| match eff {
+                            effects_snapshot.get(effect_idx).and_then(|eff| match eff {
                                 StateEffect::Financial(fe) => Some(fe.clone()),
                                 _ => None,
                             })
@@ -610,12 +596,9 @@ impl StepHandler for ApplyAllEffectsHandler {
 
             engine.event_log = new_events;
 
-            engine.state.apply_effects(&all_effects).map_err(|e| e.to_string())?;
+            engine.state.apply_effects(context.effects()).map_err(|e| e.to_string())?;
 
-            let total_effects = all_effects.len();
-            context.set_all_effects(all_effects);
-
-            Ok(serde_json::json!({"total_effects_applied": total_effects}))
+            Ok(StepTelemetry::single("total_effects_applied", total_effects))
         })
     }
 }
@@ -625,22 +608,25 @@ impl StepHandler for UpdateHistoryHandler {
     #[instrument(skip(self, engine, context, _rng))]
     fn execute(&self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
         execute_step(|| {
-            let trades = context.get_trades().unwrap_or_default();
-            let snapshots = context.get_market_snapshots().unwrap_or_default();
-            engine.update_market_history(&trades, &snapshots);
+            let trades = context.trades();
+            let snapshots = context.market_snapshots_ref();
+            engine.update_market_history(trades, snapshots);
             engine.refresh_pricing_feeds();
+            let action_to_effect_indices: StdHashMap<usize, Vec<usize>> =
+                context.action_to_effect_indices_ref().iter().map(|(k, v)| (*k, v.clone())).collect();
+
             let tick_record = TickRecord {
                 tick_number: engine.state.ticknum,
                 date: engine.state.current_date,
-                intentions: context.get_intentions().unwrap_or_default(),
-                actions: context.get_all_actions().unwrap_or_default(),
-                effects: context.get_all_effects().unwrap_or_default(),
-                action_to_effect_indices: context.get_action_to_effect_indices().unwrap_or_default(),
-                trades,
+                intentions: context.intentions_slice().to_vec(),
+                actions: context.actions().to_vec(),
+                effects: context.effects().to_vec(),
+                action_to_effect_indices,
+                trades: trades.to_vec(),
                 events: engine.event_log.clone(),
             };
             engine.state.history.add_tick_record(tick_record);
-            Ok(serde_json::Value::Null)
+            Ok(StepTelemetry::default())
         })
     }
 }
@@ -661,7 +647,7 @@ impl StepHandler for DebtAuctionsHandler {
                 .collect();
 
             if open_auctions.is_empty() {
-                return Ok(serde_json::json!({ "auctions_processed": false }));
+                return Ok(StepTelemetry::single("auctions_processed", false));
             }
 
             let mut all_auction_trades: Vec<Trade> = Vec::new();
@@ -753,12 +739,10 @@ impl StepHandler for DebtAuctionsHandler {
                     tape.entry(t.market_id.clone()).or_default().push(TimedTrade { ts: now, trade: t.clone() });
                 }
 
-                let mut all_trades = context.get_trades().unwrap_or_default();
-                all_trades.extend(all_auction_trades);
-                context.set_trades(all_trades);
+                context.trades_mut().extend(all_auction_trades.into_iter());
             }
 
-            Ok(serde_json::json!({ "auctions_processed": true }))
+            Ok(StepTelemetry::single("auctions_processed", true))
         })
     }
 }
@@ -776,11 +760,7 @@ impl StepHandler for ClearOvernightHandler {
             let initial_repo = engine.state.financial_system.funding_markets.repo_gc1d.len();
 
             tracing::info!("Clearing overnight funding markets: {} fedfunds, {} repos", initial_fedfunds, initial_repo);
-            Ok(serde_json::json!({
-                "fedfunds_cleared": initial_fedfunds,
-
-                "repos_cleared": initial_repo,
-            }))
+            Ok(StepTelemetry::single("fedfunds_cleared", initial_fedfunds).with_metric("repos_cleared", initial_repo))
         })
     }
 }

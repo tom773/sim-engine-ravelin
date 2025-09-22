@@ -1,25 +1,26 @@
 use super::*;
 use crate::executor::SimulationEngine; // Points to our new engine struct
+use ahash::AHashMap;
 use petgraph::Direction;
 use petgraph::Graph;
 use petgraph::graph::NodeIndex;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::time::Instant;
 
 #[derive(Debug)]
 pub struct TickScheduler {
     graph: Graph<TickStep, ()>,
-    _nodes: HashMap<TickStep, NodeIndex>,
+    _nodes: AHashMap<TickStep, NodeIndex>,
     layers: Vec<Vec<TickStep>>,
-    step_handlers: HashMap<TickStep, Box<dyn StepHandler + Send + Sync>>,
+    step_handlers: AHashMap<TickStep, Box<dyn StepHandler + Send + Sync>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TickExecutionResult {
     pub tick_number: u32,
     pub total_duration: std::time::Duration,
-    pub step_results: HashMap<TickStep, StepResult>,
+    pub step_results: AHashMap<TickStep, StepResult>,
     pub failed_steps: Vec<(TickStep, String)>,
     pub success: bool,
 }
@@ -27,7 +28,7 @@ pub struct TickExecutionResult {
 impl TickScheduler {
     pub fn new() -> Self {
         let mut graph = Graph::new();
-        let mut _nodes = HashMap::new();
+        let mut _nodes = AHashMap::new();
 
         for step in TickStep::all() {
             _nodes.insert(step, graph.add_node(step));
@@ -43,7 +44,7 @@ impl TickScheduler {
 
         let layers = Self::build_execution_layers(&graph);
 
-        Self { graph, _nodes, layers, step_handlers: HashMap::new() }
+        Self { graph, _nodes, layers, step_handlers: AHashMap::new() }
     }
 
     fn build_execution_layers(graph: &Graph<TickStep, ()>) -> Vec<Vec<TickStep>> {

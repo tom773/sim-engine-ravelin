@@ -21,6 +21,11 @@ axum.workspace = true
 rust_decimal = { workspace = true }
 rust_decimal_macros = { workspace = true }
 serde_with = { workspace = true }
+ahash = { workspace = true }
+smallvec = { workspace = true }
+rayon = { workspace = true }
+metrics = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
 tracing = "0.1.41"
 rand_distr = "0.5.1"
 ordered-float = {version = "5.0.0", features = ["serde"] }

@@ -1,11 +1,14 @@
 use crate::registry::DomainRegistry;
 use crate::scheduler::*;
+use ahash::AHashMap;
 use domains::prelude::*;
 use ordered_float::NotNan;
 use rand::RngCore;
 use rand::prelude::ThreadRng;
+use rayon::prelude::*;
 use rust_decimal::prelude::*;
 use sim_core::types::markets::BondPricingTerms;
+use smallvec::SmallVec;
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -17,6 +20,7 @@ pub struct SimulationEngine {
     pub scheduler: TickScheduler,
     pub scheduler_metrics: SchedulerMetrics,
     pub event_log: Vec<SimEvent>,
+    tick_logging_enabled: bool,
 }
 
 impl SimulationEngine {
@@ -29,6 +33,7 @@ impl SimulationEngine {
             scheduler: TickScheduler::new(),
             scheduler_metrics: SchedulerMetrics::new(),
             event_log: Vec::new(),
+            tick_logging_enabled: false,
         }
     }
 
@@ -40,12 +45,19 @@ impl SimulationEngine {
         engine.scheduler = scheduler;
         engine
     }
+    pub fn set_tick_logging(&mut self, enabled: bool) {
+        self.tick_logging_enabled = enabled;
+    }
+
+    pub fn with_tick_logging(mut self, enabled: bool) -> Self {
+        self.tick_logging_enabled = enabled;
+        self
+    }
     pub fn reset(&mut self) -> Result<(), String> {
         if let Some(ref initial) = self.initial_state {
             self.state = initial.clone();
             self.event_log.clear();
             self.scheduler_metrics = SchedulerMetrics::new();
-            // Re-register decision models if needed
             Ok(())
         } else {
             Err("No initial state snapshot available".to_string())
@@ -83,7 +95,9 @@ impl SimulationEngine {
 
     pub fn run_tick(&mut self, rng: &mut dyn RngCore) -> (TickExecutionResult, Vec<SimEvent>) {
         self.event_log.clear();
-        println!("\n===Tick {} ({})===\n", self.state.ticknum, self.state.current_date);
+        if self.tick_logging_enabled {
+            tracing::info!(tick = self.state.ticknum, date = %self.state.current_date, "tick start");
+        }
         let scheduler = std::mem::take(&mut self.scheduler);
         let execution_result = scheduler.execute_tick(self, rng);
         self.scheduler = scheduler;
@@ -153,7 +167,7 @@ impl SimulationEngine {
             } else {
                 let msg = dres.errors.join("; ");
                 if !msg.contains("Missing core support") {
-                    println!("[ACTION FAILED] - {:?}: {}", action.name(), msg);
+                    tracing::warn!(action = %action.name(), ?agent_id, "action failed: {msg}");
                 }
                 vec![]
             };
@@ -193,37 +207,68 @@ impl SimulationEngine {
     pub fn update_agent_memory(&mut self) {
         let Some(last_tick) = self.state.history.tick_records.back() else { return };
         let goods_config = &self.state.config.goods;
+        let symbol_to_good = &self.state.financial_system.exchange.symbol_to_good;
 
-        let mut posted_buys: HashMap<(AgentId, GoodId), f64> = HashMap::new();
-        let mut posted_sells: HashMap<(AgentId, GoodId), f64> = HashMap::new();
-
-        for record in &last_tick.actions {
-            if let SimAction::Transaction(TransactionAction::PostMarketOrder {
-                agent_id,
-                market_id,
-                side,
-                quantity,
-                ..
-            }) = &record.action
-            {
-                if let Some(gid) = self.state.financial_system.exchange.symbol_to_good.get(market_id) {
-                    match side {
-                        Side::Bid => *posted_buys.entry((*agent_id, *gid)).or_default() += *quantity,
-                        Side::Ask => *posted_sells.entry((*agent_id, *gid)).or_default() += *quantity,
+        let (posted_buys, posted_sells) = last_tick
+            .actions
+            .par_iter()
+            .map(|record| {
+                let mut buys: AHashMap<(AgentId, GoodId), f64> = AHashMap::new();
+                let mut sells: AHashMap<(AgentId, GoodId), f64> = AHashMap::new();
+                if let SimAction::Transaction(TransactionAction::PostMarketOrder {
+                    agent_id,
+                    market_id,
+                    side,
+                    quantity,
+                    ..
+                }) = &record.action
+                {
+                    if let Some(gid) = symbol_to_good.get(market_id) {
+                        match side {
+                            Side::Bid => *buys.entry((*agent_id, *gid)).or_default() += *quantity,
+                            Side::Ask => *sells.entry((*agent_id, *gid)).or_default() += *quantity,
+                        }
                     }
                 }
-            }
-        }
+                (buys, sells)
+            })
+            .reduce(
+                || (AHashMap::<(AgentId, GoodId), f64>::new(), AHashMap::<(AgentId, GoodId), f64>::new()),
+                |mut left, mut right| {
+                    for (key, value) in right.0.drain() {
+                        *left.0.entry(key).or_default() += value;
+                    }
+                    for (key, value) in right.1.drain() {
+                        *left.1.entry(key).or_default() += value;
+                    }
+                    left
+                },
+            );
 
-        let mut bought: HashMap<(AgentId, GoodId), f64> = HashMap::new();
-        let mut sold: HashMap<(AgentId, GoodId), f64> = HashMap::new();
-
-        for trade in &last_tick.trades {
-            if let Some(gid) = self.state.financial_system.exchange.symbol_to_good.get(&trade.market_id) {
-                *bought.entry((trade.buyer, *gid)).or_default() += trade.quantity;
-                *sold.entry((trade.seller, *gid)).or_default() += trade.quantity;
-            }
-        }
+        let (bought, sold) = last_tick
+            .trades
+            .par_iter()
+            .map(|trade| {
+                let mut buy_map: AHashMap<(AgentId, GoodId), f64> = AHashMap::new();
+                let mut sell_map: AHashMap<(AgentId, GoodId), f64> = AHashMap::new();
+                if let Some(gid) = symbol_to_good.get(&trade.market_id) {
+                    *buy_map.entry((trade.buyer, *gid)).or_default() += trade.quantity;
+                    *sell_map.entry((trade.seller, *gid)).or_default() += trade.quantity;
+                }
+                (buy_map, sell_map)
+            })
+            .reduce(
+                || (AHashMap::<(AgentId, GoodId), f64>::new(), AHashMap::<(AgentId, GoodId), f64>::new()),
+                |mut left, mut right| {
+                    for (key, value) in right.0.drain() {
+                        *left.0.entry(key).or_default() += value;
+                    }
+                    for (key, value) in right.1.drain() {
+                        *left.1.entry(key).or_default() += value;
+                    }
+                    left
+                },
+            );
 
         let mut consumer_updates = Vec::new();
         for (agent_id, gid) in posted_buys.keys().map(|(agent, good)| (*agent, *good)) {
@@ -265,8 +310,11 @@ impl SimulationEngine {
         let alpha = goods_config.sell_through_alpha;
         for (id, firm) in self.state.agents.firms.iter_mut() {
             for ((agent, gid), posted_qty) in posted_sells.iter().filter(|((agent, _), _)| agent == id) {
-                let sold_qty = sold.get(&(*agent, *gid)).unwrap_or(&0.0);
-                let sell_through = if *posted_qty > 1e-9 { (sold_qty / *posted_qty).min(1.5) } else { 0.0 };
+                let sold_qty: f64 = *sold.get(&(*agent, *gid)).unwrap_or(&0.0);
+                let mut sell_through: f64 = if *posted_qty > 1e-9 { sold_qty / *posted_qty } else { 0.0 };
+                if sell_through > 1.5 {
+                    sell_through = 1.5;
+                }
 
                 let metrics = firm.behaviour.per_good.entry(*gid).or_default();
                 metrics.sell_through_ema = alpha * sell_through + (1.0 - alpha) * metrics.sell_through_ema;
@@ -351,7 +399,7 @@ impl SimulationEngine {
                     dres.effects
                 } else {
                     for e in dres.errors {
-                        println!("[ERROR] Failed to settle trade: {}", e);
+                        tracing::error!("Failed to settle trade: {e}");
                     }
                     vec![]
                 }
@@ -501,17 +549,20 @@ impl SimulationEngine {
     where
         F: FnMut(&StateEffect) -> bool,
     {
-        let mut all_effects = context.get_all_effects().unwrap_or_default();
+        let mut effects_to_apply: SmallVec<[StateEffect; 32]> = SmallVec::new();
+        let mut remaining_effects: SmallVec<[StateEffect; 32]> = SmallVec::new();
 
-        let mut effects_to_apply = Vec::new();
-        let mut remaining_effects = Vec::new();
-
-        for effect in all_effects.drain(..) {
-            if filter(&effect) {
-                effects_to_apply.push(effect);
-            } else {
-                remaining_effects.push(effect);
+        {
+            let all_effects = context.effects_mut();
+            for effect in all_effects.drain(..) {
+                if filter(&effect) {
+                    effects_to_apply.push(effect);
+                } else {
+                    remaining_effects.push(effect);
+                }
             }
+
+            *all_effects = remaining_effects;
         }
 
         if effects_to_apply.is_empty() {
@@ -519,8 +570,6 @@ impl SimulationEngine {
         }
 
         self.state.apply_effects(&effects_to_apply).map_err(|e| e.to_string())?;
-
-        context.set_all_effects(remaining_effects);
 
         Ok(effects_to_apply.len())
     }
@@ -580,9 +629,8 @@ impl SimulationEngine {
             avg_wage /= n_w as f64;
         }
 
-        use std::collections::HashMap;
-        let mut unit_cost_sum: HashMap<GoodId, (f64 /*sum qty*/, f64 /*sum qty*cost*/)> = HashMap::new();
-        let mut inv_qty: HashMap<GoodId, f64> = HashMap::new();
+        let mut unit_cost_sum: AHashMap<GoodId, (f64 /*sum qty*/, f64 /*sum qty*cost*/)> = AHashMap::new();
+        let mut inv_qty: AHashMap<GoodId, f64> = AHashMap::new();
 
         for (_id, inst) in &self.state.financial_system.instruments.instruments {
             if let InstrumentRuntime::RealAsset(RealAssetState::Inventory { goods, .. }) = &inst.state() {
@@ -597,7 +645,7 @@ impl SimulationEngine {
             }
         }
 
-        let mut sales_per_day: HashMap<GoodId, f64> = HashMap::new();
+        let mut sales_per_day: AHashMap<GoodId, f64> = AHashMap::new();
         let ticks = self.state.history.market_ticks.clone();
         for (symbol, ticks) in &ticks {
             if let Some(gid) = self.state.financial_system.exchange.symbol_to_good.get(symbol) {
@@ -643,7 +691,15 @@ pub fn run_simulation(engine: &mut SimulationEngine) -> Vec<TickExecutionResult>
     let total_ticks = engine.state.config.iterations;
     let mut results = Vec::with_capacity(total_ticks as usize);
     for i in 0..total_ticks {
-        println!("[RUNNER] Executing Tick {}/{} ({})", i + 1, total_ticks, engine.state.current_date);
+        if engine.tick_logging_enabled {
+            tracing::info!(
+                tick = engine.state.ticknum,
+                pass = i + 1,
+                total = total_ticks,
+                date = %engine.state.current_date,
+                "executing tick"
+            );
+        }
         let result = engine.run_tick(&mut rng);
         if !result.0.success {
             results.push(result.0);

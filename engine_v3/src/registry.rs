@@ -1,6 +1,6 @@
+use ahash::AHashMap;
 use domains::prelude::*;
 use indexmap::IndexMap;
-use std::collections::HashMap;
 
 pub struct DomainRegistry {
     domains: IndexMap<String, Box<dyn Domain>>,
@@ -46,8 +46,8 @@ impl DomainRegistry {
 
     pub fn categorize_intentions_by_phase(
         &self, intentions: Vec<SimIntention>,
-    ) -> HashMap<ResolutionPhase, Vec<SimIntention>> {
-        let mut categorized: HashMap<ResolutionPhase, Vec<SimIntention>> = HashMap::new();
+    ) -> AHashMap<ResolutionPhase, Vec<SimIntention>> {
+        let mut categorized: AHashMap<ResolutionPhase, Vec<SimIntention>> = AHashMap::new();
         for intention in intentions {
             let mut found: Option<ResolutionPhase> = None;
             for domain in self.domains.values() {
