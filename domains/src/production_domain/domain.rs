@@ -75,7 +75,6 @@ impl ProductionDomain {
         let fs = &state.financial_system;
         match action {
             ProductionAction::Produce { agent_id, recipe_id, batches } => {
-
                 if *batches == 0 {
                     return Err("Cannot produce zero batches".to_string());
                 }
@@ -115,7 +114,6 @@ impl ProductionDomain {
 
     fn execute_produce(&self, agent_id: AgentId, recipe_id: RecipeId, batches: u32, state: &SimState) -> DomainResult {
         let fs = &state.financial_system;
-
 
         if let Some(recipe) = fs.goods.recipes.get(&recipe_id) {
             let mut effects = Vec::new();

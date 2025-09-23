@@ -1,6 +1,7 @@
-use crate::*;
-use axum::response::Json;
+use super::dto::*;
 use chrono::NaiveDate;
+use engine_v3::SimulationEngine;
+use http::StatusCode;
 use parking_lot::{RwLock, RwLockReadGuard};
 use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
@@ -16,6 +17,12 @@ use uuid::Uuid;
 
 pub struct QueryService {
     engine: Arc<RwLock<SimulationEngine>>,
+}
+
+impl Clone for QueryService {
+    fn clone(&self) -> Self {
+        Self { engine: self.engine.clone() }
+    }
 }
 
 #[derive(Default)]
@@ -540,14 +547,14 @@ fn classify_liability_position(
     Some(AggregationDescriptor { label, rate_bps, original_term_days, remaining_term_days })
 }
 
-type QueryResult<T> = Result<T, (axum::http::StatusCode, String)>;
+type QueryResult<T> = Result<T, (StatusCode, String)>;
 
 impl QueryService {
     pub fn new(engine: Arc<RwLock<SimulationEngine>>) -> Self {
         Self { engine }
     }
 
-    fn get_engine_lock(&self) -> Result<RwLockReadGuard<'_, SimulationEngine>, (axum::http::StatusCode, String)> {
+    fn get_engine_lock(&self) -> Result<RwLockReadGuard<'_, SimulationEngine>, (StatusCode, String)> {
         Ok(self.engine.read())
     }
 
@@ -736,7 +743,7 @@ impl QueryService {
 
         let (agent_type, name) = engine.get_agent_info(&agent_id);
         if agent_type == "Unknown" {
-            return Err((axum::http::StatusCode::NOT_FOUND, format!("Agent with ID {} not found", agent_id)));
+            return Err((StatusCode::NOT_FOUND, format!("Agent with ID {} not found", agent_id)));
         }
 
         let populated_bs = self.populate_balance_sheet(&agent_id, state);
@@ -881,7 +888,7 @@ impl QueryService {
             .exchange
             .markets
             .get(&symbol)
-            .ok_or((axum::http::StatusCode::NOT_FOUND, "Market not found".to_string()))?;
+            .ok_or((StatusCode::NOT_FOUND, "Market not found".to_string()))?;
 
         match market {
             MarketType::Financial(fin_market) => {
@@ -938,7 +945,7 @@ impl QueryService {
             .tick_records
             .iter()
             .find(|r| r.tick_number == tick_number)
-            .ok_or((axum::http::StatusCode::NOT_FOUND, format!("Tick {} not found in history.", tick_number)))?;
+            .ok_or((StatusCode::NOT_FOUND, format!("Tick {} not found in history.", tick_number)))?;
 
         Ok(TickDetailDto {
             tick_number: record.tick_number,
@@ -954,8 +961,7 @@ impl QueryService {
     pub fn get_exchange(&self) -> QueryResult<ExchangeDto> {
         let engine = self.get_engine_lock()?;
         let exchange = &engine.state.financial_system.exchange;
-        let exchange_data = Json(ExchangeDto::from(exchange));
-        Ok(exchange_data.0)
+        Ok(ExchangeDto::from(exchange))
     }
 
     pub fn get_financial_infrastructure_state(&self) -> QueryResult<FinancialInfrastructureDto> {

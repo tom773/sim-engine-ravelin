@@ -1,8 +1,6 @@
 [workspace]
 members = [
     "sim_core",
-    "bins/cli",
-    "bins/playground",
     "domains",
     "engine_v3",
     "services/sim-mirror",
