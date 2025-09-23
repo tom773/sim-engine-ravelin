@@ -1,13 +1,13 @@
 use chrono::NaiveDate;
+use parking_lot::{Mutex, MutexGuard};
 use serde::{Deserialize, Serialize};
 use sim_core::{CompactEvent, SimEvent, TickEventSummary};
-use std::{
-    collections::VecDeque,
-    sync::{Arc, Mutex},
-};
+use std::{collections::VecDeque, sync::Arc};
 use tokio::sync::broadcast;
 
 const DEFAULT_INLINE_EVENT_LIMIT: usize = 5000;
+
+const LOCK_CONTENTION_METRIC: &str = "engine.events_bus.history_lock_contention";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -40,7 +40,7 @@ impl EventsBus {
         let summary = Arc::new(summary_struct);
         let events = Arc::new(events);
         {
-            let mut h = self.history.lock().unwrap();
+            let mut h = self.lock_history("push_tick");
             h.push_back((tick, date, events.clone(), summary.clone()));
             while h.len() > self.cap {
                 h.pop_front();
@@ -49,14 +49,14 @@ impl EventsBus {
         let _ = self.tx.send(tick_event);
     }
     pub fn latest_n(&self, n: usize) -> Vec<(u32, NaiveDate, Arc<Vec<SimEvent>>, Arc<TickEventSummary>)> {
-        let h = self.history.lock().unwrap();
+        let h = self.lock_history("latest_n");
         h.iter().rev().take(n).cloned().collect::<Vec<_>>().into_iter().rev().collect()
     }
     pub fn get(&self, tick: u32) -> Option<Arc<Vec<SimEvent>>> {
-        self.history.lock().unwrap().iter().find(|(t, _, _, _)| *t == tick).map(|(_, _, v, _)| v.clone())
+        self.lock_history("get").iter().find(|(t, _, _, _)| *t == tick).map(|(_, _, v, _)| v.clone())
     }
     pub fn clear(&self) {
-        self.history.lock().unwrap().clear();
+        self.lock_history("clear").clear();
     }
 
     pub fn to_server_event(
@@ -73,5 +73,15 @@ impl EventsBus {
             events.iter().take(self.inline_event_limit).map(|event| event.compact()).collect();
 
         ServerEvent::Tick { tick, date, summary: summary.clone(), truncated, compact_events }
+    }
+
+    fn lock_history(
+        &self, callsite: &'static str,
+    ) -> MutexGuard<'_, VecDeque<(u32, NaiveDate, Arc<Vec<SimEvent>>, Arc<TickEventSummary>)>> {
+        if let Some(guard) = self.history.try_lock() {
+            return guard;
+        }
+        metrics::counter!(LOCK_CONTENTION_METRIC, 1u64, "callsite" => callsite);
+        self.history.lock()
     }
 }

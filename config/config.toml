@@ -267,7 +267,7 @@ decision_model = { type = "InvestmentFirm", min_liquidity = 1_000_000.0, quote_q
 
 [[firm_groups]]
 id_prefix = "wheat_farm_"
-count = 1
+count = 10
 bank_mix = { bank_a = 0.3, bank_b = 0.7 }
 recipe_name = "wheat_farming"
 deposit = { type = "log_normal", mu = 10.5, sigma = 0.8 }
@@ -277,7 +277,7 @@ decision_model = { type = "ProductionFirm" }
 
 [[firm_groups]]
 id_prefix = "bakery_"
-count = 2
+count = 20
 bank_mix = { bank_a = 0.5, bank_b = 0.5 }
 recipe_name = "bread_baking"
 deposit = { type = "log_normal", mu = 9.5, sigma = 1.0 }
@@ -289,7 +289,7 @@ decision_model = { type = "ProductionFirm" }
 
 [[consumer_groups]]
 id_prefix="HH"
-count=50
+count=250
 bank_mix = { bank_a = 0.5, bank_b = 0.5 }
 income = { type = "normal", mean = 60_000.0, stdev = 10_000.0 }
 deposit = { type = "pct_of_income", pct = 0.10 }
@@ -297,7 +297,7 @@ consumption_basket = { bread = 0.1, electronics = 0.05, diesel = 0.02, car = 0.0
 
 [[consumer_groups]]
 id_prefix = "mortgage_holders"
-count = 100
+count = 300
 bank_mix = { bank_a = 0.8, bank_b = 0.2 }
 income = { type = "log_normal", mu = 12.0, sigma = 0.5 } # Higher income
 deposit = { type = "pct_of_income", pct = 0.05 }
@@ -305,10 +305,9 @@ consumption_basket = { bread = 0.05, electronics = 0.1, car = 0.01, diesel = 0.0
 initial_liabilities = [
     { type = "Mortgage", creditor_id = "bank_a", principal = { type = "normal", mean = 750000.0, stdev = 150000.0}, rate_bps = 650, maturity_days = 10950 }
 ]
-
 [[consumer_groups]]
 id_prefix = "credit_card_users"
-count = 50
+count = 150
 bank_mix = { bank_a = 0.4, bank_b = 0.6 }
 income = { type = "normal", mean = 75000.0, stdev = 15000.0 }
 deposit = { type = "pct_of_income", pct = 0.08 }

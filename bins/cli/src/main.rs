@@ -27,6 +27,16 @@ struct AppState {
     scenario: Arc<Scenario>,
 }
 
+#[cfg(feature = "fast-json")]
+fn to_json_string<T: Serialize>(value: &T) -> String {
+    simd_json::serde::to_string(value).expect("serialize websocket payload")
+}
+
+#[cfg(not(feature = "fast-json"))]
+fn to_json_string<T: Serialize>(value: &T) -> String {
+    serde_json::to_string(value).expect("serialize websocket payload")
+}
+
 #[derive(Serialize)]
 struct TickResponse {
     message: String,
@@ -271,7 +281,7 @@ async fn ws_upgrade(State(state): State<Arc<AppState>>, ws: WebSocketUpgrade) ->
 async fn ws_conn(mut socket: WebSocket, state: Arc<AppState>) {
     for (tick, date, evs, summary) in state.bus.latest_n(3) {
         let server_event = state.bus.to_server_event(tick, date, &evs, &summary);
-        let msg = serde_json::to_string(&server_event).unwrap();
+        let msg = to_json_string(&server_event);
         if socket.send(Message::Text(msg.into())).await.is_err() {
             return;
         }
@@ -281,7 +291,7 @@ async fn ws_conn(mut socket: WebSocket, state: Arc<AppState>) {
     loop {
         tokio::select! {
             Ok(evt) = rx.recv() => {
-                let msg = serde_json::to_string(&evt).unwrap();
+                let msg = to_json_string(&evt);
                 if socket.send(Message::Text(msg.into())).await.is_err() { break; }
             }
             Some(Ok(Message::Close(_))) = socket.recv() => break,

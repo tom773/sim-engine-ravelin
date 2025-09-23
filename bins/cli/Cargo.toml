@@ -3,6 +3,10 @@ name = "cli"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["fast-json"]
+fast-json = ["simd-json"]
+
 [dependencies]
 sim_core = { workspace = true }
 domains = { workspace = true }
@@ -15,7 +19,9 @@ rand = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
+metrics = { workspace = true }
 serde_json = { workspace = true }
 tower-http = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
 parking_lot.workspace = true
+simd-json = { workspace = true, optional = true }

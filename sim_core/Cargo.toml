@@ -3,6 +3,10 @@ name = "sim_core"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["fast-json"]
+fast-json = ["simd-json"]
+
 [lib]
 name = "sim_core"
 path = "src/lib.rs"
@@ -24,3 +28,4 @@ tracing = "0.1.41"
 dashmap = "6.1.0"
 parking_lot.workspace = true
 serde_json.workspace = true
+simd-json = { workspace = true, optional = true }

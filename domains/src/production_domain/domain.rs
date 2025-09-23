@@ -1,7 +1,6 @@
 use crate::{Any, Domain, DomainResult, ResolutionContext, ResolutionPhase, ResolutionResult, inventory};
 use serde::{Deserialize, Serialize};
 use sim_core::*;
-use tracing::{debug, info, trace, warn};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProductionDomain {}
@@ -76,16 +75,13 @@ impl ProductionDomain {
         let fs = &state.financial_system;
         match action {
             ProductionAction::Produce { agent_id, recipe_id, batches } => {
-                trace!(target: "sim.prod", firm_id=?agent_id, ?recipe_id, batches, "validate_produce_start");
 
                 if *batches == 0 {
-                    warn!(target: "sim.prod", firm_id=?agent_id, ?recipe_id, "validate_produce_zero_batches");
                     return Err("Cannot produce zero batches".to_string());
                 }
                 Validator::firm_exists(*agent_id, state)?;
 
                 if !fs.goods.recipes.contains_key(recipe_id) {
-                    warn!(target: "sim.prod", firm_id=?agent_id, ?recipe_id, "validate_produce_recipe_missing");
                     return Err("Recipe not found".to_string());
                 }
                 let recipe = fs.goods.recipes.get(recipe_id).unwrap();
@@ -95,30 +91,22 @@ impl ProductionDomain {
                     let available = inventory.get(&input.good_id).map_or(0.0, |item| item.quantity);
                     let required = input.quantity * (*batches as f64);
                     if available + 1e-9 < required {
-                        warn!(target: "sim.prod",
-                            firm_id=?agent_id, ?recipe_id, good=?input.good_id, required, available,
-                            "validate_produce_insufficient_input"
-                        );
                         return Err(format!(
                             "Insufficient input {:?} for production: need {:.2}, have {:.2}",
                             input.good_id, required, available
                         ));
                     }
                 }
-                debug!(target: "sim.prod", firm_id=?agent_id, ?recipe_id, batches, "validate_produce_ok");
                 Ok(())
             }
             ProductionAction::Fire { agent_id, employee_id } => {
                 if let Some(firm) = state.agents.firms.get(agent_id) {
                     if firm.employees.contains_key(employee_id) {
-                        trace!(target: "sim.prod", firm_id=?agent_id, employee_id=?employee_id, "validate_fire_ok");
                         Ok(())
                     } else {
-                        warn!(target: "sim.prod", firm_id=?agent_id, employee_id=?employee_id, "validate_fire_not_found");
                         Err("Employee not found in firm's employee list".to_string())
                     }
                 } else {
-                    warn!(target: "sim.prod", firm_id=?agent_id, employee_id=?employee_id, "validate_fire_firm_missing");
                     Err("Firm not found".to_string())
                 }
             }
@@ -127,9 +115,7 @@ impl ProductionDomain {
 
     fn execute_produce(&self, agent_id: AgentId, recipe_id: RecipeId, batches: u32, state: &SimState) -> DomainResult {
         let fs = &state.financial_system;
-        let firm_name = state.agents.firms.get(&agent_id).map(|f| f.name.clone()).unwrap_or_else(|| "<unknown>".into());
 
-        trace!(target: "sim.prod", firm_id=?agent_id, firm_name, ?recipe_id, batches, "execute_produce_start");
 
         if let Some(recipe) = fs.goods.recipes.get(&recipe_id) {
             let mut effects = Vec::new();
@@ -149,19 +135,8 @@ impl ProductionDomain {
                 Money::ZERO
             };
 
-            info!(target: "sim.prod",
-                firm_id=?agent_id, firm_name, ?recipe_id, batches,
-                input_cost_per_batch = input_cost.to_f64(),
-                labour_cost_per_batch = labor_cost.to_f64(),
-                total_cost_per_batch = total_cost_per_batch.to_f64(),
-                out_qty_per_batch = total_output_quantity_per_batch,
-                unit_cost = unit_cost.to_f64(),
-                "execute_produce_costs_computed"
-            );
-
             for input in &recipe.inputs {
                 let q = input.quantity * batches as f64;
-                trace!(target: "sim.prod", firm_id=?agent_id, good=?input.good_id, quantity=q, "execute_produce_remove_input");
                 effects.push(StateEffect::Inventory(InventoryEffect::RemoveInventory {
                     owner: agent_id,
                     good_id: input.good_id,
@@ -171,7 +146,6 @@ impl ProductionDomain {
 
             for output in &recipe.outputs {
                 let q = output.quantity * batches as f64;
-                trace!(target: "sim.prod", firm_id=?agent_id, good=?output.good_id, quantity=q, unit_cost = unit_cost.to_f64(), "execute_produce_add_output");
                 effects.push(StateEffect::Inventory(InventoryEffect::AddInventory {
                     owner: agent_id,
                     good_id: output.good_id,
@@ -180,10 +154,8 @@ impl ProductionDomain {
                 }));
             }
 
-            debug!(target: "sim.prod", firm_id=?agent_id, firm_name, ?recipe_id, batches, "execute_produce_ok");
             DomainResult::success(effects)
         } else {
-            warn!(target: "sim.prod", firm_id=?agent_id, firm_name, ?recipe_id, "execute_produce_recipe_missing");
             DomainResult::failure(vec!["Recipe not found".to_string()])
         }
     }

@@ -1,6 +1,7 @@
 use crate::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::{self, BufWriter, Write};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompactSnapshot {
@@ -42,48 +43,73 @@ pub struct CompactIncome {
     pub n: f64,
 }
 
+#[inline]
+fn json_to_writer<W: Write, T: Serialize>(writer: &mut W, value: &T) -> io::Result<()> {
+    #[cfg(feature = "fast-json")]
+    {
+        simd_json::serde::to_writer(writer, value).map_err(|err| io::Error::new(io::ErrorKind::Other, err))
+    }
+    #[cfg(not(feature = "fast-json"))]
+    {
+        serde_json::to_writer(writer, value).map_err(|err| io::Error::new(io::ErrorKind::Other, err))
+    }
+}
+
+#[inline]
+fn encode_json<T: Serialize>(value: &T, buffer: &mut Vec<u8>) -> io::Result<()> {
+    buffer.clear();
+    json_to_writer(buffer, value)?;
+    Ok(())
+}
+
 impl FinancialSystem {
     pub fn export_compact_snapshot_to_file(&self, tick: u32, filepath: &str) -> std::io::Result<()> {
         use std::fs::{File, OpenOptions};
-        use std::io::Write;
 
         let snapshot = self.create_compact_snapshot(tick);
-        let json = serde_json::to_string(&snapshot)?;
+        let mut payload = Vec::with_capacity(32 * 1024);
+        encode_json(&snapshot, &mut payload)?;
 
-        let mut file = if tick == 0 {
+        let file = if tick == 0 {
             File::create(filepath)?
         } else {
             OpenOptions::new().append(true).create(true).open(filepath)?
         };
 
+        let mut writer = BufWriter::new(file);
         if tick > 0 {
-            file.write_all(b"\n")?;
+            writer.write_all(b"\n")?;
         }
 
-        file.write_all(json.as_bytes())?;
+        writer.write_all(&payload)?;
+        writer.flush()?;
 
-        println!("Snapshot saved: {} bytes (tick {})", json.len(), tick);
+        println!("Snapshot saved: {} bytes (tick {})", payload.len(), tick);
         Ok(())
     }
 
     pub fn export_ultra_compact_to_file(&self, tick: u32, filepath: &str) -> std::io::Result<()> {
         use std::fs::{File, OpenOptions};
-        use std::io::Write;
 
         let snapshot = self.create_ultra_compact_snapshot(tick);
-        let json = serde_json::to_string(&snapshot)?;
+        let mut payload = Vec::with_capacity(32 * 1024);
+        encode_json(&snapshot, &mut payload)?;
 
         if tick == 0 {
-            let mut file = File::create(filepath)?;
+            let file = File::create(filepath)?;
+            let mut writer = BufWriter::new(file);
             let legend = CompactSnapshot::generate_legend();
-            file.write_all(legend.as_bytes())?;
-            file.write_all(b"\n\n```json\n")?;
-            file.write_all(json.as_bytes())?;
-            file.write_all(b"\n")?;
+            writer.write_all(legend.as_bytes())?;
+            writer.write_all(b"\n\n```json\n")?;
+            writer.write_all(&payload)?;
+            writer.write_all(b"\n")?;
+            writer.flush()?;
         } else {
-            let mut file = OpenOptions::new().append(true).open(filepath)?;
-            file.write_all(json.as_bytes())?;
-            file.write_all(b"\n")?;
+            let file = OpenOptions::new().append(true).open(filepath)?;
+            let mut writer = BufWriter::new(file);
+            writer.write_all(&payload)?;
+            writer.write_all(b"\n")?;
+            writer.flush()?;
         }
 
         Ok(())
@@ -91,7 +117,6 @@ impl FinancialSystem {
 
     pub fn export_as_ndjson(&self, tick: u32, filepath: &str) -> std::io::Result<()> {
         use std::fs::{File, OpenOptions};
-        use std::io::Write;
 
         let mut snapshot = serde_json::json!({});
 
@@ -186,8 +211,11 @@ impl FinancialSystem {
             "d": snapshot
         });
 
+        let mut buffer = Vec::with_capacity(64 * 1024);
+
         if tick == 0 {
-            let mut file = File::create(filepath)?;
+            let file = File::create(filepath)?;
+            let mut writer = BufWriter::new(file);
 
             let legend_json = serde_json::json!({
                 "_legend": true,
@@ -224,11 +252,22 @@ impl FinancialSystem {
                 }
             });
 
-            writeln!(file, "{}", serde_json::to_string(&legend_json)?)?;
-            writeln!(file, "{}", serde_json::to_string(&line)?)?;
+            encode_json(&legend_json, &mut buffer)?;
+            buffer.push(b'\n');
+            writer.write_all(&buffer)?;
+
+            encode_json(&line, &mut buffer)?;
+            buffer.push(b'\n');
+            writer.write_all(&buffer)?;
+            writer.flush()?;
         } else {
-            let mut file = OpenOptions::new().append(true).open(filepath)?;
-            writeln!(file, "{}", serde_json::to_string(&line)?)?;
+            let file = OpenOptions::new().append(true).open(filepath)?;
+            let mut writer = BufWriter::new(file);
+
+            encode_json(&line, &mut buffer)?;
+            buffer.push(b'\n');
+            writer.write_all(&buffer)?;
+            writer.flush()?;
         }
 
         Ok(())

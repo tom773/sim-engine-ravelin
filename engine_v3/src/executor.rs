@@ -33,7 +33,7 @@ impl SimulationEngine {
             scheduler: TickScheduler::new(),
             scheduler_metrics: SchedulerMetrics::new(),
             event_log: Vec::new(),
-            tick_logging_enabled: false,
+            tick_logging_enabled: true,
         }
     }
 

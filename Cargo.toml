@@ -1,5 +1,13 @@
 [workspace]
-members = ["sim_core", "bins/cli", "bins/playground", "domains", "engine_v3"]
+members = [
+    "sim_core",
+    "bins/cli",
+    "bins/playground",
+    "domains",
+    "engine_v3",
+    "services/sim-mirror",
+    "services/sim-api",
+]
 resolver = "3"
 
 [workspace.package]
@@ -38,6 +46,7 @@ smallvec = "1.13"
 rayon = "1.10"
 metrics = "0.21"
 metrics-exporter-prometheus = "0.11"
+simd-json = { version = "0.13", features = ["serde"] }
 [profile.dev]
 incremental = true
 

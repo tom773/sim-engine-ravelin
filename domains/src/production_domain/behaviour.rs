@@ -2,7 +2,6 @@ use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 use sim_core::*;
 use std::any::Any;
-use tracing::{debug, info, trace, warn};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProductionFirmDecisionModel {
@@ -151,20 +150,15 @@ impl ProductionFirmDecisionModel {
     }
     pub fn handle_production(&self, firm: &Firm, state: &SimState, intentions: &mut Vec<SimIntention>) {
         let fs = &state.financial_system;
-        let firm_name = &firm.name;
-        trace!(target: "sim.prod", firm_id = ?firm.id, firm_name, "consider_production");
 
         if firm.employees.is_empty() {
-            debug!(target: "sim.prod", firm_id = ?firm.id, firm_name, reason = "no_employees", "skip_production");
             return;
         }
 
         let Some(recipe_id) = firm.recipe.clone() else {
-            debug!(target: "sim.prod", firm_id = ?firm.id, firm_name, reason = "no_recipe", "skip_production");
             return;
         };
         let Some(recipe) = fs.goods.recipes.get(&recipe_id) else {
-            warn!(target: "sim.prod", firm_id = ?firm.id, firm_name, ?recipe_id, reason = "recipe_missing_from_registry", "skip_production");
             return;
         };
 
@@ -180,7 +174,7 @@ impl ProductionFirmDecisionModel {
             .fold(f64::INFINITY, f64::min) as u32;
 
         if max_batches_by_inputs == 0 {
-            let missing: Vec<(String, f64, f64)> = recipe
+            let _missing: Vec<(String, f64, f64)> = recipe
                 .inputs
                 .iter()
                 .filter_map(|inp| {
@@ -199,9 +193,6 @@ impl ProductionFirmDecisionModel {
                     }
                 })
                 .collect();
-            if !missing.is_empty() {
-                debug!(target: "sim.prod", firm_id=?firm.id, firm_name, ?recipe_id, ?missing, "skip_production_insufficient_inputs");
-            }
             return;
         }
 
@@ -214,7 +205,6 @@ impl ProductionFirmDecisionModel {
 
         let capacity_batches = labour_batches.min(max_batches_by_inputs);
         if capacity_batches == 0 {
-            debug!(target: "sim.prod", firm_id = ?firm.id, firm_name, reason = "zero_capacity_batches", "skip_production");
             return;
         }
 
@@ -232,7 +222,6 @@ impl ProductionFirmDecisionModel {
         let needed_quantity = (desired_inventory - have).max(0.0);
 
         if needed_quantity <= 1e-6 {
-            debug!(target: "sim.prod", firm_id = ?firm.id, firm_name, reason = "inventory_target_met", "skip_production");
             return;
         }
 
@@ -242,14 +231,6 @@ impl ProductionFirmDecisionModel {
         let batches = desired_batches.min(capacity_batches);
 
         if batches > 0 {
-            info!(target: "sim.prod",
-                "Firm ID: {} | Recipe: {} | Batches: {} (Desired: {}, Capacity: {})",
-                firm.id.0.to_string()[0..4].to_string(),
-                recipe.name,
-                batches,
-                desired_batches,
-                capacity_batches
-            );
             intentions.push(SimIntention::Production(ProductionIntention::Produce {
                 agent_id: firm.id,
                 recipe_id,

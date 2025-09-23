@@ -1,0 +1,12 @@
+[package]
+name = "sim-mirror"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+engine_v3 = { path = "../../engine_v3" }
+domains = { path = "../../domains" }
+sim_core = { path = "../../sim_core" }
+crossbeam-channel = "0.5.13"
+arc-swap = "1.7.1"
+serde = { workspace = true }
