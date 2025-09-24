@@ -33,7 +33,7 @@ toml = "0.9.5"
 serde_with = "3.14.0"
 chrono = { version = "0.4.41", features = ["serde"] }
 parking_lot = "0.12.1"
-tokio = { version = "1.46.1", features = ["rt-multi-thread", "time", "macros", "signal"] }
+tokio = { version = "1.46.1", features = ["rt-multi-thread", "time", "macros", "signal", "sync"] }
 axum = { version = "0.8", features = ["macros", "ws"] }
 tower-http = { version = "0.6", features = ["cors"] }
 rust_decimal = { version = "1.37.0", features = ["serde", "maths"] }
@@ -45,6 +45,8 @@ rayon = "1.10"
 metrics = "0.21"
 metrics-exporter-prometheus = "0.11"
 simd-json = { version = "0.13", features = ["serde"] }
+tracing = "0.1.38"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 [profile.dev]
 incremental = true
 

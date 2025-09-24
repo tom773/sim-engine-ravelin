@@ -17,3 +17,9 @@ serde_json = { workspace = true }
 futures-core = "0.3"
 tokio-stream = "0.1"
 tower-http = { workspace = true }
+metrics = { workspace = true }
+chrono = { workspace = true }
+async-nats = "0.43"
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+engine_v3 = { path = "../../engine_v3" }

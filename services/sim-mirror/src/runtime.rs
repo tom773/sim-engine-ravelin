@@ -1,17 +1,15 @@
-use crate::{DigestEvent, DigestEventKind, DigestMetrics, MirrorHandle, StateDigest};
+use crate::{MirrorHandle, build_state_digest, control::MirrorControl};
+use chrono::Utc;
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, unbounded};
 use engine_v3::{SimulationEngine, scenario::Scenario};
+use metrics::histogram;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
-use serde::Serialize;
-use sim_core::prelude::*;
-use sim_core::types::events::TickEventSummary;
-use sim_core::types::instrument::{InstrumentRuntime, RealAssetState};
-use sim_core::types::system::financial_system::FinancialSystem;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use thiserror::Error;
@@ -28,6 +26,10 @@ pub enum MirrorError {
 pub enum ControlError {
     #[error("mirror runtime worker is not running")]
     Disconnected,
+    #[error("control transport error: {0}")]
+    Transport(String),
+    #[error("control request timed out")]
+    Timeout,
 }
 
 const DEFAULT_TICK_INTERVAL: Duration = Duration::from_millis(50);
@@ -64,7 +66,7 @@ impl MirrorStatus {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MirrorControlStatus {
     pub running: bool,
     pub tick_interval_ms: u64,
@@ -123,6 +125,7 @@ pub struct MirrorRuntime {
     scenario: Arc<Scenario>,
     controller: MirrorController,
     worker: Option<JoinHandle<()>>,
+    remote_control: Mutex<Option<crate::JetStreamControlServer>>,
 }
 
 impl MirrorRuntime {
@@ -139,18 +142,14 @@ impl MirrorRuntime {
     }
 
     pub fn start_from_scenario(scenario: Arc<Scenario>, tick_interval: Duration) -> Result<Self, MirrorError> {
-        let engine = scenario.initialize_engine();
-        let mirror = MirrorHandle::new();
-        let engine = Arc::new(parking_lot::RwLock::new(engine));
-
-        {
-            let engine_guard = engine.read();
-            let digest = build_state_digest(&engine_guard.state, &[], &engine_guard.state.financial_system);
-            mirror.publish(digest);
-        }
+        let engine_instance = scenario.initialize_engine();
+        let initial_digest = build_state_digest(&engine_instance, &[]);
+        let mirror = MirrorHandle::with_initial(initial_digest);
+        let engine = Arc::new(parking_lot::RwLock::new(engine_instance));
 
         let (control_tx, control_rx) = unbounded();
-        let status = Arc::new(MirrorStatus::new(true, tick_interval));
+        let initial_running = false;
+        let status = Arc::new(MirrorStatus::new(initial_running, tick_interval));
         let controller = MirrorController::new(control_tx.clone(), status.clone());
         let worker = spawn_tick_thread(
             mirror.clone(),
@@ -159,9 +158,10 @@ impl MirrorRuntime {
             tick_interval,
             control_rx,
             status.clone(),
+            initial_running,
         );
 
-        Ok(Self { mirror, engine, scenario, controller, worker: Some(worker) })
+        Ok(Self { mirror, engine, scenario, controller, worker: Some(worker), remote_control: Mutex::new(None) })
     }
 
     pub fn mirror_handle(&self) -> MirrorHandle {
@@ -179,10 +179,34 @@ impl MirrorRuntime {
     pub fn controller(&self) -> MirrorController {
         self.controller.clone()
     }
+
+    pub fn attach_jetstream(&self, config: crate::JetStreamConfig) -> Result<(), crate::JetStreamError> {
+        self.attach_jetstream_with_schema(config, crate::JetStreamSchema::default())
+    }
+
+    pub fn attach_jetstream_with_schema(
+        &self, config: crate::JetStreamConfig, schema: crate::JetStreamSchema,
+    ) -> Result<(), crate::JetStreamError> {
+        let publisher_config = config.clone();
+        let mut control_config = config;
+        control_config.connection_name = format!("{}-control", control_config.connection_name);
+
+        let publisher = crate::JetStreamPublisher::connect(publisher_config, schema.clone())?;
+        self.mirror.attach_publisher(publisher);
+        let mut guard = self.remote_control.lock().expect("remote control guard");
+        if guard.is_none() {
+            let server = crate::JetStreamControlServer::start(control_config, schema, self.controller())?;
+            *guard = Some(server);
+        }
+        Ok(())
+    }
 }
 
 impl Drop for MirrorRuntime {
     fn drop(&mut self) {
+        if let Ok(mut guard) = self.remote_control.lock() {
+            guard.take();
+        }
         self.controller.shutdown();
         if let Some(handle) = self.worker.take() {
             let _ = handle.join();
@@ -190,17 +214,39 @@ impl Drop for MirrorRuntime {
     }
 }
 
+impl MirrorControl for MirrorController {
+    fn pause(&self) -> Result<(), ControlError> {
+        MirrorController::pause(self)
+    }
+
+    fn resume(&self) -> Result<(), ControlError> {
+        MirrorController::resume(self)
+    }
+
+    fn step(&self) -> Result<(), ControlError> {
+        MirrorController::step(self)
+    }
+
+    fn set_interval(&self, interval: Duration) -> Result<(), ControlError> {
+        MirrorController::set_interval(self, interval)
+    }
+
+    fn status(&self) -> MirrorControlStatus {
+        MirrorController::status(self)
+    }
+}
+
 fn spawn_tick_thread(
     mirror: MirrorHandle, engine: Arc<parking_lot::RwLock<SimulationEngine>>, scenario: Arc<Scenario>,
-    tick_interval: Duration, control_rx: Receiver<ControlCommand>, status: Arc<MirrorStatus>,
+    tick_interval: Duration, control_rx: Receiver<ControlCommand>, status: Arc<MirrorStatus>, initial_running: bool,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         let mut rng = StdRng::seed_from_u64(scenario.config.seed);
         let mut restart_counter: u64 = 0;
-        let mut running = true;
+        let mut running = initial_running;
         let mut step_once = false;
         let mut interval = tick_interval.max(Duration::from_millis(1));
-        status.set_running(true);
+        status.set_running(initial_running);
         status.set_interval(interval);
 
         let handle_command =
@@ -257,14 +303,20 @@ fn spawn_tick_thread(
                     restart_counter = restart_counter.wrapping_add(1);
                     let new_seed = scenario.config.seed.wrapping_add(restart_counter);
                     rng = StdRng::seed_from_u64(new_seed);
-                    build_state_digest(&eng.state, &[], &eng.state.financial_system)
+                    build_state_digest(&eng, &[])
                 } else {
                     let (_result, events) = eng.run_tick(&mut rng);
-                    build_state_digest(&eng.state, &events, &eng.state.financial_system)
+                    build_state_digest(&eng, &events)
                 }
             };
 
-            mirror.publish(digest);
+            let snapshot = mirror.publish(digest);
+            let publish_latency_ms = Utc::now()
+                .signed_duration_since(snapshot.digest.timings.generated_at)
+                .num_microseconds()
+                .unwrap_or_default() as f64
+                / 1_000.0;
+            histogram!("mirror.publish.latency_ms", publish_latency_ms, "source" => "runtime");
 
             if step_once {
                 step_once = false;
@@ -304,48 +356,4 @@ fn spawn_tick_thread(
             }
         }
     })
-}
-
-fn build_state_digest(state: &SimState, events: &[SimEvent], system: &FinancialSystem) -> StateDigest {
-    let total_agents = (state.agents.banks.len() + state.agents.firms.len() + state.agents.consumers.len()) as u32;
-
-    let mut total_cash = 0.0;
-    let mut total_inventory = 0.0;
-    let instruments = &system.instruments.instruments;
-
-    for balance_sheet in system.balance_sheets.values() {
-        for (inst_id, position) in &balance_sheet.assets {
-            if let Some(inst) = instruments.get(inst_id) {
-                match inst.state() {
-                    InstrumentRuntime::Cash(_) => {
-                        total_cash += position.quantity;
-                    }
-                    InstrumentRuntime::RealAsset(RealAssetState::Inventory { goods, .. }) => {
-                        total_inventory += goods.values().map(|item| item.quantity).sum::<f64>();
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    let metrics = DigestMetrics::new(total_agents, total_cash, total_inventory);
-    let summary = TickEventSummary::from_events(events);
-
-    let mut highlights = Vec::with_capacity(4);
-    highlights.push(DigestEvent::info("tick", format!("tick {} complete", state.ticknum)));
-    highlights.push(DigestEvent::info("date", state.current_date.format("%Y-%m-%d").to_string()));
-    highlights.push(DigestEvent::info(
-        "events",
-        format!("{} events ({} kinds)", summary.total_events, summary.by_kind.len()),
-    ));
-
-    if let Some(top) = summary.by_kind.first() {
-        highlights.push(DigestEvent {
-            kind: DigestEventKind::Info("top_event".to_string()),
-            message: format!("{:?}: {} occurrences", top.kind, top.count),
-        });
-    }
-
-    StateDigest::new(state.ticknum, state.current_date.format("%Y-%m-%d").to_string(), metrics, highlights)
 }
