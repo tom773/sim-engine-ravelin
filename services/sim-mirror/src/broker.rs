@@ -1,4 +1,4 @@
-use crate::StateSnapshot;
+use crate::{DigestPublisher, StateSnapshot};
 use async_nats::jetstream;
 use crossbeam_channel::{Receiver, Sender, TrySendError, bounded, unbounded};
 use metrics::{counter, histogram};
@@ -44,12 +44,6 @@ impl JetStreamSchema {
             self.intent_subject.to_string(),
         ]
     }
-}
-
-/// Trait implemented by any publisher that can forward digests to an external transport (JetStream, Kafka, etc.).
-pub trait DigestPublisher: Send + Sync {
-    fn publish(&self, snapshot: Arc<StateSnapshot>);
-    fn label(&self) -> &'static str;
 }
 
 /// Simple in-memory broker used to validate publish costs and delivery latency without a running NATS instance.

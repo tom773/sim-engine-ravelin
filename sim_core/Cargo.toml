@@ -29,3 +29,7 @@ dashmap = "6.1.0"
 parking_lot.workspace = true
 serde_json.workspace = true
 simd-json = { workspace = true, optional = true }
+web-time = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"

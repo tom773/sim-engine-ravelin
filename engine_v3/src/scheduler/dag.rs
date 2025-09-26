@@ -6,7 +6,7 @@ use petgraph::Graph;
 use petgraph::graph::NodeIndex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::time::Instant;
+use web_time::Instant;
 
 #[derive(Debug)]
 pub struct TickScheduler {

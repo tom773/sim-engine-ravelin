@@ -2,17 +2,30 @@ use arc_swap::ArcSwap;
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use std::sync::{Arc, Mutex};
 
+#[cfg(feature = "server")]
 pub mod broker;
+#[cfg(feature = "server")]
 pub mod control;
 pub mod digest;
+#[cfg(feature = "server")]
 pub mod query;
+#[cfg(feature = "server")]
 pub mod runtime;
 
+#[cfg(feature = "server")]
 pub use broker::*;
+#[cfg(feature = "server")]
 pub use control::*;
 pub use digest::*;
+#[cfg(feature = "server")]
 pub use query::*;
+#[cfg(feature = "server")]
 pub use runtime::*;
+
+pub trait DigestPublisher: Send + Sync {
+    fn publish(&self, snapshot: Arc<StateSnapshot>);
+    fn label(&self) -> &'static str;
+}
 
 type Snapshot = Arc<StateSnapshot>;
 

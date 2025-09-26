@@ -40,6 +40,7 @@ enum ControlCommand {
     Resume,
     Step,
     SetInterval(Duration),
+    Reset,
     Shutdown,
 }
 
@@ -59,10 +60,12 @@ impl MirrorStatus {
 
     fn set_running(&self, running: bool) {
         self.running.store(running, Ordering::Relaxed);
+        metrics::gauge!("mirror.runtime.running", if running { 1.0 } else { 0.0 });
     }
 
     fn set_interval(&self, interval: Duration) {
         self.tick_interval_ms.store(interval.as_millis().max(1) as u64, Ordering::Relaxed);
+        metrics::gauge!("mirror.runtime.tick_interval_ms", interval.as_millis() as f64);
     }
 }
 
@@ -105,6 +108,11 @@ impl MirrorController {
     pub fn set_interval(&self, interval: Duration) -> Result<(), ControlError> {
         self.status.set_interval(interval);
         self.send(ControlCommand::SetInterval(interval))
+    }
+
+    pub fn reset(&self) -> Result<(), ControlError> {
+        self.status.set_running(false);
+        self.send(ControlCommand::Reset)
     }
 
     pub fn status(&self) -> MirrorControlStatus {
@@ -231,6 +239,10 @@ impl MirrorControl for MirrorController {
         MirrorController::set_interval(self, interval)
     }
 
+    fn reset(&self) -> Result<(), ControlError> {
+        MirrorController::reset(self)
+    }
+
     fn status(&self) -> MirrorControlStatus {
         MirrorController::status(self)
     }
@@ -246,38 +258,49 @@ fn spawn_tick_thread(
         let mut running = initial_running;
         let mut step_once = false;
         let mut interval = tick_interval.max(Duration::from_millis(1));
+        let mut reset_requested = false;
         status.set_running(initial_running);
         status.set_interval(interval);
 
-        let handle_command =
-            |cmd: ControlCommand, running: &mut bool, step_once: &mut bool, interval: &mut Duration| -> bool {
-                match cmd {
-                    ControlCommand::Pause => {
-                        *running = false;
-                        status.set_running(false);
-                    }
-                    ControlCommand::Resume => {
-                        *running = true;
-                        status.set_running(true);
-                    }
-                    ControlCommand::Step => {
-                        *step_once = true;
-                        *running = false;
-                        status.set_running(false);
-                    }
-                    ControlCommand::SetInterval(new_interval) => {
-                        let clamped = new_interval.max(Duration::from_millis(1));
-                        *interval = clamped;
-                        status.set_interval(clamped);
-                    }
-                    ControlCommand::Shutdown => return true,
+        let handle_command = |cmd: ControlCommand,
+                              running: &mut bool,
+                              step_once: &mut bool,
+                              interval: &mut Duration,
+                              reset_flag: &mut bool|
+         -> bool {
+            match cmd {
+                ControlCommand::Pause => {
+                    *running = false;
+                    status.set_running(false);
                 }
-                false
-            };
+                ControlCommand::Resume => {
+                    *running = true;
+                    status.set_running(true);
+                }
+                ControlCommand::Step => {
+                    *step_once = true;
+                    *running = false;
+                    status.set_running(false);
+                }
+                ControlCommand::SetInterval(new_interval) => {
+                    let clamped = new_interval.max(Duration::from_millis(1));
+                    *interval = clamped;
+                    status.set_interval(clamped);
+                }
+                ControlCommand::Reset => {
+                    *running = false;
+                    *step_once = false;
+                    *reset_flag = true;
+                    status.set_running(false);
+                }
+                ControlCommand::Shutdown => return true,
+            }
+            false
+        };
 
         loop {
             while let Ok(cmd) = control_rx.try_recv() {
-                if handle_command(cmd, &mut running, &mut step_once, &mut interval) {
+                if handle_command(cmd, &mut running, &mut step_once, &mut interval, &mut reset_requested) {
                     return;
                 }
             }
@@ -285,13 +308,36 @@ fn spawn_tick_thread(
             if !running && !step_once {
                 match control_rx.recv_timeout(Duration::from_millis(10)) {
                     Ok(cmd) => {
-                        if handle_command(cmd, &mut running, &mut step_once, &mut interval) {
+                        if handle_command(cmd, &mut running, &mut step_once, &mut interval, &mut reset_requested) {
                             return;
                         }
                     }
                     Err(RecvTimeoutError::Timeout) => continue,
                     Err(RecvTimeoutError::Disconnected) => return,
                 }
+                continue;
+            }
+
+            if reset_requested {
+                let digest = {
+                    let mut eng = engine.write();
+                    let mut fresh = scenario.initialize_engine();
+                    std::mem::swap(&mut *eng, &mut fresh);
+                    restart_counter = restart_counter.wrapping_add(1);
+                    let new_seed = scenario.config.seed.wrapping_add(restart_counter);
+                    rng = StdRng::seed_from_u64(new_seed);
+                    build_state_digest(&eng, &[])
+                };
+
+                reset_requested = false;
+
+                let snapshot = mirror.publish(digest);
+                let publish_latency_ms = Utc::now()
+                    .signed_duration_since(snapshot.digest.timings.generated_at)
+                    .num_microseconds()
+                    .unwrap_or_default() as f64
+                    / 1_000.0;
+                histogram!("mirror.publish.latency_ms", publish_latency_ms, "source" => "runtime");
                 continue;
             }
 
@@ -325,7 +371,7 @@ fn spawn_tick_thread(
             }
 
             if let Ok(cmd) = control_rx.try_recv() {
-                if handle_command(cmd, &mut running, &mut step_once, &mut interval) {
+                if handle_command(cmd, &mut running, &mut step_once, &mut interval, &mut reset_requested) {
                     return;
                 }
             }
@@ -343,7 +389,7 @@ fn spawn_tick_thread(
                 let wait = (deadline - now).min(Duration::from_millis(10));
                 match control_rx.recv_timeout(wait) {
                     Ok(cmd) => {
-                        if handle_command(cmd, &mut running, &mut step_once, &mut interval) {
+                        if handle_command(cmd, &mut running, &mut step_once, &mut interval, &mut reset_requested) {
                             return;
                         }
                         if step_once {

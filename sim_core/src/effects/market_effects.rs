@@ -61,7 +61,7 @@ impl StateEffectApplicator {
                 };
 
                 if !trades.is_empty() {
-                    let now = std::time::SystemTime::now();
+                    let now = crate::time::wall_clock_now();
                     exchange.recent_trades.extend(trades.iter().cloned());
                     for t in &trades {
                         exchange

@@ -193,6 +193,9 @@ impl<'a> AgentFactory<'a> {
 
         let amortization = Amortization::Annuity;
 
+        // Convert supplied maturity in days to an approximate whole-month tenor.
+        let term_months = ((maturity_days as f64) / 30.4375).round().max(1.0) as u32;
+
         let loan_archetype = LoanArchetype {
             facility_type: FacilityType::TermLoanFacility,
             amortization,
@@ -212,7 +215,7 @@ impl<'a> AgentFactory<'a> {
             },
             repayment_schedule: LoanRepaymentSchedule {
                 payment_frequency: PaymentFrequency::Monthly,
-                term_months: (maturity_days / 30).max(1),
+                term_months: term_months.max(1),
             },
             collateral_requirements: Vec::new(),
         };

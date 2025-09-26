@@ -23,6 +23,16 @@ pub enum ConsumerLoanCategory {
     PersonalLoan,
     StudentLoan,
 }
+impl ConsumerLoanCategory {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ConsumerLoanCategory::ResidentialMortgage => "Residential Mortgage",
+            ConsumerLoanCategory::AutoLoan => "Auto Loan",
+            ConsumerLoanCategory::PersonalLoan => "Personal Loan",
+            ConsumerLoanCategory::StudentLoan => "Student Loan",
+        }
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BorrowerType {
     Individual,

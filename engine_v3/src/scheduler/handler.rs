@@ -4,13 +4,14 @@ use domains::{ResolutionContext, ResolutionPhase};
 use rand::prelude::*;
 use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
+use sim_core::time::wall_clock_now;
 use sim_core::types::core_utils::time::is_coupon_date;
 use sim_core::types::markets::BondPricingTerms;
 use sim_core::*;
 use std::collections::HashMap as StdHashMap;
-use std::time::Instant;
 use tracing::instrument;
 use uuid::Uuid;
+use web_time::Instant;
 
 fn execute_step<F>(step_fn: F) -> StepResult
 where
@@ -128,7 +129,7 @@ impl StepHandler for ClearMarketsHandler {
         execute_step(|| {
             let (market_trades, snapshots) = engine.clear_all_markets();
             if !market_trades.is_empty() {
-                let now = std::time::SystemTime::now();
+                let now = wall_clock_now();
                 let tape = &mut engine.state.financial_system.exchange.tape;
                 for t in &market_trades {
                     tape.entry(t.market_id.clone()).or_default().push(TimedTrade { ts: now, trade: t.clone() });
@@ -733,7 +734,7 @@ impl StepHandler for DebtAuctionsHandler {
             }
 
             if !all_auction_trades.is_empty() {
-                let now = std::time::SystemTime::now();
+                let now = wall_clock_now();
                 let tape = &mut engine.state.financial_system.exchange.tape;
                 for t in &all_auction_trades {
                     tape.entry(t.market_id.clone()).or_default().push(TimedTrade { ts: now, trade: t.clone() });

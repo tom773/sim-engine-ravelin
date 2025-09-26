@@ -1,4 +1,7 @@
-use crate::{DashboardDto, MirrorHandle, StateDelta, StateDigest, StateSnapshot, StatusDigest};
+use crate::{
+    AgentsCatalogueDigest, BehaviourDigest, DashboardDto, InstrumentRegistryDigest, MarketInfrastructureDigest,
+    MetadataDigest, MirrorHandle, StateDelta, StateDigest, StateSnapshot, StatusDigest, TickDetailDigest,
+};
 use crossbeam_channel::Receiver;
 use std::sync::Arc;
 
@@ -27,6 +30,35 @@ impl QueryService {
     pub fn dashboard(&self) -> DashboardDto {
         let snapshot = self.latest_snapshot();
         DashboardDto::from(snapshot.digest.as_ref())
+    }
+
+    pub fn agent_catalogue(&self) -> Option<AgentsCatalogueDigest> {
+        self.latest_snapshot().digest.agents.catalogue.clone()
+    }
+
+    pub fn instrument_registry(&self) -> Option<InstrumentRegistryDigest> {
+        self.latest_snapshot().digest.instruments.clone()
+    }
+
+    pub fn market_infrastructure(&self) -> Option<MarketInfrastructureDigest> {
+        self.latest_snapshot().digest.markets.infrastructure.clone()
+    }
+
+    pub fn behaviour(&self) -> Option<BehaviourDigest> {
+        self.latest_snapshot().digest.behaviour.clone()
+    }
+
+    pub fn metadata(&self) -> Option<MetadataDigest> {
+        self.latest_snapshot().digest.metadata.clone()
+    }
+
+    pub fn behaviour_tick(&self, tick: u32) -> Option<TickDetailDigest> {
+        self.latest_snapshot()
+            .digest
+            .behaviour
+            .as_ref()
+            .and_then(|behaviour| behaviour.ticks.iter().find(|entry| entry.tick == tick))
+            .and_then(|tick_digest| tick_digest.detail.clone())
     }
 
     pub fn latest_delta(&self) -> Option<StateDelta> {

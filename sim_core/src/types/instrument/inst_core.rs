@@ -326,7 +326,7 @@ impl CreditState {
 
     pub fn label(&self) -> &'static str {
         match self {
-            CreditState::Loan(_) => "Loan",
+            CreditState::Loan(_) => "Corporate Loan",
             CreditState::ConsumerLoan { .. } => "Consumer Loan",
             CreditState::ConsumerCreditCard(_) => "Credit Card",
             CreditState::TradeCredit(_) => "Trade Credit",

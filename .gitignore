@@ -21,14 +21,20 @@ node_modules
 surrealdb_data/
 .svelte-kit/
 # Output
+*/.cert/
+**/*/.cert/
+.cert/
 .output
 .vercel
+src/dashboard_generated.rs
 .netlify
 .wrangler
 /.svelte-kit
 /build
 instructions.md
 *.json
+pkg/
+pkg/*
 # OS
 .DS_Store
 Thumbs.db

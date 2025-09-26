@@ -24,10 +24,10 @@ pub trait MirrorControl: Send + Sync {
     fn resume(&self) -> Result<(), ControlError>;
     fn step(&self) -> Result<(), ControlError>;
     fn set_interval(&self, interval: Duration) -> Result<(), ControlError>;
+    fn reset(&self) -> Result<(), ControlError>;
     fn status(&self) -> MirrorControlStatus;
 }
 
-/// JetStream message carrying a control command issued by a remote client.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RemoteControlCommand {
@@ -35,16 +35,15 @@ pub enum RemoteControlCommand {
     Resume,
     Step,
     SetInterval { millis: u64 },
+    Reset,
 }
 
-/// JetStream message emitted by the runtime so remote controllers observe liveness and state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteControlStatus {
     pub status: MirrorControlStatus,
     pub timestamp: DateTime<Utc>,
 }
 
-/// Guard that keeps the JetStream control worker alive for the embedded runtime.
 pub struct JetStreamControlServer {
     shutdown: Mutex<Option<oneshot::Sender<()>>>,
     join: Mutex<Option<thread::JoinHandle<()>>>,
@@ -187,9 +186,9 @@ enum ControllerRequest {
     Resume { respond: oneshot::Sender<Result<(), ControlError>> },
     Step { respond: oneshot::Sender<Result<(), ControlError>> },
     SetInterval { millis: u64, respond: oneshot::Sender<Result<(), ControlError>> },
+    Reset { respond: oneshot::Sender<Result<(), ControlError>> },
 }
 
-/// Lightweight client that forwards control commands over JetStream and tracks mirror status updates.
 pub struct RemoteMirrorController {
     tx: mpsc::Sender<ControllerRequest>,
     status: Arc<RwLock<MirrorControlStatus>>,
@@ -319,6 +318,11 @@ impl MirrorControl for RemoteMirrorController {
         self.command(ControllerRequest::SetInterval { millis, respond: respond_tx }, respond_rx)
     }
 
+    fn reset(&self) -> Result<(), ControlError> {
+        let (respond_tx, respond_rx) = oneshot::channel();
+        self.command(ControllerRequest::Reset { respond: respond_tx }, respond_rx)
+    }
+
     fn status(&self) -> MirrorControlStatus {
         self.status.read().clone()
     }
@@ -414,7 +418,6 @@ async fn remote_control_loop(
         let _ = sender.send(Ok(()));
     }
 
-    // Main loop: forward commands and keep the cached status fresh.
     loop {
         tokio::select! {
             _ = &mut shutdown => {
@@ -469,6 +472,10 @@ async fn handle_remote_request(request: ControllerRequest, context: &jetstream::
             } else {
                 publish_command(context, schema, RemoteControlCommand::SetInterval { millis }).await
             };
+            let _ = respond.send(result);
+        }
+        ControllerRequest::Reset { respond } => {
+            let result = publish_command(context, schema, RemoteControlCommand::Reset).await;
             let _ = respond.send(result);
         }
     }
@@ -535,6 +542,7 @@ async fn handle_control_message(
                 controller.set_interval(Duration::from_millis(millis))
             }
         }
+        RemoteControlCommand::Reset => controller.reset(),
     };
 
     if let Err(err) = result {
