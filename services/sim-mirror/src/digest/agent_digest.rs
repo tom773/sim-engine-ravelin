@@ -17,16 +17,9 @@ use sim_core::types::system::{
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
-use super::state_digest::AgentBalanceDelta;
-
-pub(crate) const AGENT_DELTA_EPSILON: f64 = 1.0;
-pub(crate) const BALANCE_ENTRY_EPSILON: f64 = 1e-6;
-pub(crate) const VALUE_EPSILON: f64 = 1e-2;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AgentsDigest {
-    pub leaderboard: Vec<AgentBalanceDigest>,
-    pub liquidity_leaderboard: Vec<AgentBalanceDigest>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub catalogue: Option<AgentsCatalogueDigest>,
 }
@@ -79,7 +72,8 @@ pub struct BalanceSheetDigest {
     pub assets: Vec<BalanceEntryDigest>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub liabilities: Vec<BalanceEntryDigest>,
-    pub income_statement: IncomeStatementDigest,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub income_statement: Option<IncomeStatementDigest>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,7 +133,7 @@ pub(crate) fn sanitize_f64(value: f64) -> f64 {
     if value.is_finite() { value } else { 0.0 }
 }
 
-pub(crate) fn compute_agents(engine: &SimulationEngine, limit: usize) -> AgentsDigest {
+pub(crate) fn compute_agents(engine: &SimulationEngine, _limit: usize) -> AgentsDigest {
     let state = &engine.state;
     let financial_system = &state.financial_system;
 
@@ -165,17 +159,9 @@ pub(crate) fn compute_agents(engine: &SimulationEngine, limit: usize) -> AgentsD
 
     let roster = entries;
 
-    let mut leaderboard = roster.clone();
-    leaderboard.sort_by(|a, b| b.net_worth.partial_cmp(&a.net_worth).unwrap_or(std::cmp::Ordering::Equal));
-    leaderboard.truncate(limit);
-
-    let mut liquidity_leaderboard = roster.clone();
-    liquidity_leaderboard.sort_by(|a, b| b.liquidity.partial_cmp(&a.liquidity).unwrap_or(std::cmp::Ordering::Equal));
-    liquidity_leaderboard.truncate(limit);
-
     let catalogue = AgentsCatalogueDigest { roster: roster.clone(), groups: build_agent_groups(&roster) };
 
-    AgentsDigest { leaderboard, liquidity_leaderboard, catalogue: Some(catalogue) }
+    AgentsDigest { catalogue: Some(catalogue) }
 }
 
 pub(crate) fn build_agent_groups(entries: &[AgentBalanceDigest]) -> Vec<AgentGroupDigest> {
@@ -218,14 +204,77 @@ pub(crate) fn build_agent_entry(
     }
 }
 
+/// Determines if an instrument type should be aggregated
+fn should_aggregate_instrument_type(instrument_type: &str) -> bool {
+    matches!(
+        instrument_type,
+        "Cash"
+            | "Consumer Loan"
+            | "Corporate Loan"
+            | "Credit Card"
+            | "Trade Credit"
+            | "Credit Facility"
+    )
+}
+
+/// Aggregates balance entries by instrument type and label
+fn aggregate_balance_entries(entries: Vec<BalanceEntryDigest>) -> Vec<BalanceEntryDigest> {
+    let mut aggregatable: HashMap<(String, String), Vec<BalanceEntryDigest>> = HashMap::new();
+    let mut non_aggregatable: Vec<BalanceEntryDigest> = Vec::new();
+
+    // Separate entries into aggregatable and non-aggregatable
+    for entry in entries {
+        if should_aggregate_instrument_type(&entry.instrument_type) {
+            aggregatable
+                .entry((entry.instrument_type.clone(), entry.label.clone()))
+                .or_default()
+                .push(entry);
+        } else {
+            non_aggregatable.push(entry);
+        }
+    }
+
+    // Build aggregated entries
+    let mut result = Vec::with_capacity(aggregatable.len() + non_aggregatable.len());
+
+    for ((instrument_type, label), group) in aggregatable {
+        if group.len() == 1 {
+            // Don't aggregate single entries
+            result.push(group.into_iter().next().unwrap());
+        } else {
+            // Aggregate multiple entries
+            let count = group.len();
+            let quantity: f64 = group.iter().map(|e| e.quantity).sum();
+            let mark_to_market_value: f64 = group.iter().map(|e| e.mark_to_market_value).sum();
+            let book_value: f64 = group.iter().map(|e| e.book_value).sum();
+            let cost_basis: f64 = group.iter().map(|e| e.cost_basis).sum();
+            let source = group.first().map(|e| e.source.clone()).unwrap_or_default();
+
+            // Create aggregated entry with a synthetic ID
+            result.push(BalanceEntryDigest {
+                instrument_id: format!("aggregated_{}_{}", instrument_type, count),
+                instrument_type,
+                label: format!("{} (×{})", label, count),
+                quantity,
+                mark_to_market_value,
+                book_value,
+                cost_basis,
+                source,
+            });
+        }
+    }
+
+    // Add non-aggregatable entries
+    result.extend(non_aggregatable);
+
+    result
+}
+
 pub(crate) fn build_balance_sheet(financial_system: &FinancialSystem, agent_id: &AgentId) -> BalanceSheetDigest {
     let mut assets: Vec<BalanceEntryDigest> = Vec::new();
     let mut liabilities: Vec<BalanceEntryDigest> = Vec::new();
-    let mut income_statement = IncomeStatementDigest::default();
 
     if let Some(sheet) = financial_system.balance_sheets.get(agent_id) {
-        income_statement = IncomeStatementDigest::from(&sheet.income_statement);
-
         for (instrument_id, position) in &sheet.assets {
             assets.push(balance_entry_from_position(
                 financial_system,
@@ -252,12 +301,16 @@ pub(crate) fn build_balance_sheet(financial_system: &FinancialSystem, agent_id: 
         assets.push(balance_entry_from_custody(financial_system, &instrument_id, quantity));
     }
 
+    // Aggregate entries before sorting
+    assets = aggregate_balance_entries(assets);
+    liabilities = aggregate_balance_entries(liabilities);
+
     assets.sort_by(|a, b| {
         b.mark_to_market_value.partial_cmp(&a.mark_to_market_value).unwrap_or(std::cmp::Ordering::Equal)
     });
     liabilities.sort_by(|a, b| b.book_value.partial_cmp(&a.book_value).unwrap_or(std::cmp::Ordering::Equal));
 
-    BalanceSheetDigest { assets, liabilities, income_statement }
+    BalanceSheetDigest { assets, liabilities, income_statement: None }
 }
 
 fn balance_entry_from_position(
@@ -713,134 +766,4 @@ pub(crate) fn credit_rating_label_opt(rating: Option<CreditRating>) -> Option<St
     rating.map(credit_rating_label)
 }
 
-pub(crate) fn diff_agents(
-    prev: &AgentsDigest, next: &AgentsDigest,
-) -> (Vec<AgentBalanceDelta>, Vec<AgentBalanceDigest>, Vec<Uuid>) {
-    let mut combined_changes = diff_leaderboard(&prev.leaderboard, &next.leaderboard);
-    for delta in diff_leaderboard(&prev.liquidity_leaderboard, &next.liquidity_leaderboard) {
-        if !combined_changes.iter().any(|existing| existing.agent_id == delta.agent_id) {
-            combined_changes.push(delta);
-        }
-    }
 
-    let (catalogue_updates, removed_agent_ids) = diff_agent_catalogue(prev.catalogue.as_ref(), next.catalogue.as_ref());
-
-    (combined_changes, catalogue_updates, removed_agent_ids)
-}
-
-fn diff_leaderboard(prev: &[AgentBalanceDigest], next: &[AgentBalanceDigest]) -> Vec<AgentBalanceDelta> {
-    let prev_map: HashMap<Uuid, &AgentBalanceDigest> = prev.iter().map(|entry| (entry.agent_id, entry)).collect();
-
-    next.iter()
-        .filter_map(|entry| {
-            let prev_entry = prev_map.get(&entry.agent_id).copied();
-            let prev_net = prev_entry.map(|p| p.net_worth).unwrap_or(0.0);
-            let prev_liq = prev_entry.map(|p| p.liquidity).unwrap_or(0.0);
-            let net_delta = entry.net_worth - prev_net;
-            let liq_delta = entry.liquidity - prev_liq;
-            if net_delta.abs() < AGENT_DELTA_EPSILON && liq_delta.abs() < AGENT_DELTA_EPSILON {
-                None
-            } else {
-                Some(AgentBalanceDelta {
-                    agent_id: entry.agent_id,
-                    name: entry.name.clone(),
-                    net_worth_delta: net_delta,
-                    liquidity_delta: liq_delta,
-                })
-            }
-        })
-        .collect()
-}
-
-fn diff_agent_catalogue(
-    prev: Option<&AgentsCatalogueDigest>, next: Option<&AgentsCatalogueDigest>,
-) -> (Vec<AgentBalanceDigest>, Vec<Uuid>) {
-    match (prev, next) {
-        (Some(prev_cat), Some(next_cat)) => {
-            let prev_map: HashMap<Uuid, &AgentBalanceDigest> =
-                prev_cat.roster.iter().map(|entry| (entry.agent_id, entry)).collect();
-            let next_map: HashMap<Uuid, &AgentBalanceDigest> =
-                next_cat.roster.iter().map(|entry| (entry.agent_id, entry)).collect();
-
-            let mut updates = Vec::new();
-            for agent in &next_cat.roster {
-                match prev_map.get(&agent.agent_id) {
-                    Some(prev_agent) if !agent_balance_changed(prev_agent, agent) => {}
-                    _ => updates.push(agent.clone()),
-                }
-            }
-
-            let mut removed = Vec::new();
-            for prev_agent in &prev_cat.roster {
-                if !next_map.contains_key(&prev_agent.agent_id) {
-                    removed.push(prev_agent.agent_id);
-                }
-            }
-
-            (updates, removed)
-        }
-        (None, Some(next_cat)) => (next_cat.roster.clone(), Vec::new()),
-        (Some(prev_cat), None) => (Vec::new(), prev_cat.roster.iter().map(|agent| agent.agent_id).collect()),
-        (None, None) => (Vec::new(), Vec::new()),
-    }
-}
-
-fn agent_balance_changed(prev: &AgentBalanceDigest, next: &AgentBalanceDigest) -> bool {
-    if (prev.net_worth - next.net_worth).abs() > AGENT_DELTA_EPSILON
-        || (prev.liquidity - next.liquidity).abs() > AGENT_DELTA_EPSILON
-        || (prev.total_assets - next.total_assets).abs() > AGENT_DELTA_EPSILON
-        || (prev.total_liabilities - next.total_liabilities).abs() > AGENT_DELTA_EPSILON
-    {
-        return true;
-    }
-
-    if balance_sheet_changed(&prev.balance_sheet, &next.balance_sheet) {
-        return true;
-    }
-
-    false
-}
-
-fn balance_sheet_changed(prev: &BalanceSheetDigest, next: &BalanceSheetDigest) -> bool {
-    if prev.assets.len() != next.assets.len() || prev.liabilities.len() != next.liabilities.len() {
-        return true;
-    }
-
-    if !entries_equal(&prev.assets, &next.assets) || !entries_equal(&prev.liabilities, &next.liabilities) {
-        return true;
-    }
-
-    income_statement_changed(&prev.income_statement, &next.income_statement)
-}
-
-fn entries_equal(prev: &[BalanceEntryDigest], next: &[BalanceEntryDigest]) -> bool {
-    let prev_map: HashMap<&str, &BalanceEntryDigest> =
-        prev.iter().map(|entry| (entry.instrument_id.as_str(), entry)).collect();
-
-    for entry in next {
-        match prev_map.get(entry.instrument_id.as_str()) {
-            Some(prev_entry) => {
-                if (prev_entry.quantity - entry.quantity).abs() > BALANCE_ENTRY_EPSILON
-                    || (prev_entry.mark_to_market_value - entry.mark_to_market_value).abs() > VALUE_EPSILON
-                    || (prev_entry.book_value - entry.book_value).abs() > VALUE_EPSILON
-                    || (prev_entry.cost_basis - entry.cost_basis).abs() > VALUE_EPSILON
-                    || prev_entry.instrument_type != entry.instrument_type
-                {
-                    return false;
-                }
-            }
-            None => return false,
-        }
-    }
-
-    true
-}
-
-fn income_statement_changed(prev: &IncomeStatementDigest, next: &IncomeStatementDigest) -> bool {
-    (prev.revenue - next.revenue).abs() > VALUE_EPSILON
-        || (prev.cost_of_goods_sold - next.cost_of_goods_sold).abs() > VALUE_EPSILON
-        || (prev.operating_expenses - next.operating_expenses).abs() > VALUE_EPSILON
-        || (prev.interest_income - next.interest_income).abs() > VALUE_EPSILON
-        || (prev.interest_expense - next.interest_expense).abs() > VALUE_EPSILON
-        || (prev.net_income - next.net_income).abs() > VALUE_EPSILON
-}

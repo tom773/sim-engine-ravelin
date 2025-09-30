@@ -57,11 +57,9 @@ impl MirrorHandle {
         Self { inner: Arc::new(inner) }
     }
 
-    /// Publish a new digest into the cache, compute a delta, and fan it out to subscribers.
+    /// Publish a new digest into the cache and fan it out to subscribers.
     pub fn publish(&self, digest: StateDigest) -> Snapshot {
-        let previous = self.inner.latest.load_full();
-        let delta = StateDelta::between(Some(previous.digest.as_ref()), &digest);
-        let snapshot = Arc::new(StateSnapshot { digest: Arc::new(digest), delta });
+        let snapshot = Arc::new(StateSnapshot::from_digest(digest));
         self.inner.latest.store(snapshot.clone());
 
         let mut subscribers = self.inner.subscribers.lock().expect("subscriber lock");

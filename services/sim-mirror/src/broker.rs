@@ -317,21 +317,5 @@ async fn publish_snapshot(
     );
     counter!("mirror.broker.jetstream.published", 1, "kind" => "digest");
 
-    if let Some(delta) = &snapshot.delta {
-        let delta_payload =
-            serde_json::to_vec(delta).map_err(|err| JetStreamError::new(format!("serialize delta failed: {err}")))?;
-        let delta_start = Instant::now();
-        context
-            .publish(schema.delta_subject, delta_payload.into())
-            .await
-            .map_err(|err| JetStreamError::new(format!("delta publish failed: {err}")))?;
-        histogram!(
-            "mirror.broker.jetstream.publish_ms",
-            delta_start.elapsed().as_secs_f64() * 1_000.0,
-            "kind" => "delta"
-        );
-        counter!("mirror.broker.jetstream.published", 1, "kind" => "delta");
-    }
-
     Ok(())
 }

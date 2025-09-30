@@ -1,10 +1,10 @@
 use super::agent_digest::{
-    AGENT_DELTA_EPSILON, AgentBalanceDigest, AgentsDigest, VALUE_EPSILON, compute_agents, credit_rating_label,
+    AgentsDigest, compute_agents, credit_rating_label,
     credit_rating_label_opt, sanitize_f64,
 };
 use super::market_digest::{
-    DepthDigest, MarketInfrastructureDigest, MarketsDigest, OmoActionDigest, build_market_infrastructure,
-    compute_markets, diff_markets,
+    MarketInfrastructureDigest, MarketsDigest, build_market_infrastructure,
+    compute_markets,
 };
 use chrono::{DateTime, Utc};
 use engine_v3::SimulationEngine;
@@ -12,10 +12,9 @@ use engine_v3::SimulationEngine;
 use js_sys::Date;
 use metrics::histogram;
 use rust_decimal::prelude::ToPrimitive;
-use serde::ser::{SerializeStruct, Serializer};
+use serde::ser::{Serializer};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use serde_with::{DisplayFromStr, serde_as};
 use sim_core::prelude::*;
 use sim_core::types::core_utils::time::Session;
 use sim_core::types::events::{SimEvent, TickEventSummary};
@@ -26,7 +25,7 @@ use sim_core::types::instrument::{
 };
 use sim_core::types::markets::market::Exchange;
 use sim_core::types::system::{balance_sheet::Position, financial_system::FinancialSystem};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
@@ -34,21 +33,6 @@ use tracing::instrument;
 use uuid::Uuid;
 
 const AGENT_LEADERBOARD_LIMIT: usize = 10;
-#[cfg(target_arch = "wasm32")]
-const BEHAVIOUR_HISTORY_LIMIT: usize = 1;
-#[cfg(not(target_arch = "wasm32"))]
-const BEHAVIOUR_HISTORY_LIMIT: usize = 50;
-
-#[cfg(target_arch = "wasm32")]
-const BEHAVIOUR_DETAIL_LIMIT: usize = 0;
-#[cfg(not(target_arch = "wasm32"))]
-const BEHAVIOUR_DETAIL_LIMIT: usize = 10;
-
-#[cfg(target_arch = "wasm32")]
-const RECENT_EVENT_LIMIT: usize = 50;
-#[cfg(not(target_arch = "wasm32"))]
-const RECENT_EVENT_LIMIT: usize = 200;
-const RATIO_EPSILON: f64 = 1e-4;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StateDigest {
@@ -58,12 +42,9 @@ pub struct StateDigest {
     pub agents: AgentsDigest,
     pub markets: MarketsDigest,
     pub risk: RiskDigest,
-    pub highlights: Vec<DigestEvent>,
     pub timings: DigestTimings,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instruments: Option<InstrumentRegistryDigest>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub behaviour: Option<BehaviourDigest>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<MetadataDigest>,
 }
@@ -77,10 +58,8 @@ impl StateDigest {
             agents: AgentsDigest::default(),
             markets: MarketsDigest::default(),
             risk: RiskDigest::default(),
-            highlights: vec![DigestEvent::info("mirror", "mirror cache initialised")],
             timings: DigestTimings::bootstrap(),
             instruments: None,
-            behaviour: None,
             metadata: None,
         }
     }
@@ -209,12 +188,11 @@ pub enum DigestEventLevel {
 #[derive(Debug, Clone)]
 pub struct StateSnapshot {
     pub digest: Arc<StateDigest>,
-    pub delta: Option<StateDelta>,
 }
 
 impl StateSnapshot {
     pub fn from_digest(digest: StateDigest) -> Self {
-        Self { digest: Arc::new(digest), delta: None }
+        Self { digest: Arc::new(digest) }
     }
 }
 
@@ -223,119 +201,10 @@ impl Serialize for StateSnapshot {
     where
         S: Serializer,
     {
-        let mut state = serializer.serialize_struct("StateSnapshot", 2)?;
-        state.serialize_field("digest", self.digest.as_ref())?;
-        if let Some(delta) = &self.delta {
-            state.serialize_field("delta", delta)?;
-        }
-        state.end()
+        self.digest.serialize(serializer)
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StateDelta {
-    pub tick: u32,
-    #[serde(with = "chrono::serde::ts_milliseconds")]
-    pub generated_at: DateTime<Utc>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub agent_changes: Vec<AgentBalanceDelta>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub agent_catalogue_updates: Vec<AgentBalanceDigest>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub removed_agent_ids: Vec<Uuid>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub market_changes: Vec<MarketDelta>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub instruments: Option<InstrumentRegistryDigest>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub new_behaviour_ticks: Vec<BehaviourTickDigest>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub new_omo_actions: Vec<OmoActionDigest>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub risk_change: Option<RiskDelta>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub new_highlights: Vec<DigestEvent>,
-}
-
-impl StateDelta {
-    pub fn between(previous: Option<&StateDigest>, next: &StateDigest) -> Option<Self> {
-        let prev = match previous {
-            Some(prev) if prev.tick <= next.tick => prev,
-            _ => return None,
-        };
-
-        let (agent_changes, agent_catalogue_updates, removed_agent_ids) =
-            super::agent_digest::diff_agents(&prev.agents, &next.agents);
-        let market_changes = diff_markets(&prev.markets, &next.markets);
-        let risk_change = diff_risk(&prev.risk, &next.risk);
-        let new_highlights = diff_highlights(&prev.highlights, &next.highlights);
-
-        let instrument_updates = diff_instruments(prev.instruments.as_ref(), next.instruments.as_ref());
-        let new_behaviour_ticks = diff_behaviour(prev.behaviour.as_ref(), next.behaviour.as_ref());
-        let new_omo_actions =
-            diff_omo_actions(prev.markets.infrastructure.as_ref(), next.markets.infrastructure.as_ref());
-
-        let has_changes = !agent_changes.is_empty()
-            || !agent_catalogue_updates.is_empty()
-            || !removed_agent_ids.is_empty()
-            || !market_changes.is_empty()
-            || instrument_updates.is_some()
-            || !new_behaviour_ticks.is_empty()
-            || !new_omo_actions.is_empty()
-            || risk_change.is_some()
-            || !new_highlights.is_empty();
-
-        if !has_changes {
-            return None;
-        }
-
-        Some(Self {
-            tick: next.tick,
-            generated_at: next.timings.generated_at,
-            agent_changes,
-            agent_catalogue_updates,
-            removed_agent_ids,
-            market_changes,
-            instruments: instrument_updates,
-            new_behaviour_ticks,
-            new_omo_actions,
-            risk_change,
-            new_highlights,
-        })
-    }
-}
-
-#[serde_as]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentBalanceDelta {
-    #[serde_as(as = "DisplayFromStr")]
-    pub agent_id: Uuid,
-    pub name: String,
-    pub net_worth_delta: f64,
-    pub liquidity_delta: f64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MarketDelta {
-    pub market_id: String,
-    pub mid_price_delta: Option<f64>,
-    pub spread_delta: Option<f64>,
-    pub volume_delta: f64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub best_bid: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub best_ask: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub depth: Option<DepthDigest>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RiskDelta {
-    pub total_assets_delta: f64,
-    pub total_liabilities_delta: f64,
-    pub liquidity_ratio_delta: f64,
-    pub loan_to_deposit_delta: f64,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct InstrumentRegistryDigest {
@@ -449,15 +318,15 @@ pub struct MetadataDigest {
     pub market_labels: HashMap<String, String>,
 }
 
-#[instrument(skip(engine, events))]
-pub fn build_state_digest(engine: &SimulationEngine, events: &[SimEvent]) -> StateDigest {
-    let (digest, _) = build_state_digest_with_metrics(engine, events);
+#[instrument(skip(engine, _events))]
+pub fn build_state_digest(engine: &SimulationEngine, _events: &[SimEvent]) -> StateDigest {
+    let (digest, _) = build_state_digest_with_metrics(engine, _events);
     digest
 }
 
-#[instrument(skip(engine, events))]
+#[instrument(skip(engine, _events))]
 pub fn build_state_digest_with_metrics(
-    engine: &SimulationEngine, events: &[SimEvent],
+    engine: &SimulationEngine, _events: &[SimEvent],
 ) -> (StateDigest, Vec<DigestPhaseTiming>) {
     #[cfg(target_arch = "wasm32")]
     let build_start = Date::now();
@@ -478,10 +347,8 @@ pub fn build_state_digest_with_metrics(
     }
 
     let risk = profiler.time("risk", || compute_risk(&engine.state.financial_system));
-    let behaviour = profiler.time("behaviour", || build_behaviour_digest(engine, events));
     let metadata = profiler
         .time("metadata", || build_metadata_digest(engine, &agents, markets.infrastructure.as_ref(), &instruments));
-    let highlights = profiler.time("highlights", || build_highlights(&engine.state, &markets, events));
 
     #[cfg(target_arch = "wasm32")]
     let build_duration_ms = Date::now() - build_start;
@@ -492,13 +359,11 @@ pub fn build_state_digest_with_metrics(
     let phases = profiler.finish();
 
     histogram!("mirror.digest.build_ms", timings.build_duration_ms);
-    histogram!("mirror.digest.snapshot.size", (agents.leaderboard.len() + markets.snapshots.len()) as f64);
+    let agent_count = agents.catalogue.as_ref().map(|c| c.roster.len()).unwrap_or(0);
+    histogram!("mirror.digest.snapshot.size", (agent_count + markets.snapshots.len()) as f64);
 
     let instruments_opt =
         if instruments.instruments.is_empty() && instruments.goods.is_empty() { None } else { Some(instruments) };
-
-    let behaviour_opt =
-        if behaviour.ticks.is_empty() && behaviour.recent_events.is_empty() { None } else { Some(behaviour) };
 
     let metadata_opt = if metadata.agent_names.is_empty()
         && metadata.agent_types.is_empty()
@@ -520,10 +385,8 @@ pub fn build_state_digest_with_metrics(
         agents,
         markets,
         risk,
-        highlights,
         timings,
         instruments: instruments_opt,
-        behaviour: behaviour_opt,
         metadata: metadata_opt,
     };
 
@@ -695,55 +558,6 @@ fn compute_risk(system: &FinancialSystem) -> RiskDigest {
     }
 }
 
-fn build_behaviour_digest(engine: &SimulationEngine, latest_events: &[SimEvent]) -> BehaviourDigest {
-    let history = &engine.state.history;
-    let recent_ticks = history.get_recent_ticks(BEHAVIOUR_HISTORY_LIMIT);
-    let detail_threshold = recent_ticks.len().saturating_sub(BEHAVIOUR_DETAIL_LIMIT);
-
-    let mut ticks: Vec<BehaviourTickDigest> = Vec::with_capacity(recent_ticks.len());
-    for (idx, record) in recent_ticks.iter().enumerate() {
-        ticks.push(behaviour_tick_from_record(record, idx >= detail_threshold));
-    }
-
-    let mut recent_events: Vec<SimEvent> = Vec::new();
-    let mut collected = 0usize;
-    for event in latest_events.iter().rev() {
-        if collected >= RECENT_EVENT_LIMIT {
-            break;
-        }
-        recent_events.push(event.clone());
-        collected += 1;
-    }
-    recent_events.reverse();
-
-    BehaviourDigest { ticks, recent_events }
-}
-
-fn behaviour_tick_from_record(record: &TickRecord, include_detail: bool) -> BehaviourTickDigest {
-    let summary = TickEventSummary::from_events(&record.events);
-    let detail = if include_detail {
-        Some(TickDetailDigest {
-            intentions: record.intentions.clone(),
-            actions: record.actions.clone(),
-            effects: record.effects.clone(),
-            events: record.events.clone(),
-            action_to_effect_indices: record.action_to_effect_indices.clone(),
-            trades: record.trades.clone(),
-        })
-    } else {
-        None
-    };
-
-    BehaviourTickDigest {
-        tick: record.tick_number,
-        date: record.date.format("%Y-%m-%d").to_string(),
-        summary,
-        intention_count: record.intentions.len(),
-        action_count: record.actions.len(),
-        effect_count: record.effects.len(),
-        detail,
-    }
-}
 
 fn build_metadata_digest(
     engine: &SimulationEngine, agents: &AgentsDigest, infrastructure: Option<&MarketInfrastructureDigest>,
@@ -787,33 +601,6 @@ fn build_metadata_digest(
     MetadataDigest { agent_names, agent_types, instrument_labels, market_labels }
 }
 
-fn build_highlights(state: &SimState, markets: &MarketsDigest, events: &[SimEvent]) -> Vec<DigestEvent> {
-    let summary = TickEventSummary::from_events(events);
-    let mut highlights = Vec::with_capacity(5);
-
-    highlights.push(DigestEvent::info("tick", format!("tick {} complete", state.ticknum)));
-    highlights.push(DigestEvent::info("date", state.current_date.format("%Y-%m-%d").to_string()));
-    highlights.push(DigestEvent::info(
-        "events",
-        format!("{} events ({} kinds)", summary.total_events, summary.by_kind.len()),
-    ));
-
-    if let Some(top_market_id) = markets.most_active.first() {
-        if let Some(top_market) = markets.snapshots.iter().find(|m| &m.market_id == top_market_id) {
-            highlights.push(DigestEvent::info(
-                "market",
-                format!("Most active: {} (vol {:.0})", top_market.label, top_market.volume),
-            ));
-        }
-    }
-
-    if let Some(top_event) = summary.by_kind.first() {
-        highlights
-            .push(DigestEvent::info("top_event", format!("{:?}: {} occurrences", top_event.kind, top_event.count)));
-    }
-
-    highlights
-}
 
 fn build_instrument_registry(system: &FinancialSystem) -> InstrumentRegistryDigest {
     let mut instruments: Vec<InstrumentMetaDigest> = Vec::with_capacity(system.instruments.instruments.len());
@@ -1027,129 +814,7 @@ fn instrument_market_label(profile: &MarketProfile) -> String {
     }
 }
 
-fn diff_instruments(
-    prev: Option<&InstrumentRegistryDigest>, next: Option<&InstrumentRegistryDigest>,
-) -> Option<InstrumentRegistryDigest> {
-    match (prev, next) {
-        (Some(prev_registry), Some(next_registry)) => {
-            if instrument_registry_equal(prev_registry, next_registry) {
-                None
-            } else {
-                Some(next_registry.clone())
-            }
-        }
-        (None, Some(next_registry)) => Some(next_registry.clone()),
-        _ => None,
-    }
-}
 
-fn instrument_registry_equal(a: &InstrumentRegistryDigest, b: &InstrumentRegistryDigest) -> bool {
-    if a.instruments.len() != b.instruments.len()
-        || a.goods.len() != b.goods.len()
-        || a.recipes.len() != b.recipes.len()
-    {
-        return false;
-    }
-
-    let a_map: HashMap<&str, &InstrumentMetaDigest> =
-        a.instruments.iter().map(|meta| (meta.instrument_id.as_str(), meta)).collect();
-    for meta in &b.instruments {
-        match a_map.get(meta.instrument_id.as_str()) {
-            Some(prev_meta) if instrument_meta_equal(prev_meta, meta) => {}
-            _ => return false,
-        }
-    }
-
-    let a_goods: HashMap<&str, &GoodDigest> = a.goods.iter().map(|good| (good.good_id.as_str(), good)).collect();
-    for good in &b.goods {
-        match a_goods.get(good.good_id.as_str()) {
-            Some(prev_good) if prev_good == &good => {}
-            _ => return false,
-        }
-    }
-
-    let a_recipes: HashMap<&str, &RecipeDigest> =
-        a.recipes.iter().map(|recipe| (recipe.recipe_id.as_str(), recipe)).collect();
-    for recipe in &b.recipes {
-        match a_recipes.get(recipe.recipe_id.as_str()) {
-            Some(prev_recipe) if prev_recipe == &recipe => {}
-            _ => return false,
-        }
-    }
-
-    true
-}
-
-fn instrument_meta_equal(a: &InstrumentMetaDigest, b: &InstrumentMetaDigest) -> bool {
-    a.label == b.label
-        && a.instrument_type == b.instrument_type
-        && a.market == b.market
-        && a.issuer_id == b.issuer_id
-        && a.borrower_id == b.borrower_id
-        && a.counterparty_id == b.counterparty_id
-        && a.currency == b.currency
-        && a.maturity_date == b.maturity_date
-        && option_f64_equal(a.coupon_bps, b.coupon_bps, VALUE_EPSILON)
-        && option_f64_equal(a.unit_par_value, b.unit_par_value, VALUE_EPSILON)
-        && option_f64_equal(a.face_value, b.face_value, VALUE_EPSILON)
-        && a.underlying == b.underlying
-        && a.extra == b.extra
-}
-
-fn option_f64_equal(a: Option<f64>, b: Option<f64>, eps: f64) -> bool {
-    match (a, b) {
-        (Some(x), Some(y)) => (x - y).abs() <= eps,
-        (None, None) => true,
-        _ => false,
-    }
-}
-
-fn diff_behaviour(prev: Option<&BehaviourDigest>, next: Option<&BehaviourDigest>) -> Vec<BehaviourTickDigest> {
-    match (prev, next) {
-        (Some(prev_digest), Some(next_digest)) => {
-            let max_prev_tick = prev_digest.ticks.iter().map(|tick| tick.tick).max().unwrap_or(0);
-            next_digest.ticks.iter().filter(|tick| tick.tick > max_prev_tick).cloned().collect()
-        }
-        (None, Some(next_digest)) => next_digest.ticks.clone(),
-        _ => Vec::new(),
-    }
-}
-
-fn diff_omo_actions(
-    prev: Option<&MarketInfrastructureDigest>, next: Option<&MarketInfrastructureDigest>,
-) -> Vec<OmoActionDigest> {
-    match (prev, next) {
-        (_, Some(next_infra)) => {
-            let prev_ids: HashSet<Uuid> =
-                prev.map(|infra| infra.omo_actions.iter().map(|action| action.action_id).collect()).unwrap_or_default();
-
-            next_infra.omo_actions.iter().filter(|action| !prev_ids.contains(&action.action_id)).cloned().collect()
-        }
-        _ => Vec::new(),
-    }
-}
-
-fn diff_risk(prev: &RiskDigest, next: &RiskDigest) -> Option<RiskDelta> {
-    let total_assets_delta = next.total_assets - prev.total_assets;
-    let total_liabilities_delta = next.total_liabilities - prev.total_liabilities;
-    let liquidity_ratio_delta = next.liquidity_ratio - prev.liquidity_ratio;
-    let loan_to_deposit_delta = next.loan_to_deposit_ratio - prev.loan_to_deposit_ratio;
-
-    if total_assets_delta.abs() < AGENT_DELTA_EPSILON
-        && total_liabilities_delta.abs() < AGENT_DELTA_EPSILON
-        && liquidity_ratio_delta.abs() < RATIO_EPSILON
-        && loan_to_deposit_delta.abs() < RATIO_EPSILON
-    {
-        None
-    } else {
-        Some(RiskDelta { total_assets_delta, total_liabilities_delta, liquidity_ratio_delta, loan_to_deposit_delta })
-    }
-}
-
-fn diff_highlights(prev: &[DigestEvent], next: &[DigestEvent]) -> Vec<DigestEvent> {
-    let prev_set: HashSet<(&str, &str)> = prev.iter().map(|evt| (evt.context.as_str(), evt.message.as_str())).collect();
-    next.iter().filter(|evt| !prev_set.contains(&(evt.context.as_str(), evt.message.as_str()))).cloned().collect()
-}
 
 fn position_value(
     instruments: &HashMap<InstrumentId, Instrument>, exchange: &Exchange, inst_id: &InstrumentId, position: &Position,

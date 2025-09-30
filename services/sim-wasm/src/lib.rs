@@ -23,7 +23,7 @@ use sim_core::types::state::TickRecord;
 #[cfg(target_arch = "wasm32")]
 use sim_mirror::DigestPhaseTiming;
 use sim_mirror::{
-    BehaviourDigest, BehaviourTickDigest, DigestEvent, DigestTimings, MirrorHandle, StateDigest, StateSnapshot,
+    BehaviourDigest, BehaviourTickDigest, DigestTimings, MirrorHandle, StateDigest, StateSnapshot,
     TickDetailDigest, build_state_digest, build_state_digest_with_metrics,
 };
 use std::cell::{Cell, RefCell};
@@ -243,7 +243,6 @@ impl WasmMirror {
 
         let mut digest = outcome.digest;
         digest.timings.generated_at = Utc::now();
-        digest.highlights.push(DigestEvent::info("sim-wasm", format!("Tick {} completed", digest.tick)));
         self.log_step_metrics(digest.tick, &outcome.metrics, &digest.timings, outcome.was_reset);
         self.publish_snapshot(digest)
     }

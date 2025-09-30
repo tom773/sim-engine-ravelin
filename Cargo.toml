@@ -3,9 +3,8 @@ members = [
     "sim_core",
     "domains",
     "engine_v3",
-    "sim-wasm",
+    "services/sim-wasm",
     "services/sim-mirror",
-    "services/sim-api",
     "services/sim-profiler",
 ]
 resolver = "3"

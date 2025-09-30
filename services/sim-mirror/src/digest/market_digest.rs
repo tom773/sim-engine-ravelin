@@ -9,12 +9,10 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use super::agent_digest::instrument_label;
-use super::state_digest::{InstrumentRegistryDigest, MarketDelta, rate_to_f64};
+use super::state_digest::{InstrumentRegistryDigest, rate_to_f64};
 
 pub(crate) const ORDERBOOK_DEPTH_LEVELS: usize = 10;
 pub(crate) const OMO_HISTORY_LIMIT: usize = 25;
-pub(crate) const MARKET_VOLUME_EPSILON: f64 = 1.0;
-pub(crate) const MARKET_PRICE_EPSILON: f64 = 1e-6;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MarketsDigest {
@@ -390,74 +388,3 @@ pub(crate) fn collect_recent_omo_actions(history: &SimHistory, limit: usize) -> 
     actions
 }
 
-pub(crate) fn diff_markets(prev: &MarketsDigest, next: &MarketsDigest) -> Vec<MarketDelta> {
-    let prev_map: HashMap<&String, &MarketDigest> = prev.snapshots.iter().map(|m| (&m.market_id, m)).collect();
-
-    next.snapshots
-        .iter()
-        .filter_map(|market| {
-            let prev_market = prev_map.get(&market.market_id);
-            let prev_volume = prev_market.map(|m| m.volume).unwrap_or(0.0);
-            let volume_delta = market.volume - prev_volume;
-
-            let mid_delta = prev_market
-                .and_then(|m| m.mid_price)
-                .and_then(|prev_mid| market.mid_price.map(|next_mid| next_mid - prev_mid))
-                .filter(|delta| delta.abs() > MARKET_PRICE_EPSILON)
-                .or_else(|| if prev_market.is_none() { market.mid_price } else { None });
-
-            let spread_delta = prev_market
-                .and_then(|m| m.spread)
-                .and_then(|prev_spread| market.spread.map(|next_spread| next_spread - prev_spread))
-                .filter(|delta| delta.abs() > MARKET_PRICE_EPSILON)
-                .or_else(|| if prev_market.is_none() { market.spread } else { None });
-
-            let best_bid = if opt_differs(prev_market.and_then(|m| m.best_bid), market.best_bid, MARKET_PRICE_EPSILON) {
-                market.best_bid
-            } else {
-                None
-            };
-
-            let best_ask = if opt_differs(prev_market.and_then(|m| m.best_ask), market.best_ask, MARKET_PRICE_EPSILON) {
-                market.best_ask
-            } else {
-                None
-            };
-
-            let depth_changed = match (prev_market.and_then(|m| m.depth.as_ref()), market.depth.as_ref()) {
-                (Some(prev_depth), Some(next_depth)) => prev_depth != next_depth,
-                (None, Some(_)) | (Some(_), None) => true,
-                (None, None) => false,
-            };
-            let depth = if depth_changed { market.depth.clone() } else { None };
-
-            if volume_delta.abs() < MARKET_VOLUME_EPSILON
-                && mid_delta.is_none()
-                && spread_delta.is_none()
-                && best_bid.is_none()
-                && best_ask.is_none()
-                && depth.is_none()
-            {
-                None
-            } else {
-                Some(MarketDelta {
-                    market_id: market.market_id.clone(),
-                    mid_price_delta: mid_delta,
-                    spread_delta,
-                    volume_delta,
-                    best_bid,
-                    best_ask,
-                    depth,
-                })
-            }
-        })
-        .collect()
-}
-
-fn opt_differs(prev: Option<f64>, next: Option<f64>, eps: f64) -> bool {
-    match (prev, next) {
-        (Some(a), Some(b)) => (a - b).abs() > eps,
-        (None, Some(_)) | (Some(_), None) => true,
-        (None, None) => false,
-    }
-}
