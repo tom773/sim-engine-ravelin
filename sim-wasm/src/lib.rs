@@ -8,6 +8,8 @@ use arrow::record_batch::RecordBatch;
 use chrono::Utc;
 #[cfg(target_arch = "wasm32")]
 use console_error_panic_hook;
+#[cfg(target_arch = "wasm32")]
+use engine_v3::scheduler::{TickExecutionResult, TickStep};
 use engine_v3::{Scenario, SimulationEngine};
 #[cfg(target_arch = "wasm32")]
 use js_sys::{Date, Uint8Array};
@@ -18,9 +20,11 @@ use serde::Serialize;
 use serde_wasm_bindgen::to_value;
 use sim_core::types::events::TickEventSummary;
 use sim_core::types::state::TickRecord;
+#[cfg(target_arch = "wasm32")]
+use sim_mirror::DigestPhaseTiming;
 use sim_mirror::{
-    BehaviourDigest, BehaviourTickDigest, DigestEvent, MirrorHandle, StateDigest, StateSnapshot, TickDetailDigest,
-    build_state_digest,
+    BehaviourDigest, BehaviourTickDigest, DigestEvent, DigestTimings, MirrorHandle, StateDigest, StateSnapshot,
+    TickDetailDigest, build_state_digest, build_state_digest_with_metrics,
 };
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
@@ -36,10 +40,21 @@ struct MirrorStatus {
     tick_interval_ms: u32,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct StepMetrics {
     run_tick_ms: f64,
     digest_build_ms: f64,
+    #[cfg(target_arch = "wasm32")]
+    digest_phases: Vec<DigestPhaseTiming>,
+    #[cfg(target_arch = "wasm32")]
+    engine_phases: Vec<EnginePhaseTiming>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Debug, Default)]
+struct EnginePhaseTiming {
+    step: String,
+    duration_ms: f64,
 }
 
 struct StepOutcome {
@@ -109,20 +124,38 @@ impl EngineCtx {
         if self.engine.state.ticknum >= self.engine.state.config.iterations {
             let reset_start = StepTimer::start();
             let digest = self.reset();
-            let metrics = StepMetrics { run_tick_ms: 0.0, digest_build_ms: reset_start.elapsed_ms() };
+            let metrics = StepMetrics {
+                run_tick_ms: 0.0,
+                digest_build_ms: reset_start.elapsed_ms(),
+                #[cfg(target_arch = "wasm32")]
+                digest_phases: Vec::new(),
+                #[cfg(target_arch = "wasm32")]
+                engine_phases: Vec::new(),
+            };
             return Ok(StepOutcome { digest, metrics, was_reset: true });
         }
 
-        let tick_start = StepTimer::start();
-        let (_result, events) = self.engine.run_tick(&mut self.rng);
+        let (execution_result, events) = self.engine.run_tick(&mut self.rng);
         prune_history(&mut self.engine);
-        let run_tick_ms = tick_start.elapsed_ms();
+        let run_tick_ms = execution_result.total_duration.as_secs_f64() * 1_000.0;
 
-        let digest_start = StepTimer::start();
-        let digest = build_state_digest(&self.engine, &events);
-        let digest_build_ms = digest_start.elapsed_ms();
+        let (digest, phases) = build_state_digest_with_metrics(&self.engine, &events);
+        #[cfg(target_arch = "wasm32")]
+        let digest_phases = phases;
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = phases;
+        #[cfg(target_arch = "wasm32")]
+        let engine_phases = collect_engine_phases(&execution_result);
+        let digest_build_ms = digest.timings.build_duration_ms;
 
-        let metrics = StepMetrics { run_tick_ms, digest_build_ms };
+        let metrics = StepMetrics {
+            run_tick_ms,
+            digest_build_ms,
+            #[cfg(target_arch = "wasm32")]
+            digest_phases,
+            #[cfg(target_arch = "wasm32")]
+            engine_phases,
+        };
         Ok(StepOutcome { digest, metrics, was_reset: false })
     }
 }
@@ -211,7 +244,7 @@ impl WasmMirror {
         let mut digest = outcome.digest;
         digest.timings.generated_at = Utc::now();
         digest.highlights.push(DigestEvent::info("sim-wasm", format!("Tick {} completed", digest.tick)));
-        self.log_step_metrics(digest.tick, outcome.metrics, outcome.was_reset);
+        self.log_step_metrics(digest.tick, &outcome.metrics, &digest.timings, outcome.was_reset);
         self.publish_snapshot(digest)
     }
 
@@ -268,7 +301,7 @@ impl WasmMirror {
         encode_snapshot(snapshot.as_ref())
     }
 
-    fn log_step_metrics(&self, tick: u32, metrics: StepMetrics, was_reset: bool) {
+    fn log_step_metrics(&self, tick: u32, metrics: &StepMetrics, timings: &DigestTimings, was_reset: bool) {
         #[cfg(target_arch = "wasm32")]
         {
             let label = if was_reset { "reset" } else { "step" };
@@ -278,13 +311,75 @@ impl WasmMirror {
                 metrics.digest_build_ms,
                 metrics.run_tick_ms + metrics.digest_build_ms
             );
-            web_sys::console::log_1(&JsValue::from_str(&message));
+            let digest_details = metrics
+                .digest_phases
+                .iter()
+                .map(|phase| format!("{}={:.2}ms", phase.phase, phase.duration_ms))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let engine_details = metrics
+                .engine_phases
+                .iter()
+                .map(|phase| format!("{}={:.2}ms", phase.step, phase.duration_ms))
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            let mut extended = message;
+            if !digest_details.is_empty() {
+                extended = format!("{extended} digest=[{digest_details}]");
+            }
+            if !engine_details.is_empty() {
+                extended = format!("{extended} engine=[{engine_details}]");
+            }
+
+            web_sys::console::log_1(&JsValue::from_str(&extended));
         }
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let _ = (tick, metrics.run_tick_ms, metrics.digest_build_ms, was_reset);
+            let _ = (tick, metrics.run_tick_ms, metrics.digest_build_ms, timings, was_reset);
         }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn collect_engine_phases(result: &TickExecutionResult) -> Vec<EnginePhaseTiming> {
+    let mut phases: Vec<EnginePhaseTiming> = TickStep::all()
+        .into_iter()
+        .filter_map(|step| {
+            result.step_results.get(&step).map(|step_result| EnginePhaseTiming {
+                step: tick_step_label(step).to_string(),
+                duration_ms: step_result.duration_ms as f64,
+            })
+        })
+        .collect();
+
+    phases.sort_by(|a, b| b.duration_ms.partial_cmp(&a.duration_ms).unwrap_or(std::cmp::Ordering::Equal));
+    phases
+}
+
+#[cfg(target_arch = "wasm32")]
+fn tick_step_label(step: TickStep) -> &'static str {
+    use TickStep::*;
+    match step {
+        Upkeep => "upkeep",
+        GatherIntentions => "gather_intentions",
+        ResolveIndependentPhase => "resolve_independent",
+        ResolveMarketPhase => "resolve_market",
+        ApplyMarketEffectsForPriceDiscovery => "apply_market_effects",
+        ResolveDependentPhase => "resolve_dependent",
+        Auction => "auction",
+        ClearMarkets => "clear_markets",
+        ClearOvernightMarkets => "clear_overnight",
+        SettleTrades => "settle_trades",
+        ServiceDeposits => "service_deposits",
+        ServiceGovernmentDebt => "service_government_debt",
+        ServiceCredit => "service_credit",
+        ApplyPaymentQueuing => "apply_payment_queuing",
+        RunRTGS => "run_rtgs",
+        ReconcileCredit => "reconcile_credit",
+        ApplyAllEffects => "apply_all_effects",
+        UpdateHistory => "update_history",
     }
 }
 

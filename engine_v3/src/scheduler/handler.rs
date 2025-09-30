@@ -613,17 +613,17 @@ impl StepHandler for UpdateHistoryHandler {
             let snapshots = context.market_snapshots_ref();
             engine.update_market_history(trades, snapshots);
             engine.refresh_pricing_feeds();
-            let action_to_effect_indices: StdHashMap<usize, Vec<usize>> =
-                context.action_to_effect_indices_ref().iter().map(|(k, v)| (*k, v.clone())).collect();
+            let action_to_effect_indices =
+                context.take_action_to_effect_indices().into_iter().collect::<StdHashMap<_, _>>();
 
             let tick_record = TickRecord {
                 tick_number: engine.state.ticknum,
                 date: engine.state.current_date,
-                intentions: context.intentions_slice().to_vec(),
-                actions: context.actions().to_vec(),
-                effects: context.effects().to_vec(),
+                intentions: context.take_intentions(),
+                actions: context.take_actions(),
+                effects: context.take_effects(),
                 action_to_effect_indices,
-                trades: trades.to_vec(),
+                trades: context.take_trades(),
                 events: engine.event_log.clone(),
             };
             engine.state.history.add_tick_record(tick_record);

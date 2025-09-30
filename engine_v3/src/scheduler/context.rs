@@ -4,6 +4,7 @@ use domains::ResolutionPhase;
 use sim_core::*;
 use smallvec::SmallVec;
 use std::collections::HashMap as StdHashMap;
+use std::mem;
 
 #[derive(Debug)]
 pub struct StepContext {
@@ -61,6 +62,10 @@ impl StepContext {
         self.intentions.as_ref().map(|s| s.as_slice()).unwrap_or(&[])
     }
 
+    pub fn take_intentions(&mut self) -> Vec<SimIntention> {
+        self.intentions.take().map(SmallVec::into_vec).unwrap_or_default()
+    }
+
     pub fn get_intentions(&self) -> Result<Vec<SimIntention>, String> {
         self.intentions.as_ref().map(|s| s.clone().into_vec()).ok_or_else(|| "No intentions stored".to_string())
     }
@@ -85,6 +90,10 @@ impl StepContext {
         self.all_actions.len()
     }
 
+    pub fn take_actions(&mut self) -> Vec<ActionRecord> {
+        mem::take(&mut self.all_actions).into_vec()
+    }
+
     pub fn set_all_effects(&mut self, effects: Vec<StateEffect>) {
         self.all_effects = SmallVec::from_vec(effects);
     }
@@ -105,6 +114,10 @@ impl StepContext {
         self.all_effects.len()
     }
 
+    pub fn take_effects(&mut self) -> Vec<StateEffect> {
+        mem::take(&mut self.all_effects).into_vec()
+    }
+
     pub fn set_action_to_effect_indices(&mut self, mapping: AHashMap<usize, Vec<usize>>) {
         self.action_to_effect_indices = mapping;
     }
@@ -121,6 +134,10 @@ impl StepContext {
         &mut self.action_to_effect_indices
     }
 
+    pub fn take_action_to_effect_indices(&mut self) -> AHashMap<usize, Vec<usize>> {
+        mem::take(&mut self.action_to_effect_indices)
+    }
+
     pub fn set_trades(&mut self, trades: Vec<Trade>) {
         self.trades = SmallVec::from_vec(trades);
     }
@@ -135,6 +152,10 @@ impl StepContext {
 
     pub fn trades_mut(&mut self) -> &mut SmallVec<[Trade; 16]> {
         &mut self.trades
+    }
+
+    pub fn take_trades(&mut self) -> Vec<Trade> {
+        mem::take(&mut self.trades).into_vec()
     }
 
     pub fn set_market_snapshots(&mut self, snapshots: StdHashMap<Symbol, MarketView>) {

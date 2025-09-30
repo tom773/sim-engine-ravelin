@@ -3,8 +3,8 @@ use super::agent_digest::{
     credit_rating_label_opt, sanitize_f64,
 };
 use super::market_digest::{
-    DepthDigest, MARKET_SNAPSHOT_LIMIT, MarketInfrastructureDigest, MarketsDigest, OmoActionDigest,
-    build_market_infrastructure, compute_markets, diff_markets,
+    DepthDigest, MarketInfrastructureDigest, MarketsDigest, OmoActionDigest, build_market_infrastructure,
+    compute_markets, diff_markets,
 };
 use chrono::{DateTime, Utc};
 use engine_v3::SimulationEngine;
@@ -102,6 +102,12 @@ impl DigestTimings {
     fn bootstrap() -> Self {
         Self { generated_at: Utc::now(), build_duration_ms: 0.0 }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DigestPhaseTiming {
+    pub phase: String,
+    pub duration_ms: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -445,24 +451,37 @@ pub struct MetadataDigest {
 
 #[instrument(skip(engine, events))]
 pub fn build_state_digest(engine: &SimulationEngine, events: &[SimEvent]) -> StateDigest {
+    let (digest, _) = build_state_digest_with_metrics(engine, events);
+    digest
+}
+
+#[instrument(skip(engine, events))]
+pub fn build_state_digest_with_metrics(
+    engine: &SimulationEngine, events: &[SimEvent],
+) -> (StateDigest, Vec<DigestPhaseTiming>) {
     #[cfg(target_arch = "wasm32")]
     let build_start = Date::now();
     #[cfg(not(target_arch = "wasm32"))]
     let build_start = Instant::now();
 
-    let status = compute_status(engine);
-    let agents = compute_agents(engine, AGENT_LEADERBOARD_LIMIT);
-    let mut markets = compute_markets(&engine.state, MARKET_SNAPSHOT_LIMIT);
-    let instruments = build_instrument_registry(&engine.state.financial_system);
-    let infrastructure = build_market_infrastructure(&engine.state, &markets, &instruments);
+    let mut profiler = DigestProfiler::new();
+
+    let status = profiler.time("status", || compute_status(engine));
+    let agents = profiler.time("agents", || compute_agents(engine, AGENT_LEADERBOARD_LIMIT));
+    let mut markets = profiler.time("markets", || compute_markets(&engine.state));
+    let instruments =
+        profiler.time("instrument_registry", || build_instrument_registry(&engine.state.financial_system));
+    let infrastructure =
+        profiler.time("market_infrastructure", || build_market_infrastructure(&engine.state, &markets, &instruments));
     if !infrastructure.listings.is_empty() || !infrastructure.omo_actions.is_empty() {
         markets.infrastructure = Some(infrastructure);
     }
 
-    let risk = compute_risk(&engine.state.financial_system);
-    let behaviour = build_behaviour_digest(engine, events);
-    let metadata = build_metadata_digest(engine, &agents, markets.infrastructure.as_ref(), &instruments);
-    let highlights = build_highlights(&engine.state, &markets, events);
+    let risk = profiler.time("risk", || compute_risk(&engine.state.financial_system));
+    let behaviour = profiler.time("behaviour", || build_behaviour_digest(engine, events));
+    let metadata = profiler
+        .time("metadata", || build_metadata_digest(engine, &agents, markets.infrastructure.as_ref(), &instruments));
+    let highlights = profiler.time("highlights", || build_highlights(&engine.state, &markets, events));
 
     #[cfg(target_arch = "wasm32")]
     let build_duration_ms = Date::now() - build_start;
@@ -470,6 +489,7 @@ pub fn build_state_digest(engine: &SimulationEngine, events: &[SimEvent]) -> Sta
     let build_duration_ms = build_start.elapsed().as_secs_f64() * 1_000.0;
 
     let timings = DigestTimings { generated_at: Utc::now(), build_duration_ms };
+    let phases = profiler.finish();
 
     histogram!("mirror.digest.build_ms", timings.build_duration_ms);
     histogram!("mirror.digest.snapshot.size", (agents.leaderboard.len() + markets.snapshots.len()) as f64);
@@ -490,7 +510,7 @@ pub fn build_state_digest(engine: &SimulationEngine, events: &[SimEvent]) -> Sta
         Some(metadata)
     };
 
-    StateDigest {
+    let digest = StateDigest {
         tick: engine.state.ticknum,
         sim_time: SimTimeDigest {
             current_date: engine.state.current_date.format("%Y-%m-%d").to_string(),
@@ -505,6 +525,65 @@ pub fn build_state_digest(engine: &SimulationEngine, events: &[SimEvent]) -> Sta
         instruments: instruments_opt,
         behaviour: behaviour_opt,
         metadata: metadata_opt,
+    };
+
+    (digest, phases)
+}
+
+struct DigestProfiler {
+    phases: Vec<DigestPhaseTiming>,
+}
+
+impl DigestProfiler {
+    fn new() -> Self {
+        Self { phases: Vec::new() }
+    }
+
+    fn time<T, F>(&mut self, phase: &'static str, op: F) -> T
+    where
+        F: FnOnce() -> T,
+    {
+        let timer = PhaseTimer::start();
+        let result = op();
+        let duration_ms = timer.elapsed_ms();
+        self.phases.push(DigestPhaseTiming { phase: phase.to_string(), duration_ms });
+        result
+    }
+
+    fn finish(self) -> Vec<DigestPhaseTiming> {
+        self.phases
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+struct PhaseTimer {
+    start_ms: f64,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl PhaseTimer {
+    fn start() -> Self {
+        Self { start_ms: Date::now() }
+    }
+
+    fn elapsed_ms(&self) -> f64 {
+        Date::now() - self.start_ms
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct PhaseTimer {
+    start: Instant,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl PhaseTimer {
+    fn start() -> Self {
+        Self { start: Instant::now() }
+    }
+
+    fn elapsed_ms(&self) -> f64 {
+        self.start.elapsed().as_secs_f64() * 1_000.0
     }
 }
 

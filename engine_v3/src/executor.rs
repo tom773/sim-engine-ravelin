@@ -95,9 +95,6 @@ impl SimulationEngine {
 
     pub fn run_tick(&mut self, rng: &mut dyn RngCore) -> (TickExecutionResult, Vec<SimEvent>) {
         self.event_log.clear();
-        if self.tick_logging_enabled {
-            tracing::info!(tick = self.state.ticknum, date = %self.state.current_date, "tick start");
-        }
         let scheduler = std::mem::take(&mut self.scheduler);
         let execution_result = scheduler.execute_tick(self, rng);
         self.scheduler = scheduler;
@@ -106,8 +103,34 @@ impl SimulationEngine {
         if execution_result.success {
             self.state.ticknum += 1;
         }
-        tracing::warn!("Failed Steps: {:?}", execution_result.failed_steps);
-        tracing::info!("Tick Completed in {:?} ms", execution_result.total_duration);
+        if self.tick_logging_enabled {
+            let total_ms = execution_result.total_duration.as_secs_f64() * 1_000.0;
+            let phase_summary = TickStep::all()
+                .into_iter()
+                .filter_map(|step| {
+                    execution_result
+                        .step_results
+                        .get(&step)
+                        .map(|result| format!("{}={}ms", tick_step_label(step), result.duration_ms))
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            if !execution_result.failed_steps.is_empty() {
+                tracing::warn!(
+                    tick = execution_result.tick_number,
+                    ?execution_result.failed_steps,
+                    "tick encountered failures"
+                );
+            }
+
+            tracing::info!(
+                tick = execution_result.tick_number,
+                total_ms,
+                phases = phase_summary,
+                "tick execution timings"
+            );
+        }
         (execution_result, std::mem::take(&mut self.event_log))
     }
     pub fn run_day(&mut self, rng: &mut dyn rand::RngCore) -> (Vec<TickExecutionResult>, Vec<SimEvent>) {
@@ -487,9 +510,40 @@ impl SimulationEngine {
         let current_date = self.state.current_date;
         let history = &mut self.state.history;
 
+        #[derive(Default)]
+        struct TradeAccumulator {
+            open: Option<f64>,
+            high: Option<f64>,
+            low: Option<f64>,
+            close: Option<f64>,
+            last_qty: Option<f64>,
+            volume: f64,
+            turnover: f64,
+        }
+
+        impl TradeAccumulator {
+            fn record(&mut self, trade: &Trade) {
+                let price = trade.price.to_f64();
+                if self.open.is_none() {
+                    self.open = Some(price);
+                }
+                self.close = Some(price);
+                self.high = Some(self.high.map_or(price, |existing| existing.max(price)));
+                self.low = Some(self.low.map_or(price, |existing| existing.min(price)));
+                self.last_qty = Some(trade.quantity);
+                self.volume += trade.quantity;
+                self.turnover += price * trade.quantity;
+            }
+        }
+
+        let mut trade_stats: AHashMap<Symbol, TradeAccumulator> = AHashMap::new();
+        for trade in trades {
+            trade_stats.entry(trade.market_id.clone()).or_default().record(trade);
+        }
+
         for (symbol, snapshot) in views {
-            let market_trades: Vec<&Trade> = trades.iter().filter(|t| &t.market_id == symbol).collect();
-            let close = market_trades.last().map(|t| t.price.to_f64()).or(snapshot.last);
+            let stats = trade_stats.get(symbol);
+            let close = stats.and_then(|s| s.close).or(snapshot.last);
 
             let (best_bid, best_ask) = match self.state.financial_system.exchange.markets.get(symbol) {
                 Some(MarketType::Financial(m)) => {
@@ -501,20 +555,16 @@ impl SimulationEngine {
                 _ => (None, None),
             };
 
-            let prices = market_trades.iter().map(|t| t.price);
-            let qty_today: f64 = market_trades.iter().map(|t| t.quantity).sum();
-            let trn_today: f64 = market_trades.iter().map(|t| t.price.to_f64() * t.quantity).sum();
-
             let tick = MarketTick {
                 date: current_date,
-                open: market_trades.first().map(|t| t.price.to_f64()),
-                high: prices.clone().max().map(|m| m.to_f64()),
-                low: prices.min().map(|m| m.to_f64()),
+                open: stats.and_then(|s| s.open),
+                high: stats.and_then(|s| s.high),
+                low: stats.and_then(|s| s.low),
                 close,
-                volume: qty_today,
-                turnover: trn_today,
+                volume: stats.map_or(0.0, |s| s.volume),
+                turnover: stats.map_or(0.0, |s| s.turnover),
                 last_price: close,
-                last_qty: market_trades.last().map(|t| t.quantity),
+                last_qty: stats.and_then(|s| s.last_qty),
                 best_bid,
                 best_ask,
                 spread: best_bid.zip(best_ask).map(|(b, a)| (a - b).max(0.0)),
@@ -646,16 +696,13 @@ impl SimulationEngine {
         }
 
         let mut sales_per_day: AHashMap<GoodId, f64> = AHashMap::new();
-        let ticks = self.state.history.market_ticks.clone();
-        for (symbol, ticks) in &ticks {
+        for (symbol, ticks) in &self.state.history.market_ticks {
             if let Some(gid) = self.state.financial_system.exchange.symbol_to_good.get(symbol) {
                 let mut cnt = 0usize;
                 let mut vol = 0.0;
                 for t in ticks.iter().rev().take(7) {
-                    if let Some(v) = Some(t.volume) {
-                        vol += v;
-                        cnt += 1;
-                    }
+                    vol += t.volume;
+                    cnt += 1;
                 }
                 let avg = if cnt > 0 { vol / cnt as f64 } else { 0.0 };
                 sales_per_day.insert(*gid, avg);
@@ -683,6 +730,30 @@ impl SimulationEngine {
                 );
             }
         }
+    }
+}
+
+fn tick_step_label(step: TickStep) -> &'static str {
+    use TickStep::*;
+    match step {
+        Upkeep => "upkeep",
+        GatherIntentions => "gather_intentions",
+        ResolveIndependentPhase => "resolve_independent",
+        ResolveMarketPhase => "resolve_market",
+        ApplyMarketEffectsForPriceDiscovery => "apply_market_effects",
+        ResolveDependentPhase => "resolve_dependent",
+        Auction => "auction",
+        ClearMarkets => "clear_markets",
+        ClearOvernightMarkets => "clear_overnight",
+        SettleTrades => "settle_trades",
+        ServiceDeposits => "service_deposits",
+        ServiceGovernmentDebt => "service_government_debt",
+        ServiceCredit => "service_credit",
+        ApplyPaymentQueuing => "apply_payment_queuing",
+        RunRTGS => "run_rtgs",
+        ReconcileCredit => "reconcile_credit",
+        ApplyAllEffects => "apply_all_effects",
+        UpdateHistory => "update_history",
     }
 }
 

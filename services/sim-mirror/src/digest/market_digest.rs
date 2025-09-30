@@ -11,7 +11,6 @@ use uuid::Uuid;
 use super::agent_digest::instrument_label;
 use super::state_digest::{InstrumentRegistryDigest, MarketDelta, rate_to_f64};
 
-pub(crate) const MARKET_SNAPSHOT_LIMIT: usize = 12;
 pub(crate) const ORDERBOOK_DEPTH_LEVELS: usize = 10;
 pub(crate) const OMO_HISTORY_LIMIT: usize = 25;
 pub(crate) const MARKET_VOLUME_EPSILON: f64 = 1.0;
@@ -81,6 +80,10 @@ pub struct MarketDigest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub yield_mid_bps: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub yield_bid_bps: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub yield_ask_bps: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub yield_last_bps: Option<f64>,
 }
 
@@ -113,7 +116,7 @@ pub struct DepthLevel {
     pub quantity: f64,
 }
 
-pub(crate) fn compute_markets(state: &SimState, limit: usize) -> MarketsDigest {
+pub(crate) fn compute_markets(state: &SimState) -> MarketsDigest {
     let mut snapshots: Vec<MarketDigest> = Vec::new();
 
     for (symbol, market) in &state.financial_system.exchange.markets {
@@ -121,7 +124,7 @@ pub(crate) fn compute_markets(state: &SimState, limit: usize) -> MarketsDigest {
             MarketType::Financial(fin_market) => {
                 let inst_id = &fin_market.key;
                 let view = state.market_view(symbol).unwrap_or_default();
-                let (yield_mid, yield_last) = calculate_yields(inst_id, fin_market);
+                let (yield_mid, yield_last, yield_bid, yield_ask) = calculate_yields(inst_id, fin_market);
                 let depth = depth_from_summary(fin_market.book.depth_summary(), ORDERBOOK_DEPTH_LEVELS);
                 let label = state
                     .financial_system
@@ -145,6 +148,8 @@ pub(crate) fn compute_markets(state: &SimState, limit: usize) -> MarketsDigest {
                     depth,
                     yield_mid_bps: yield_mid,
                     yield_last_bps: yield_last,
+                    yield_bid_bps: yield_bid,
+                    yield_ask_bps: yield_ask,
                 });
             }
             MarketType::Goods(goods_market) => {
@@ -172,6 +177,8 @@ pub(crate) fn compute_markets(state: &SimState, limit: usize) -> MarketsDigest {
                     depth,
                     yield_mid_bps: None,
                     yield_last_bps: None,
+                    yield_bid_bps: None,
+                    yield_ask_bps: None,
                 });
             }
             MarketType::Labour(_labour_market) => {
@@ -189,6 +196,8 @@ pub(crate) fn compute_markets(state: &SimState, limit: usize) -> MarketsDigest {
                     depth: None,
                     yield_mid_bps: None,
                     yield_last_bps: None,
+                    yield_bid_bps: None,
+                    yield_ask_bps: None,
                 });
             }
         }
@@ -196,12 +205,11 @@ pub(crate) fn compute_markets(state: &SimState, limit: usize) -> MarketsDigest {
 
     snapshots.sort_by(|a, b| b.volume.partial_cmp(&a.volume).unwrap_or(std::cmp::Ordering::Equal));
     let most_active: Vec<String> = snapshots.iter().take(5).map(|m| m.market_id.clone()).collect();
-    snapshots.truncate(limit);
 
     MarketsDigest { snapshots, most_active, infrastructure: None }
 }
 
-fn calculate_yields(inst_id: &InstrumentId, market: &MarketGeneric<FinancialProduct>) -> (Option<f64>, Option<f64>) {
+fn calculate_yields(inst_id: &InstrumentId, market: &MarketGeneric<FinancialProduct>) -> (Option<f64>, Option<f64>, Option<f64>, Option<f64>) {
     let mid = market
         .book
         .mid_price()
@@ -212,7 +220,17 @@ fn calculate_yields(inst_id: &InstrumentId, market: &MarketGeneric<FinancialProd
         .last_price
         .and_then(|price| market.pricer.yield_from_price(inst_id, price))
         .and_then(|r| r.to_f64());
-    (mid, last)
+    let bid = market
+        .book
+        .best_bid()
+        .and_then(|price| market.pricer.yield_from_price(inst_id, price))
+        .and_then(|r| r.to_f64());
+    let ask = market
+        .book
+        .best_ask()
+        .and_then(|price| market.pricer.yield_from_price(inst_id, price))
+        .and_then(|r| r.to_f64());
+    (mid, last, bid, ask)
 }
 
 fn depth_from_summary(summary: MarketDepthSummary, max_levels: usize) -> Option<DepthDigest> {

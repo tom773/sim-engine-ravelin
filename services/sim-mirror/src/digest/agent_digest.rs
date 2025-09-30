@@ -359,11 +359,7 @@ fn bond_label(bond: &BondState) -> String {
         parts.push(format!("Mat {}", bond.maturity_date.format("%Y-%m-%d")));
     }
 
-    if let Some(rate) = format_rate_bps(bond.archetype.coupon_rate_bps) {
-        parts.push(format!("{rate}"));
-    }
-
-    parts.join(" | ")
+    parts.join("")
 }
 
 fn credit_label(credit: &CreditState) -> String {

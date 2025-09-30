@@ -6,6 +6,7 @@ members = [
     "sim-wasm",
     "services/sim-mirror",
     "services/sim-api",
+    "services/sim-profiler",
 ]
 resolver = "3"
 
