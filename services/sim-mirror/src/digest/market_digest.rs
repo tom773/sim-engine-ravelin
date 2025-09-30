@@ -360,7 +360,9 @@ pub(crate) fn compute_markets(state: &SimState) -> MarketsDigest {
     MarketsDigest { snapshots, most_active, infrastructure: None }
 }
 
-fn calculate_yields(inst_id: &InstrumentId, market: &MarketGeneric<FinancialProduct>) -> (Option<f64>, Option<f64>, Option<f64>, Option<f64>) {
+fn calculate_yields(
+    inst_id: &InstrumentId, market: &MarketGeneric<FinancialProduct>,
+) -> (Option<f64>, Option<f64>, Option<f64>, Option<f64>) {
     let mid = market
         .book
         .mid_price()
@@ -595,8 +597,7 @@ fn build_csd_digest(csd: &sim_core::types::system::csd::CentralSecuritiesDeposit
 }
 
 fn build_rtgs_digest(
-    rtgs: &sim_core::types::system::rtgs_types::RtgsQueue,
-    policy: &sim_core::types::system::rtgs_types::RtgsPolicy,
+    rtgs: &sim_core::types::system::rtgs_types::RtgsQueue, policy: &sim_core::types::system::rtgs_types::RtgsPolicy,
 ) -> RtgsDigest {
     let pending_payments: Vec<PaymentDigest> = rtgs
         .pending
@@ -617,7 +618,6 @@ fn build_rtgs_digest(
         .settled
         .iter()
         .rev()
-        .take(50)
         .map(|p| PaymentDigest {
             payment_id: p.id.to_string(),
             from_bank: p.from_bank.0,
@@ -634,7 +634,6 @@ fn build_rtgs_digest(
         .rejected
         .iter()
         .rev()
-        .take(50)
         .map(|(p, reason)| RejectedPaymentDigest {
             payment: PaymentDigest {
                 payment_id: p.id.to_string(),
@@ -659,14 +658,15 @@ fn build_rtgs_digest(
     }
 }
 
-fn build_credit_registry_digest(registry: &sim_core::types::instrument::credit::CreditRegistry) -> CreditRegistryDigest {
+fn build_credit_registry_digest(
+    registry: &sim_core::types::instrument::credit::CreditRegistry,
+) -> CreditRegistryDigest {
     use sim_core::types::instrument::credit::ApplicationStatus;
 
     let pending_applications: Vec<LoanApplicationDigest> = registry
         .applications
         .values()
         .filter(|app| matches!(app.status, ApplicationStatus::Pending | ApplicationStatus::UnderReview))
-        .take(100)
         .map(|app| LoanApplicationDigest {
             application_id: app.application_id.to_string(),
             borrower_id: app.borrower_id.0,
@@ -680,7 +680,6 @@ fn build_credit_registry_digest(registry: &sim_core::types::instrument::credit::
     let active_facilities: Vec<CreditFacilityDigest> = registry
         .facilities
         .values()
-        .take(100)
         .map(|fac| {
             let utilization = if fac.state.commitment_amount > Money::ZERO {
                 (fac.state.drawn_amount / fac.state.commitment_amount).to_f64().unwrap_or(0.0)
@@ -705,7 +704,6 @@ fn build_credit_registry_digest(registry: &sim_core::types::instrument::credit::
     let active_loans: Vec<LoanDigest> = registry
         .loans
         .values()
-        .take(100)
         .map(|loan| LoanDigest {
             loan_id: loan.state.loan_id.to_string(),
             lender: loan.state.lender.0,
@@ -729,7 +727,9 @@ fn build_credit_registry_digest(registry: &sim_core::types::instrument::credit::
     }
 }
 
-fn build_overnight_markets_digest(markets: &sim_core::types::markets::overnight::OvernightFundingBooks) -> OvernightMarketsDigest {
+fn build_overnight_markets_digest(
+    markets: &sim_core::types::markets::overnight::OvernightFundingBooks,
+) -> OvernightMarketsDigest {
     let fedfunds_quotes: Vec<OvernightQuoteDigest> = markets
         .fedfunds_on
         .iter()
@@ -756,22 +756,15 @@ fn build_overnight_markets_digest(markets: &sim_core::types::markets::overnight:
         })
         .collect();
 
-    OvernightMarketsDigest {
-        fedfunds_quotes,
-        repo_quotes,
-    }
+    OvernightMarketsDigest { fedfunds_quotes, repo_quotes }
 }
 
 fn build_labour_markets_digest(exchange: &sim_core::types::markets::market::Exchange) -> LabourMarketsDigest {
     let markets: Vec<LabourMarketDigest> = exchange
         .labour_to_symbol
         .iter()
-        .map(|(labour_id, symbol)| LabourMarketDigest {
-            market_id: labour_id.to_string(),
-            symbol: symbol.to_string(),
-        })
+        .map(|(labour_id, symbol)| LabourMarketDigest { market_id: labour_id.to_string(), symbol: symbol.to_string() })
         .collect();
 
     LabourMarketsDigest { markets }
 }
-

@@ -5,12 +5,46 @@ use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum BankingAction {
-    PostInterbankLendingOffer { lender_id: AgentId, amount: f64, rate_bps: BasisPoints },
-    PostInterbankBorrowingRequest { borrower_id: AgentId, amount: f64, rate_bps: BasisPoints },
-    ExecuteInterbankLoan { lender_id: AgentId, borrower_id: AgentId, amount: f64, rate_bps: BasisPoints },
-    OriginateLoan { lender_id: AgentId, borrower_id: AgentId, loan_terms: LoanTerms, application_id: Uuid },
-    CreateLoanApplication { bank_id: AgentId, application: LoanApplication },
-    ProcessLoanApplication { bank_id: AgentId, application_id: Uuid, decision: LoanDecision },
+    PostInterbankLendingOffer {
+        lender_id: AgentId,
+        amount: f64,
+        rate_bps: BasisPoints,
+    },
+    PostInterbankBorrowingRequest {
+        borrower_id: AgentId,
+        amount: f64,
+        rate_bps: BasisPoints,
+    },
+    ExecuteInterbankLoan {
+        lender_id: AgentId,
+        borrower_id: AgentId,
+        amount: f64,
+        rate_bps: BasisPoints,
+    },
+    ExecuteRepoAgreement {
+        lender_id: AgentId,
+        borrower_id: AgentId,
+        amount: f64,
+        rate_bps: BasisPoints,
+        collateral_id: InstrumentId,
+        collateral_qty: f64,
+        haircut_pct: f64,
+    },
+    OriginateLoan {
+        lender_id: AgentId,
+        borrower_id: AgentId,
+        loan_terms: LoanTerms,
+        application_id: Uuid,
+    },
+    CreateLoanApplication {
+        bank_id: AgentId,
+        application: LoanApplication,
+    },
+    ProcessLoanApplication {
+        bank_id: AgentId,
+        application_id: Uuid,
+        decision: LoanDecision,
+    },
 }
 
 impl BankingAction {
@@ -19,6 +53,7 @@ impl BankingAction {
             BankingAction::PostInterbankLendingOffer { .. } => "PostInterbankLendingOffer",
             BankingAction::PostInterbankBorrowingRequest { .. } => "PostInterbankBorrowingRequest",
             BankingAction::ExecuteInterbankLoan { .. } => "ExecuteInterbankLoan",
+            BankingAction::ExecuteRepoAgreement { .. } => "ExecuteRepoAgreement",
             BankingAction::OriginateLoan { .. } => "OriginateLoan",
             BankingAction::CreateLoanApplication { .. } => "CreateLoanApplication",
             BankingAction::ProcessLoanApplication { .. } => "ProcessLoanApplication",
@@ -30,6 +65,7 @@ impl BankingAction {
             BankingAction::PostInterbankLendingOffer { lender_id, .. } => *lender_id,
             BankingAction::PostInterbankBorrowingRequest { borrower_id, .. } => *borrower_id,
             BankingAction::ExecuteInterbankLoan { lender_id, .. } => *lender_id,
+            BankingAction::ExecuteRepoAgreement { lender_id, .. } => *lender_id,
             BankingAction::OriginateLoan { lender_id, .. } => *lender_id,
             BankingAction::CreateLoanApplication { bank_id, .. } => *bank_id,
             BankingAction::ProcessLoanApplication { bank_id, .. } => *bank_id,
@@ -46,6 +82,7 @@ pub enum TransactionContext {
     GovTranseferPayment { recipient: AgentId, amount: f64 },
     CouponPayment { instrument_id: InstrumentId },
     PrincipalRepayment { instrument_id: InstrumentId },
+    InterbankLoan { loan_id: InstrumentId, lender: AgentId, borrower: AgentId },
     GenericTransfer { from: AgentId, to: AgentId, amount: f64 },
 }
 
@@ -59,6 +96,7 @@ impl TransactionContext {
             TransactionContext::GovTranseferPayment { .. } => "GovTranseferPayment",
             TransactionContext::CouponPayment { .. } => "CouponPayment",
             TransactionContext::PrincipalRepayment { .. } => "PrincipalRepayment",
+            TransactionContext::InterbankLoan { .. } => "InterbankLoan",
             TransactionContext::GenericTransfer { .. } => "GenericTransfer",
         }
     }

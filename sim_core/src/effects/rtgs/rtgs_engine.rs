@@ -7,6 +7,9 @@ pub fn run_rtgs(state: &mut SimState) -> Result<Vec<StateEffect>, EffectError> {
         return Ok(vec![]);
     }
 
+    state.financial_system.rtgs.settled.clear();
+    state.financial_system.rtgs.rejected.clear();
+
     let finalization_effects = match state.financial_system.rtgs_policy.mode {
         RtgsMode::PureRTGS => run_pure_rtgs(state)?,
         RtgsMode::LsmNetting => run_lsm_rtgs_with_effects(state)?,
@@ -18,6 +21,23 @@ pub fn run_rtgs(state: &mut SimState) -> Result<Vec<StateEffect>, EffectError> {
 fn run_pure_rtgs(state: &mut SimState) -> Result<Vec<StateEffect>, EffectError> {
     let current_tick = state.ticknum;
     let mut finalization_effects = Vec::new();
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        let interbank_count = state
+            .financial_system
+            .rtgs
+            .pending
+            .iter()
+            .filter(|p| matches!(p.context, TransactionContext::InterbankLoan { .. }))
+            .count();
+        if interbank_count > 0 {
+            web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(&format!(
+                "💳 RTGS queue has {} interbank loan payments to process",
+                interbank_count
+            )));
+        }
+    }
 
     state.financial_system.rtgs.pending.sort_by(|a, b| {
         use PaymentPriority::*;
@@ -59,6 +79,25 @@ fn run_pure_rtgs(state: &mut SimState) -> Result<Vec<StateEffect>, EffectError> 
                 }
                 StepDecision::Settle => {
                     let pi = state.financial_system.rtgs.pending.remove(i);
+
+                    if let TransactionContext::InterbankLoan { loan_id, lender, borrower } = pi.context {
+                        event!(Level::INFO,
+                            payment_id = %pi.id.to_string()[..8],
+                            loan_id = %loan_id.to_string()[..8],
+                            lender = ?lender,
+                            borrower = ?borrower,
+                            amount = %format!("${:.2}M", pi.amount / 1_000_000.0),
+                            "✅ RTGS settled interbank loan"
+                        );
+                        #[cfg(target_arch = "wasm32")]
+                        web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(&format!(
+                            "✅ RTGS settled interbank loan: {} -> {}, ${:.2}M",
+                            &lender.to_string()[..8],
+                            &borrower.to_string()[..8],
+                            pi.amount / 1_000_000.0
+                        )));
+                    }
+
                     apply_cash_movements_immediately(state, &pi)?;
 
                     if let TransactionContext::TradeSettlement { trade_id } = pi.context {

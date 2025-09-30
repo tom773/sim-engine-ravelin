@@ -1,3 +1,5 @@
+use crate::types::instrument::archetypes::{InstrumentArchetype, LifecycleRules, MarketProfile, ProductFamily};
+use crate::types::instrument::inst_registry::{InstrumentTemplate, LotQuantity, LotType, TemplateId};
 use crate::types::money::Money;
 use crate::types::system::balance_sheet::Position;
 use crate::*;
@@ -8,6 +10,7 @@ use uuid::Uuid;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum FinancialEffect {
     CreateInstrument { instrument: Instrument, creditor: AgentId, debtor: AgentId, quantity: f64 },
+    RedeemInstrument { instrument_id: InstrumentId },
     RecordTransaction(Transaction),
     RecordSettlementInstruction(SettlementInstruction),
     QueuePayment(PaymentInstruction),
@@ -25,6 +28,7 @@ impl FinancialEffect {
     pub fn name(&self) -> &'static str {
         match self {
             FinancialEffect::CreateInstrument { .. } => "CreateInstrument",
+            FinancialEffect::RedeemInstrument { .. } => "RedeemInstrument",
             FinancialEffect::RecordTransaction(_) => "RecordTransaction",
             FinancialEffect::RecordSettlementInstruction(_) => "RecordSettlementInstruction",
             FinancialEffect::DvPFinalize { .. } => "DvPFinalize",
@@ -49,9 +53,75 @@ impl StateEffectApplicator {
         match effect {
             FinancialEffect::CreateInstrument { instrument: inst, creditor, debtor, quantity } => {
                 let instrument_id = inst.instrument_id();
-                state.financial_system.instruments.instruments.insert(instrument_id, inst.clone());
-
                 let par_value = inst.unit_par_value().unwrap_or(Money::ONE);
+
+                if let InstrumentRuntime::Bond(bond_state) = inst.state() {
+                    let template_id = state
+                        .financial_system
+                        .instrument_registry
+                        .templates
+                        .iter()
+                        .find(|(_, t)| matches!(t.archetype, InstrumentArchetype::Bond(_)))
+                        .map(|(id, _)| *id)
+                        .unwrap_or_else(|| {
+                            let template = InstrumentTemplate {
+                                id: TemplateId(Uuid::new_v4()),
+                                product_family: ProductFamily::FixedIncome,
+                                archetype: InstrumentArchetype::Bond(bond_state.archetype.clone()),
+                                market_profile: MarketProfile::unlisted(),
+                                lifecycle_rules: LifecycleRules {
+                                    requires_authorization: false,
+                                    supports_partial_redemption: false,
+                                    accrual_method: None,
+                                    settlement_lag_days: 0,
+                                },
+                                created_date: state.current_date,
+                            };
+                            let id = template.id;
+                            state.financial_system.instrument_registry.register_template(template).ok();
+                            id
+                        });
+
+                    let series_id = state
+                        .financial_system
+                        .instrument_registry
+                        .ensure_bond_series(
+                            template_id,
+                            bond_state.issuer,
+                            bond_state.archetype.clone(),
+                            bond_state.issue_date,
+                            bond_state.maturity_date,
+                        )
+                        .map_err(|e| EffectError::FinancialSystemError(e))?;
+
+                    if *quantity > 0.0 {
+                        state
+                            .financial_system
+                            .instrument_registry
+                            .register_existing_lot(
+                                series_id,
+                                instrument_id,
+                                LotType::Fungible { lot_size: bond_state.archetype.face_value.to_f64() },
+                                LotQuantity::Units(*quantity),
+                            )
+                            .map_err(|e| EffectError::FinancialSystemError(e))?;
+                    }
+
+                    tracing::debug!(
+                        "Registered bond {} through registry: series {}, template {}",
+                        instrument_id,
+                        series_id,
+                        template_id
+                    );
+                } else {
+                    tracing::debug!(
+                        "Creating instrument {} bypassing registry (type: {})",
+                        instrument_id,
+                        inst.type_as_string()
+                    );
+                }
+
+                state.financial_system.instruments.instruments.insert(instrument_id, inst.clone());
 
                 if is_security(inst) {
                     state
@@ -68,6 +138,20 @@ impl StateEffectApplicator {
                             .csd
                             .credit_securities(*creditor, instrument_id, *quantity)
                             .map_err(|e| EffectError::FinancialSystemError(e.to_string()))?;
+
+                        let creditor_bs = state
+                            .financial_system
+                            .balance_sheets
+                            .entry(*creditor)
+                            .or_insert_with(|| BalanceSheet::new(*creditor));
+                        let creditor_pos = creditor_bs.assets.entry(instrument_id).or_insert_with(|| Position {
+                            quantity: 0.0,
+                            book_value_per_unit: par_value,
+                            cost_basis_per_unit: par_value,
+                        });
+                        creditor_pos.quantity += quantity;
+                        creditor_pos.book_value_per_unit = par_value;
+                        creditor_pos.cost_basis_per_unit = par_value;
                     }
 
                     let debtor_bs = state
@@ -84,19 +168,47 @@ impl StateEffectApplicator {
                     pos.book_value_per_unit = par_value;
                     pos.cost_basis_per_unit = par_value;
                 } else {
-                    let book_value = par_value; // deposits and other cash-like instruments use par-per-unit
-
                     if *quantity > 0.0 {
-                        state
-                            .financial_system
-                            .create_or_consolidate_position(
-                                creditor,
-                                debtor,
-                                &instrument_id,
-                                *quantity,
-                                book_value.to_f64(),
-                            )
-                            .map_err(EffectError::FinancialSystemError)?;
+                        {
+                            let creditor_bs = state
+                                .financial_system
+                                .balance_sheets
+                                .entry(*creditor)
+                                .or_insert_with(|| BalanceSheet::new(*creditor));
+                            let creditor_pos = creditor_bs.assets.entry(instrument_id).or_insert_with(|| Position {
+                                quantity: 0.0,
+                                book_value_per_unit: par_value,
+                                cost_basis_per_unit: par_value,
+                            });
+                            creditor_pos.quantity += quantity;
+                            creditor_pos.book_value_per_unit = par_value;
+                            creditor_pos.cost_basis_per_unit = par_value;
+                        }
+
+                        {
+                            let debtor_bs = state
+                                .financial_system
+                                .balance_sheets
+                                .entry(*debtor)
+                                .or_insert_with(|| BalanceSheet::new(*debtor));
+                            let debtor_pos = debtor_bs.liabilities.entry(instrument_id).or_insert_with(|| Position {
+                                quantity: 0.0,
+                                book_value_per_unit: par_value,
+                                cost_basis_per_unit: par_value,
+                            });
+                            debtor_pos.quantity += quantity;
+                            debtor_pos.book_value_per_unit = par_value;
+                            debtor_pos.cost_basis_per_unit = par_value;
+                        }
+
+                        tracing::debug!(
+                            "Created instrument {}: creditor {} asset position {:.2}, debtor {} liability position {:.2}",
+                            instrument_id,
+                            creditor,
+                            quantity,
+                            debtor,
+                            quantity
+                        );
                     }
                 }
 
@@ -105,6 +217,71 @@ impl StateEffectApplicator {
                     state.financial_system.exchange.ensure_listed(instrument_id, final_inst);
                 }
 
+                Ok(())
+            }
+
+            FinancialEffect::RedeemInstrument { instrument_id } => {
+                let mut agents_with_holdings = Vec::new();
+                for (agent_id, account) in &state.financial_system.clearing_house.csd.custody_accounts {
+                    if let Some(holding) = account.holdings.get(instrument_id) {
+                        let qty = holding.total_position();
+                        if qty > 1e-9 {
+                            agents_with_holdings.push((*agent_id, qty));
+                        }
+                    }
+                }
+
+                for (agent_id, qty) in agents_with_holdings {
+                    state.financial_system.clearing_house.csd.debit_securities(agent_id, *instrument_id, qty).map_err(
+                        |e| EffectError::InvalidState(format!("Failed to debit securities for {}: {}", agent_id, e)),
+                    )?;
+                    tracing::debug!("Debited {} units of {} from {} custody account", qty, instrument_id, agent_id);
+                }
+
+                let mut agents_with_liabilities = Vec::new();
+                for (agent_id, bs) in &state.financial_system.balance_sheets {
+                    if bs.liabilities.contains_key(instrument_id) {
+                        agents_with_liabilities.push(*agent_id);
+                    }
+                }
+
+                for agent_id in agents_with_liabilities {
+                    if let Some(bs) = state.financial_system.balance_sheets.get_mut(&agent_id) {
+                        bs.liabilities.remove(instrument_id);
+                        tracing::debug!("Removed {} from {} balance sheet liabilities", instrument_id, agent_id);
+                    }
+                }
+
+                let mut agents_with_assets = Vec::new();
+                for (agent_id, bs) in &state.financial_system.balance_sheets {
+                    if bs.assets.contains_key(instrument_id) {
+                        agents_with_assets.push(*agent_id);
+                    }
+                }
+
+                for agent_id in agents_with_assets {
+                    if let Some(bs) = state.financial_system.balance_sheets.get_mut(&agent_id) {
+                        bs.assets.remove(instrument_id);
+                        tracing::debug!("Removed {} from {} balance sheet assets", instrument_id, agent_id);
+                    }
+                }
+
+                if let Some(lot_status) = state.financial_system.instrument_registry.get_lot_status(instrument_id) {
+                    if lot_status != crate::types::instrument::inst_registry::LotStatus::Redeemed {
+                        state.financial_system.instrument_registry.redeem_lot(*instrument_id).map_err(|e| {
+                            EffectError::InvalidState(format!("Failed to redeem lot in registry: {}", e))
+                        })?;
+                        tracing::debug!("Redeemed lot {} from InstrumentRegistry", instrument_id);
+                    }
+                }
+
+                state
+                    .financial_system
+                    .instruments
+                    .redeem_instrument(*instrument_id)
+                    .map_err(|e| EffectError::InvalidState(format!("Failed to remove from catalog: {}", e)))?;
+
+                tracing::info!("Redeemed instrument: {}", instrument_id);
                 Ok(())
             }
 

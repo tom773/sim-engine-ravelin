@@ -61,6 +61,15 @@ impl InstrumentCatalog {
     }
 }
 
+impl InstrumentCatalog {
+    pub fn redeem_instrument(&mut self, instrument_id: InstrumentId) -> Result<(), String> {
+        self.instruments
+            .remove(&instrument_id)
+            .ok_or_else(|| format!("Instrument {:?} not found in catalog", instrument_id))?;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstrumentTemplate {
     pub id: TemplateId,
@@ -272,6 +281,45 @@ impl InstrumentRegistry {
         Ok(series_id)
     }
 
+    pub fn register_existing_lot(
+        &mut self, series_id: SeriesId, instrument_id: InstrumentId, lot_type: LotType, quantity: LotQuantity,
+    ) -> Result<(), String> {
+        if self.lots.contains_key(&instrument_id) {
+            return Ok(());
+        }
+
+        let series = self.series.get_mut(&series_id).ok_or_else(|| format!("Series {:?} not found", series_id))?;
+
+        let lot = InstrumentLot {
+            id: instrument_id,
+            series_id,
+            lot_type,
+            quantity: quantity.clone(),
+            creation_date: Utc::now().date_naive(),
+            status: LotStatus::Active,
+        };
+
+        match (&quantity, &series.archetype) {
+            (LotQuantity::Notional(amount), _) => {
+                series.outstanding.total_issued += *amount;
+                series.outstanding.total_outstanding += *amount;
+            }
+            (LotQuantity::Units(units), InstrumentArchetype::Bond(bond)) => {
+                let amount = bond.face_value * *units;
+                series.outstanding.total_issued += amount;
+                series.outstanding.total_outstanding += amount;
+            }
+            _ => {}
+        }
+
+        series.outstanding.last_activity_date = Utc::now().date_naive();
+
+        self.lots_by_series.entry(series_id).or_default().push(instrument_id);
+        self.lots.insert(instrument_id, lot);
+
+        Ok(())
+    }
+
     pub fn mint_lot(
         &mut self, series_id: SeriesId, lot_type: LotType, quantity: LotQuantity,
     ) -> Result<InstrumentId, String> {
@@ -339,5 +387,39 @@ impl InstrumentRegistry {
         };
 
         self.open_series(template_id, issuer, key, Some(InstrumentArchetype::Bond(archetype)), None, issuance)
+    }
+
+    pub fn redeem_lot(&mut self, lot_id: InstrumentId) -> Result<(), String> {
+        let lot = self.lots.get_mut(&lot_id).ok_or_else(|| format!("Lot {:?} not found", lot_id))?;
+
+        if lot.status == LotStatus::Redeemed {
+            return Err(format!("Lot {:?} is already redeemed", lot_id));
+        }
+
+        let series_id = lot.series_id;
+        lot.status = LotStatus::Redeemed;
+
+        let series = self.series.get_mut(&series_id).ok_or_else(|| format!("Series {:?} not found", series_id))?;
+
+        match (&lot.quantity, &series.archetype) {
+            (LotQuantity::Notional(amount), _) => {
+                series.outstanding.total_outstanding -= *amount;
+                series.outstanding.total_retired += *amount;
+            }
+            (LotQuantity::Units(units), InstrumentArchetype::Bond(bond)) => {
+                let amount = bond.face_value * *units;
+                series.outstanding.total_outstanding -= amount;
+                series.outstanding.total_retired += amount;
+            }
+            _ => {}
+        }
+
+        series.outstanding.last_activity_date = Utc::now().date_naive();
+
+        Ok(())
+    }
+
+    pub fn get_lot_status(&self, lot_id: &InstrumentId) -> Option<LotStatus> {
+        self.lots.get(lot_id).map(|lot| lot.status)
     }
 }

@@ -362,3 +362,100 @@ impl EquityBuilder {
         Instrument::new(self.identifiers, market_profile, self.listability, InstrumentRuntime::Equity(state))
     }
 }
+
+pub struct RepoBuilder {
+    identifiers: InstrumentIdentifiers,
+    market_profile: Option<MarketProfile>,
+    listability: Listability,
+    lender: AgentId,
+    borrower: AgentId,
+    collateral_id: InstrumentId,
+    collateral_quantity: f64,
+    cash_principal: Money,
+    interest_bps: BasisPoints,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+    haircut: Rate,
+    open_term: bool,
+}
+
+impl Instrument {
+    pub fn repo(
+        id: InstrumentId, lender: AgentId, borrower: AgentId, collateral_id: InstrumentId, collateral_quantity: f64,
+        cash_principal: Money, interest_bps: BasisPoints, start_date: NaiveDate, end_date: NaiveDate, haircut: Rate,
+    ) -> RepoBuilder {
+        RepoBuilder {
+            identifiers: InstrumentIdentifiers::new(id),
+            market_profile: None,
+            listability: Listability::Unlisted,
+            lender,
+            borrower,
+            collateral_id,
+            collateral_quantity,
+            cash_principal,
+            interest_bps,
+            start_date,
+            end_date,
+            haircut,
+            open_term: false,
+        }
+    }
+}
+
+impl RepoBuilder {
+    pub fn template(mut self, template_id: TemplateId) -> Self {
+        self.identifiers = self.identifiers.with_template(template_id);
+        self
+    }
+
+    pub fn series(mut self, series_id: SeriesId) -> Self {
+        self.identifiers = self.identifiers.with_series(series_id);
+        self
+    }
+
+    pub fn lot(mut self, lot_id: LotId) -> Self {
+        self.identifiers = self.identifiers.with_lot(lot_id);
+        self
+    }
+
+    pub fn open_term(mut self, open: bool) -> Self {
+        self.open_term = open;
+        self
+    }
+
+    pub fn market(mut self, market: InstrumentMarket) -> Self {
+        self.market_profile = Some(profile_for_market(market));
+        self
+    }
+
+    pub fn market_profile(mut self, profile: MarketProfile) -> Self {
+        self.market_profile = Some(profile);
+        self
+    }
+
+    pub fn listability(mut self, listability: Listability) -> Self {
+        self.listability = listability;
+        self
+    }
+
+    pub fn build(self) -> Instrument {
+        let market_profile = self
+            .market_profile
+            .unwrap_or_else(|| profile_for_market(InstrumentMarket::MoneyMarket(MoneyMarketSegment::Repo)));
+
+        let state = crate::types::instrument::instrument::RepoState {
+            lender: self.lender,
+            borrower: self.borrower,
+            collateral_id: self.collateral_id,
+            collateral_quantity: self.collateral_quantity,
+            cash_principal: self.cash_principal,
+            interest_bps: self.interest_bps,
+            start_date: self.start_date,
+            end_date: self.end_date,
+            haircut: self.haircut,
+            open_term: self.open_term,
+        };
+
+        Instrument::new(self.identifiers, market_profile, self.listability, InstrumentRuntime::Repo(state))
+    }
+}

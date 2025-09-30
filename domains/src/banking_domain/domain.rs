@@ -59,6 +59,24 @@ impl Domain for BankingDomain {
             BankingAction::ExecuteInterbankLoan { lender_id, borrower_id, amount, rate_bps } => {
                 self.execute_interbank_loan(*lender_id, *borrower_id, *amount, *rate_bps, state)
             }
+            BankingAction::ExecuteRepoAgreement {
+                lender_id,
+                borrower_id,
+                amount,
+                rate_bps,
+                collateral_id,
+                collateral_qty,
+                haircut_pct,
+            } => self.execute_repo_agreement(
+                *lender_id,
+                *borrower_id,
+                *amount,
+                *rate_bps,
+                *collateral_id,
+                *collateral_qty,
+                *haircut_pct,
+                state,
+            ),
             BankingAction::CreateLoanApplication { bank_id, application } => {
                 self.execute_create_loan_application(*bank_id, application.clone())
             }
@@ -92,6 +110,12 @@ impl BankingDomain {
             }
             BankingAction::ExecuteInterbankLoan { lender_id, borrower_id, amount, .. } => {
                 Validator::positive_amount(*amount)?;
+                Validator::bank_exists(*lender_id, state)?;
+                Validator::bank_exists(*borrower_id, state)
+            }
+            BankingAction::ExecuteRepoAgreement { lender_id, borrower_id, amount, collateral_qty, .. } => {
+                Validator::positive_amount(*amount)?;
+                Validator::positive_amount(*collateral_qty)?;
                 Validator::bank_exists(*lender_id, state)?;
                 Validator::bank_exists(*borrower_id, state)
             }
@@ -166,7 +190,7 @@ impl BankingDomain {
             maturity_date,
         )
         .coupon_bps(rate_bps)
-        .frequency(0)
+        .frequency(1)
         .rating(CreditRating::Corporate(SpCreditRating::A))
         .outstanding_units(1.0)
         .build()
@@ -193,11 +217,19 @@ impl BankingDomain {
             payer: lender_id,
             payee: borrower_id,
             amount,
-            context: TransactionContext::GenericTransfer { from: lender_id, to: borrower_id, amount },
+            context: TransactionContext::InterbankLoan { loan_id, lender: lender_id, borrower: borrower_id },
             priority: PaymentPriority::Urgent,
             earliest_release_tick: state.ticknum,
             deadline_tick: state.ticknum + 1,
         };
+
+        tracing::info!(
+            "Fed Funds loan: {} lends ${:.2}M to {} at {}bps, payment queued to RTGS",
+            lender_id,
+            amount / 1_000_000.0,
+            borrower_id,
+            rate_bps
+        );
 
         effects.push(StateEffect::Financial(FinancialEffect::QueuePayment(payment_instruction)));
 
@@ -214,6 +246,85 @@ impl BankingDomain {
 
         DomainResult::success(effects)
     }
+
+    fn execute_repo_agreement(
+        &self, lender_id: AgentId, borrower_id: AgentId, amount: f64, rate_bps: BasisPoints,
+        collateral_id: InstrumentId, collateral_qty: f64, haircut_pct: f64, state: &SimState,
+    ) -> DomainResult {
+        let current_date = state.current_date;
+        let maturity_date = current_date + chrono::Duration::days(1);
+
+        let cash_principal = Money::from_f64(amount.max(1.0)).unwrap_or_else(|| Money::from(1_u64));
+        let haircut_rate = rust_decimal::Decimal::from_f64_retain(haircut_pct / 100.0)
+            .unwrap_or_else(|| rust_decimal_macros::dec!(0.02));
+
+        let repo_instrument = Instrument::repo(
+            InstrumentId(Uuid::new_v4()),
+            lender_id,
+            borrower_id,
+            collateral_id,
+            collateral_qty,
+            cash_principal,
+            rate_bps,
+            current_date,
+            maturity_date,
+            haircut_rate,
+        )
+        .build();
+
+        let repo_id = repo_instrument.instrument_id();
+
+        let mut effects = vec![StateEffect::Financial(FinancialEffect::CreateInstrument {
+            instrument: repo_instrument,
+            creditor: lender_id,
+            debtor: borrower_id,
+            quantity: 1.0,
+        })];
+
+        let trade_id = Uuid::new_v4();
+        let settlement = SettlementInstruction {
+            instruction_id: Uuid::new_v4(),
+            trade_id,
+            seller: borrower_id,
+            buyer: lender_id,
+            instrument_id: collateral_id,
+            quantity: collateral_qty,
+            cash_amount: amount,
+            settlement_date: current_date,
+            status: SettlementStatus::Pending,
+        };
+
+        effects.push(StateEffect::Financial(FinancialEffect::RecordSettlementInstruction(settlement)));
+
+        let payment_instruction = PaymentInstruction {
+            id: Uuid::new_v4(),
+            from_bank: lender_id,
+            to_bank: borrower_id,
+            payer: lender_id,
+            payee: borrower_id,
+            amount,
+            context: TransactionContext::TradeSettlement { trade_id },
+            priority: PaymentPriority::Urgent,
+            earliest_release_tick: state.ticknum,
+            deadline_tick: state.ticknum + 1,
+        };
+
+        effects.push(StateEffect::Financial(FinancialEffect::QueuePayment(payment_instruction)));
+
+        effects.push(StateEffect::Financial(FinancialEffect::RecordTransaction(Transaction {
+            id: Uuid::new_v4(),
+            from_agent: lender_id,
+            to_agent: borrower_id,
+            amount,
+            transaction_type: "RepoAgreement".to_string(),
+            timestamp: current_date,
+            instrument_id: Some(repo_id),
+            ref_id: None,
+        })));
+
+        DomainResult::success(effects)
+    }
+
     fn execute_create_loan_application(&self, bank_id: AgentId, application: LoanApplication) -> DomainResult {
         DomainResult::success(vec![StateEffect::Credit(CreditEffect::RecordLoanApplication { bank_id, application })])
     }
@@ -240,8 +351,6 @@ impl BankingDomain {
             }
         }
     }
-
-    // domains/src/banking_domain/domain.rs
 
     fn execute_loan_origination(
         &self, lender_id: AgentId, borrower_id: AgentId, loan_terms: LoanTerms, application_id: Uuid, state: &SimState,
@@ -272,7 +381,6 @@ impl BankingDomain {
             _ => LoanType::TermLoan,
         };
 
-        // Determine if the borrower is a consumer from the agent registry
         let is_consumer = state.agents.consumers.contains_key(&borrower_id);
 
         let rating = if is_consumer {

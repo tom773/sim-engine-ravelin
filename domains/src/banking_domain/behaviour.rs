@@ -114,6 +114,7 @@ impl BasicBankDecisionModel {
             .sum::<f64>();
 
         let required_reserves = total_deposits * fs.central_bank.reserve_requirement;
+
         let desired_buffer = total_deposits * 0.02;
         let target_reserve_level = required_reserves + desired_buffer;
 
@@ -121,39 +122,83 @@ impl BasicBankDecisionModel {
         let reserve_surplus_or_shortfall = current_reserves - target_reserve_level;
 
         let policy_rate_bps = fs.central_bank.policy_rate_bps;
-        let acceptable_rate_range = 25.0;
-        let target_rate_bps = policy_rate_bps;
 
-        if reserve_surplus_or_shortfall < -1.0 {
+        let typical_spread = 15.0;
+
+        if reserve_surplus_or_shortfall < -100.0 {
             let amount_needed = -reserve_surplus_or_shortfall;
-            let borrow_rate = target_rate_bps + Decimal::from_f64(acceptable_rate_range / 2.0).unwrap_or_default();
+
+            let ff_borrow_rate = policy_rate_bps + Decimal::from_f64(typical_spread).unwrap_or_default();
             intentions.push(SimIntention::Banking(BankingIntention::PostOvernightFundingQuote {
                 quote: ONQuote {
                     venue: OvernightVenue::FedFundsON,
                     agent: bank.id,
                     side: ONQuoteSide::Borrow,
                     notional: amount_needed,
-                    limit_rate_bps: borrow_rate,
+                    limit_rate_bps: ff_borrow_rate,
                     haircut: None,
                     preferred_collateral: None,
-                    min_fill: 0.0,
+                    min_fill: 100.0, // Minimum $100 fill
                     ts: 0,
                 },
             }));
-        } else if reserve_surplus_or_shortfall > 1.0 {
+
+            let has_govt_bonds = bank_bs.assets.iter().any(|(inst_id, _)| {
+                fs.instruments.instruments.get(inst_id).map_or(false, |inst| {
+                    if let InstrumentRuntime::Bond(bond_state) = inst.state() {
+                        bond_state.bond_type() == BondType::Government
+                    } else {
+                        false
+                    }
+                })
+            });
+
+            if has_govt_bonds {
+                let repo_borrow_rate = policy_rate_bps + Decimal::from_f64(typical_spread + 5.0).unwrap_or_default();
+                intentions.push(SimIntention::Banking(BankingIntention::PostOvernightFundingQuote {
+                    quote: ONQuote {
+                        venue: OvernightVenue::RepoGC1D,
+                        agent: bank.id,
+                        side: ONQuoteSide::Borrow,
+                        notional: amount_needed,
+                        limit_rate_bps: repo_borrow_rate,
+                        haircut: Some(Decimal::from_f64(0.02).unwrap_or_default()), // 2% haircut
+                        preferred_collateral: None,                                 // Auto-select
+                        min_fill: 100.0,
+                        ts: 0,
+                    },
+                }));
+            }
+        } else if reserve_surplus_or_shortfall > 100.0 {
             let amount_to_lend = reserve_surplus_or_shortfall * 0.75;
+
             if amount_to_lend > 100.0 {
-                let lend_rate = target_rate_bps - Decimal::from_f64(acceptable_rate_range / 2.0).unwrap_or_default();
+                let ff_lend_rate = policy_rate_bps - Decimal::from_f64(typical_spread).unwrap_or_default();
                 intentions.push(SimIntention::Banking(BankingIntention::PostOvernightFundingQuote {
                     quote: ONQuote {
                         venue: OvernightVenue::FedFundsON,
                         agent: bank.id,
                         side: ONQuoteSide::Lend,
                         notional: amount_to_lend,
-                        limit_rate_bps: lend_rate,
+                        limit_rate_bps: ff_lend_rate,
                         haircut: None,
                         preferred_collateral: None,
-                        min_fill: 0.0,
+                        min_fill: 100.0,
+                        ts: 0,
+                    },
+                }));
+
+                let repo_lend_rate = policy_rate_bps - Decimal::from_f64(typical_spread - 5.0).unwrap_or_default();
+                intentions.push(SimIntention::Banking(BankingIntention::PostOvernightFundingQuote {
+                    quote: ONQuote {
+                        venue: OvernightVenue::RepoGC1D,
+                        agent: bank.id,
+                        side: ONQuoteSide::Lend,
+                        notional: amount_to_lend,
+                        limit_rate_bps: repo_lend_rate,
+                        haircut: Some(Decimal::from_f64(0.02).unwrap_or_default()),
+                        preferred_collateral: Some(vec![]), // Accept any govt bonds
+                        min_fill: 100.0,
                         ts: 0,
                     },
                 }));

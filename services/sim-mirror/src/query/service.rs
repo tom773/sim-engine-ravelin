@@ -1,6 +1,6 @@
 use crate::{
-    AgentsCatalogueDigest, DashboardDto, InstrumentRegistryDigest, MarketInfrastructureDigest,
-    MetadataDigest, MirrorHandle, StateDigest, StateSnapshot, StatusDigest,
+    AgentsCatalogueDigest, DashboardDto, InstrumentRegistryDigest, MarketInfrastructureDigest, MetadataDigest,
+    MirrorHandle, StateDigest, StateSnapshot, StatusDigest,
 };
 use crossbeam_channel::Receiver;
 use std::sync::Arc;

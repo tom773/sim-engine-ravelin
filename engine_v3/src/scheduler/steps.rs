@@ -15,6 +15,8 @@ pub enum TickStep {
     SettleTrades,
     ServiceDeposits,
     ServiceGovernmentDebt,
+    ServiceInterbankLoans,
+    ServiceRepos,
     ServiceCredit,
     ApplyPaymentQueuing,
     RunRTGS,
@@ -39,6 +41,8 @@ impl TickStep {
             SettleTrades,
             ServiceDeposits,
             ServiceGovernmentDebt,
+            ServiceInterbankLoans,
+            ServiceRepos,
             ServiceCredit,
             ApplyPaymentQueuing,
             RunRTGS,
@@ -63,7 +67,9 @@ impl TickStep {
             SettleTrades => vec![ClearMarkets],
             ServiceDeposits => vec![SettleTrades],
             ServiceGovernmentDebt => vec![SettleTrades],
-            ServiceCredit => vec![ServiceDeposits, ServiceGovernmentDebt],
+            ServiceInterbankLoans => vec![SettleTrades],
+            ServiceRepos => vec![SettleTrades],
+            ServiceCredit => vec![ServiceDeposits, ServiceGovernmentDebt, ServiceInterbankLoans, ServiceRepos],
             ApplyPaymentQueuing => vec![ServiceCredit],
             RunRTGS => vec![ApplyPaymentQueuing],
             ReconcileCredit => vec![RunRTGS],
@@ -152,7 +158,6 @@ impl StepTelemetry {
                         metrics::gauge!(metric_name, value);
                     }
                     StepMetricValue::Text(_) => {
-                        // textual metrics are not exported via metrics crate
                     }
                 }
             }
@@ -175,6 +180,8 @@ fn duration_metric_name(step: TickStep) -> &'static str {
         SettleTrades => "engine.step.settle_trades.duration_ms",
         ServiceDeposits => "engine.step.service_deposits.duration_ms",
         ServiceGovernmentDebt => "engine.step.service_government_debt.duration_ms",
+        ServiceInterbankLoans => "engine.step.service_interbank_loans.duration_ms",
+        ServiceRepos => "engine.step.service_repos.duration_ms",
         ServiceCredit => "engine.step.service_credit.duration_ms",
         ApplyPaymentQueuing => "engine.step.apply_payment_queuing.duration_ms",
         RunRTGS => "engine.step.run_rtgs.duration_ms",
@@ -199,6 +206,8 @@ fn failure_metric_name(step: TickStep) -> &'static str {
         SettleTrades => "engine.step.settle_trades.failures_total",
         ServiceDeposits => "engine.step.service_deposits.failures_total",
         ServiceGovernmentDebt => "engine.step.service_government_debt.failures_total",
+        ServiceInterbankLoans => "engine.step.service_interbank_loans.failures_total",
+        ServiceRepos => "engine.step.service_repos.failures_total",
         ServiceCredit => "engine.step.service_credit.failures_total",
         ApplyPaymentQueuing => "engine.step.apply_payment_queuing.failures_total",
         RunRTGS => "engine.step.run_rtgs.failures_total",
@@ -223,6 +232,8 @@ fn telemetry_metric_name(step: TickStep, metric: &str) -> Option<&'static str> {
         }
         (ClearMarkets, "trades_generated") => Some("engine.step.clear_markets.trades_generated"),
         (ServiceGovernmentDebt, "payments_generated") => Some("engine.step.service_government_debt.payments_generated"),
+        (ServiceInterbankLoans, "loans_matured") => Some("engine.step.service_interbank_loans.loans_matured"),
+        (ServiceRepos, "repos_matured") => Some("engine.step.service_repos.repos_matured"),
         (SettleTrades, "trades_processed") => Some("engine.step.settle_trades.trades_processed"),
         (SettleTrades, "settlement_effects") => Some("engine.step.settle_trades.settlement_effects"),
         (ReconcileCredit, "credit_effects") => Some("engine.step.reconcile_credit.credit_effects"),
@@ -238,6 +249,7 @@ fn telemetry_metric_name(step: TickStep, metric: &str) -> Option<&'static str> {
         (ClearOvernightMarkets, "fedfunds_cleared") => Some("engine.step.clear_overnight.fedfunds_cleared"),
         (ClearOvernightMarkets, "repos_cleared") => Some("engine.step.clear_overnight.repos_cleared"),
         (ServiceGovernmentDebt, _) => None,
+        (ServiceInterbankLoans, _) => None,
         _ => None,
     }
 }

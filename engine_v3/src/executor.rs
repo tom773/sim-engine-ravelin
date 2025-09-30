@@ -85,6 +85,8 @@ impl SimulationEngine {
         scheduler.register_handler(TickStep::ServiceCredit, CreditServicingHandler);
         scheduler.register_handler(TickStep::ServiceDeposits, DepositServicingHandler);
         scheduler.register_handler(TickStep::ServiceGovernmentDebt, GovCouponsHandler);
+        scheduler.register_handler(TickStep::ServiceInterbankLoans, InterbankLoanServicingHandler);
+        scheduler.register_handler(TickStep::ServiceRepos, RepoServicingHandler);
         scheduler.register_handler(TickStep::ApplyPaymentQueuing, ApplyPaymentQueuingHandler);
         scheduler.register_handler(TickStep::RunRTGS, RunRTGSHandler);
         scheduler.register_handler(TickStep::ReconcileCredit, CreditReconciliationHandler);
@@ -748,6 +750,8 @@ fn tick_step_label(step: TickStep) -> &'static str {
         SettleTrades => "settle_trades",
         ServiceDeposits => "service_deposits",
         ServiceGovernmentDebt => "service_government_debt",
+        ServiceInterbankLoans => "service_interbank_loans",
+        ServiceRepos => "service_repos",
         ServiceCredit => "service_credit",
         ApplyPaymentQueuing => "apply_payment_queuing",
         RunRTGS => "run_rtgs",

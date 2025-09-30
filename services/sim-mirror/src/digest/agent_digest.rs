@@ -17,7 +17,6 @@ use sim_core::types::system::{
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AgentsDigest {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -204,45 +203,31 @@ pub(crate) fn build_agent_entry(
     }
 }
 
-/// Determines if an instrument type should be aggregated
 fn should_aggregate_instrument_type(instrument_type: &str) -> bool {
     matches!(
         instrument_type,
-        "Cash"
-            | "Consumer Loan"
-            | "Corporate Loan"
-            | "Credit Card"
-            | "Trade Credit"
-            | "Credit Facility"
+        "Cash" | "Consumer Loan" | "Corporate Loan" | "Credit Card" | "Trade Credit" | "Credit Facility"
     )
 }
 
-/// Aggregates balance entries by instrument type and label
 fn aggregate_balance_entries(entries: Vec<BalanceEntryDigest>) -> Vec<BalanceEntryDigest> {
     let mut aggregatable: HashMap<(String, String), Vec<BalanceEntryDigest>> = HashMap::new();
     let mut non_aggregatable: Vec<BalanceEntryDigest> = Vec::new();
 
-    // Separate entries into aggregatable and non-aggregatable
     for entry in entries {
         if should_aggregate_instrument_type(&entry.instrument_type) {
-            aggregatable
-                .entry((entry.instrument_type.clone(), entry.label.clone()))
-                .or_default()
-                .push(entry);
+            aggregatable.entry((entry.instrument_type.clone(), entry.label.clone())).or_default().push(entry);
         } else {
             non_aggregatable.push(entry);
         }
     }
 
-    // Build aggregated entries
     let mut result = Vec::with_capacity(aggregatable.len() + non_aggregatable.len());
 
     for ((instrument_type, label), group) in aggregatable {
         if group.len() == 1 {
-            // Don't aggregate single entries
             result.push(group.into_iter().next().unwrap());
         } else {
-            // Aggregate multiple entries
             let count = group.len();
             let quantity: f64 = group.iter().map(|e| e.quantity).sum();
             let mark_to_market_value: f64 = group.iter().map(|e| e.mark_to_market_value).sum();
@@ -250,7 +235,6 @@ fn aggregate_balance_entries(entries: Vec<BalanceEntryDigest>) -> Vec<BalanceEnt
             let cost_basis: f64 = group.iter().map(|e| e.cost_basis).sum();
             let source = group.first().map(|e| e.source.clone()).unwrap_or_default();
 
-            // Create aggregated entry with a synthetic ID
             result.push(BalanceEntryDigest {
                 instrument_id: format!("aggregated_{}_{}", instrument_type, count),
                 instrument_type,
@@ -264,7 +248,6 @@ fn aggregate_balance_entries(entries: Vec<BalanceEntryDigest>) -> Vec<BalanceEnt
         }
     }
 
-    // Add non-aggregatable entries
     result.extend(non_aggregatable);
 
     result
@@ -301,7 +284,6 @@ pub(crate) fn build_balance_sheet(financial_system: &FinancialSystem, agent_id: 
         assets.push(balance_entry_from_custody(financial_system, &instrument_id, quantity));
     }
 
-    // Aggregate entries before sorting
     assets = aggregate_balance_entries(assets);
     liabilities = aggregate_balance_entries(liabilities);
 
@@ -765,5 +747,3 @@ pub(crate) fn credit_rating_label(rating: CreditRating) -> String {
 pub(crate) fn credit_rating_label_opt(rating: Option<CreditRating>) -> Option<String> {
     rating.map(credit_rating_label)
 }
-
-

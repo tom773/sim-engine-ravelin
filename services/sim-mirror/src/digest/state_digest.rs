@@ -1,18 +1,12 @@
-use super::agent_digest::{
-    AgentsDigest, compute_agents, credit_rating_label,
-    credit_rating_label_opt, sanitize_f64,
-};
-use super::market_digest::{
-    MarketInfrastructureDigest, MarketsDigest, build_market_infrastructure,
-    compute_markets,
-};
+use super::agent_digest::{AgentsDigest, compute_agents, credit_rating_label, credit_rating_label_opt, sanitize_f64};
+use super::market_digest::{MarketInfrastructureDigest, MarketsDigest, build_market_infrastructure, compute_markets};
 use chrono::{DateTime, Utc};
 use engine_v3::SimulationEngine;
 #[cfg(target_arch = "wasm32")]
 use js_sys::Date;
 use metrics::histogram;
 use rust_decimal::prelude::ToPrimitive;
-use serde::ser::{Serializer};
+use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sim_core::prelude::*;
@@ -205,7 +199,6 @@ impl Serialize for StateSnapshot {
     }
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct InstrumentRegistryDigest {
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -342,7 +335,6 @@ pub fn build_state_digest_with_metrics(
         profiler.time("instrument_registry", || build_instrument_registry(&engine.state.financial_system));
     let infrastructure =
         profiler.time("market_infrastructure", || build_market_infrastructure(&engine.state, &markets, &instruments));
-    // Always include infrastructure if we have any data (listings, omo_actions, or system states)
     if !infrastructure.listings.is_empty()
         || !infrastructure.omo_actions.is_empty()
         || infrastructure.csd.is_some()
@@ -566,7 +558,6 @@ fn compute_risk(system: &FinancialSystem) -> RiskDigest {
     }
 }
 
-
 fn build_metadata_digest(
     engine: &SimulationEngine, agents: &AgentsDigest, infrastructure: Option<&MarketInfrastructureDigest>,
     instruments: &InstrumentRegistryDigest,
@@ -608,7 +599,6 @@ fn build_metadata_digest(
 
     MetadataDigest { agent_names, agent_types, instrument_labels, market_labels }
 }
-
 
 fn build_instrument_registry(system: &FinancialSystem) -> InstrumentRegistryDigest {
     let mut instruments: Vec<InstrumentMetaDigest> = Vec::with_capacity(system.instruments.instruments.len());
@@ -821,8 +811,6 @@ fn instrument_market_label(profile: &MarketProfile) -> String {
         InstrumentMarket::Unlisted => "Unlisted".into(),
     }
 }
-
-
 
 fn position_value(
     instruments: &HashMap<InstrumentId, Instrument>, exchange: &Exchange, inst_id: &InstrumentId, position: &Position,

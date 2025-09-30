@@ -23,8 +23,8 @@ use sim_core::types::state::TickRecord;
 #[cfg(target_arch = "wasm32")]
 use sim_mirror::DigestPhaseTiming;
 use sim_mirror::{
-    BehaviourDigest, BehaviourTickDigest, DigestTimings, MirrorHandle, StateDigest, StateSnapshot,
-    TickDetailDigest, build_state_digest, build_state_digest_with_metrics,
+    BehaviourDigest, BehaviourTickDigest, DigestTimings, MirrorHandle, StateDigest, StateSnapshot, TickDetailDigest,
+    build_state_digest, build_state_digest_with_metrics,
 };
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
@@ -373,6 +373,8 @@ fn tick_step_label(step: TickStep) -> &'static str {
         SettleTrades => "settle_trades",
         ServiceDeposits => "service_deposits",
         ServiceGovernmentDebt => "service_government_debt",
+        ServiceInterbankLoans => "service_interbank_loans",
+        ServiceRepos => "service_repos",
         ServiceCredit => "service_credit",
         ApplyPaymentQueuing => "apply_payment_queuing",
         RunRTGS => "run_rtgs",

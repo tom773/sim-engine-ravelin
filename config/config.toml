@@ -213,7 +213,7 @@ initial_assets = [
 ]
 
 initial_liabilities = [] # No initial liabilities
-reserves = { type = "ratio_of_liabilities", min_ratio = 0.10, max_ratio = 0.12 }
+reserves = { type = "ratio_of_liabilities", min_ratio = 0.05, max_ratio = 0.12 }
 
 [[banks]]
 id="bank_b"
@@ -225,7 +225,7 @@ initial_assets = [
   { type = "Bond", tenor = "T2Y", quantity = 2_000 }  # ≈ $15m
 ]
 initial_liabilities = [] # No initial liabilities
-reserves = { type = "ratio_of_liabilities", min_ratio = 0.10, max_ratio = 0.12 }
+reserves = { type = "ratio_of_liabilities", min_ratio = 0.13, max_ratio = 0.22 }
 
 # --- Firms ---
 

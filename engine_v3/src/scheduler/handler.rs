@@ -33,9 +33,6 @@ impl StepHandler for UpkeepHandler {
             if engine.state.current_session == Session::AM {
                 engine.state.advance_time();
             }
-            //if let Err(e) = engine.state.financial_system.validate_accounting_identity() {
-            //    return Err(format!("Accounting validation failed on tick {}: {}", engine.state.ticknum, e));
-            //}
             let mut telemetry = StepTelemetry::new();
             telemetry.push_metric("current_date", engine.state.current_date.to_string());
             telemetry.push_metric("tick_number", engine.state.ticknum);
@@ -440,6 +437,241 @@ impl StepHandler for CreditServicingHandler {
 }
 
 #[derive(Debug)]
+pub struct InterbankLoanServicingHandler;
+
+impl StepHandler for InterbankLoanServicingHandler {
+    fn execute(&self, engine: &mut SimulationEngine, _ctx: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
+        execute_step(|| {
+            let mut effects: Vec<StateEffect> = Vec::new();
+            let state = &engine.state;
+            let fs = &state.financial_system;
+            let current_date = state.current_date;
+
+            let interbank_loans: Vec<(InstrumentId, BondState, AgentId, AgentId)> = fs
+                .instruments
+                .instruments
+                .iter()
+                .filter_map(|(inst_id, inst)| {
+                    if let InstrumentRuntime::Bond(bond) = inst.state() {
+                        if bond.bond_type() == BondType::InterbankLoan {
+                            let mut lender = None;
+                            let mut borrower = None;
+
+                            for (agent_id, bs) in &fs.balance_sheets {
+                                if bs.assets.contains_key(inst_id) {
+                                    lender = Some(*agent_id);
+                                }
+                                if bs.liabilities.contains_key(inst_id) {
+                                    borrower = Some(*agent_id);
+                                }
+                            }
+
+                            if let (Some(l), Some(b)) = (lender, borrower) {
+                                return Some((*inst_id, bond.clone(), l, b));
+                            }
+                        }
+                    }
+                    None
+                })
+                .collect();
+
+            let loans_matured_count =
+                interbank_loans.iter().filter(|(_id, bond, _, _)| current_date == bond.maturity_date).count();
+
+            for (inst_id, bond, lender_id, borrower_id) in interbank_loans {
+                let is_maturity = current_date == bond.maturity_date;
+
+                if !is_maturity {
+                    continue;
+                }
+
+                let principal = bond.archetype.face_value.to_f64();
+                let coupon_rate = bps_to_decimal(bond.archetype.coupon_rate_bps).to_f64().unwrap_or(0.0);
+                let interest = principal * coupon_rate / 365.0;
+                let total_payment = principal + interest;
+
+                let (_borrower_account_id, borrower_bank) = match fs.find_agent_liquid_account(&borrower_id) {
+                    Some(account) => account,
+                    None => {
+                        tracing::warn!("Borrower {} has no liquid account, cannot repay loan", borrower_id);
+                        continue;
+                    }
+                };
+
+                let (_lender_account_id, lender_bank) = match fs.find_agent_liquid_account(&lender_id) {
+                    Some(account) => account,
+                    None => {
+                        tracing::warn!("Lender {} has no liquid account, cannot receive repayment", lender_id);
+                        continue;
+                    }
+                };
+
+                effects.push(StateEffect::Financial(FinancialEffect::QueuePayment(PaymentInstruction {
+                    id: Uuid::new_v4(),
+                    from_bank: borrower_bank,
+                    to_bank: lender_bank,
+                    payer: borrower_id,
+                    payee: lender_id,
+                    amount: total_payment,
+                    context: TransactionContext::PrincipalRepayment { instrument_id: inst_id },
+                    priority: PaymentPriority::Urgent,
+                    earliest_release_tick: state.ticknum,
+                    deadline_tick: state.ticknum + 10,
+                })));
+
+                effects.push(StateEffect::Financial(FinancialEffect::RedeemInstrument { instrument_id: inst_id }));
+
+                tracing::info!(
+                    "Maturing interbank loan: {} repays ${:.2}M to {} (principal: ${:.2}M, interest: ${:.2}k)",
+                    borrower_id,
+                    total_payment / 1_000_000.0,
+                    lender_id,
+                    principal / 1_000_000.0,
+                    interest / 1_000.0
+                );
+            }
+
+            let payment_count = effects.len();
+            if payment_count > 0 {
+                engine.state.apply_effects(&effects).map_err(|e| e.to_string())?;
+            }
+            Ok(StepTelemetry::single("loans_matured", loans_matured_count))
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct RepoServicingHandler;
+
+impl StepHandler for RepoServicingHandler {
+    fn execute(&self, engine: &mut SimulationEngine, _ctx: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
+        execute_step(|| {
+            let mut effects: Vec<StateEffect> = Vec::new();
+            let state = &engine.state;
+            let fs = &state.financial_system;
+            let current_date = state.current_date;
+
+            let repo_agreements: Vec<(InstrumentId, RepoState, AgentId, AgentId)> = fs
+                .instruments
+                .instruments
+                .iter()
+                .filter_map(|(inst_id, inst)| {
+                    if let InstrumentRuntime::Repo(repo) = inst.state() {
+                        let mut lender = None;
+                        let mut borrower = None;
+
+                        for (agent_id, bs) in &fs.balance_sheets {
+                            if bs.assets.contains_key(inst_id) {
+                                lender = Some(*agent_id);
+                            }
+                            if bs.liabilities.contains_key(inst_id) {
+                                borrower = Some(*agent_id);
+                            }
+                        }
+
+                        if let (Some(l), Some(b)) = (lender, borrower) {
+                            return Some((*inst_id, repo.clone(), l, b));
+                        }
+                    }
+                    None
+                })
+                .collect();
+
+            let repos_matured_count =
+                repo_agreements.iter().filter(|(_id, repo, _, _)| current_date >= repo.end_date).count();
+
+            for (inst_id, repo, lender_id, borrower_id) in repo_agreements {
+                let is_maturity = current_date >= repo.end_date;
+
+                if !is_maturity {
+                    continue;
+                }
+
+                let principal = repo.cash_principal.to_f64();
+                let coupon_rate = bps_to_decimal(repo.interest_bps).to_f64().unwrap_or(0.0);
+                let interest = principal * coupon_rate / 365.0;
+                let total_repayment = principal + interest;
+
+                let (_borrower_account_id, borrower_bank) = match fs.find_agent_liquid_account(&borrower_id) {
+                    Some(account) => account,
+                    None => {
+                        tracing::warn!("Borrower {} has no liquid account, cannot repay repo", borrower_id);
+                        continue;
+                    }
+                };
+
+                let (_lender_account_id, lender_bank) = match fs.find_agent_liquid_account(&lender_id) {
+                    Some(account) => account,
+                    None => {
+                        tracing::warn!("Lender {} has no liquid account, cannot receive repo repayment", lender_id);
+                        continue;
+                    }
+                };
+
+                effects.push(StateEffect::Financial(FinancialEffect::QueuePayment(PaymentInstruction {
+                    id: Uuid::new_v4(),
+                    from_bank: borrower_bank,
+                    to_bank: lender_bank,
+                    payer: borrower_id,
+                    payee: lender_id,
+                    amount: total_repayment,
+                    context: TransactionContext::PrincipalRepayment { instrument_id: inst_id },
+                    priority: PaymentPriority::Urgent,
+                    earliest_release_tick: state.ticknum,
+                    deadline_tick: state.ticknum + 10,
+                })));
+
+                let trade_id = Uuid::new_v4();
+                let collateral_settlement = SettlementInstruction {
+                    instruction_id: Uuid::new_v4(),
+                    trade_id,
+                    seller: lender_id,
+                    buyer: borrower_id,
+                    instrument_id: repo.collateral_id,
+                    quantity: repo.collateral_quantity,
+                    cash_amount: 0.0,
+                    settlement_date: current_date,
+                    status: SettlementStatus::Pending,
+                };
+
+                effects
+                    .push(StateEffect::Financial(FinancialEffect::RecordSettlementInstruction(collateral_settlement)));
+
+                effects.push(StateEffect::Financial(FinancialEffect::QueuePayment(PaymentInstruction {
+                    id: Uuid::new_v4(),
+                    from_bank: borrower_bank,
+                    to_bank: lender_bank,
+                    payer: borrower_id,
+                    payee: lender_id,
+                    amount: 0.0,
+                    context: TransactionContext::TradeSettlement { trade_id },
+                    priority: PaymentPriority::Urgent,
+                    earliest_release_tick: state.ticknum,
+                    deadline_tick: state.ticknum + 10,
+                })));
+
+                effects.push(StateEffect::Financial(FinancialEffect::RedeemInstrument { instrument_id: inst_id }));
+
+                tracing::info!(
+                    "Maturing repo: {} repays ${:.2}M to {}, returning {:.2} units of collateral {}",
+                    borrower_id,
+                    total_repayment / 1_000_000.0,
+                    lender_id,
+                    repo.collateral_quantity,
+                    repo.collateral_id
+                );
+            }
+
+            let effect_count = effects.len();
+            if effect_count > 0 {
+                engine.state.apply_effects(&effects).map_err(|e| e.to_string())?;
+            }
+            Ok(StepTelemetry::single("repos_matured", repos_matured_count))
+        })
+    }
+}
+
+#[derive(Debug)]
 pub struct DepositServicingHandler;
 
 impl StepHandler for DepositServicingHandler {
@@ -757,11 +989,101 @@ impl StepHandler for ClearOvernightHandler {
         _rng: &mut dyn rand::RngCore,
     ) -> StepResult {
         execute_step(|| {
+            use domains::Domain;
+            use sim_core::types::markets::overnight_clearing::clear_fedfunds;
+
             let initial_fedfunds = engine.state.financial_system.funding_markets.fedfunds_on.len();
             let initial_repo = engine.state.financial_system.funding_markets.repo_gc1d.len();
 
             tracing::info!("Clearing overnight funding markets: {} fedfunds, {} repos", initial_fedfunds, initial_repo);
-            Ok(StepTelemetry::single("fedfunds_cleared", initial_fedfunds).with_metric("repos_cleared", initial_repo))
+
+            let fedfunds_quotes = engine.state.financial_system.funding_markets.take_fedfunds();
+            let ff_result = clear_fedfunds(fedfunds_quotes);
+
+            tracing::info!(
+                "Fed Funds clearing: {} matches, ${:.2}M volume, {:.2}bps avg rate",
+                ff_result.clearing_stats.num_matches,
+                ff_result.clearing_stats.total_volume / 1_000_000.0,
+                ff_result.clearing_stats.weighted_avg_rate
+            );
+
+            let banking_domain = domains::banking_domain::BankingDomain {};
+            let mut all_effects = Vec::new();
+
+            for trade in &ff_result.matches {
+                let action = SimAction::Banking(BankingAction::ExecuteInterbankLoan {
+                    lender_id: trade.lender,
+                    borrower_id: trade.borrower,
+                    amount: trade.amount,
+                    rate_bps: trade.rate_bps,
+                });
+
+                let result = banking_domain.execute(&action, &engine.state);
+                if result.success {
+                    all_effects.extend(result.effects);
+                } else {
+                    tracing::warn!("Failed to execute fedfunds loan: {:?}", result.errors);
+                }
+            }
+
+            engine.state.apply_effects(&all_effects).map_err(|e| e.to_string())?;
+
+            if ff_result.clearing_stats.unfilled_borrow_demand > 1e6 {
+                tracing::warn!(
+                    "Unmet borrowing demand: ${:.2}M at lowest rate {}bps",
+                    ff_result.clearing_stats.unfilled_borrow_demand / 1_000_000.0,
+                    ff_result.unmatched_bids.first().map(|q| q.limit_rate_bps).unwrap_or(dec!(0))
+                );
+            }
+
+            let repo_quotes = engine.state.financial_system.funding_markets.take_repo_gc1d();
+            let repo_result = sim_core::types::markets::overnight_clearing::clear_repo_gc1d(
+                repo_quotes,
+                &engine.state,
+                2.0,
+            );
+
+            tracing::info!(
+                "Repo GC1D clearing: {} matches, ${:.2}M volume, {:.2}bps avg rate",
+                repo_result.clearing_stats.num_matches,
+                repo_result.clearing_stats.total_volume / 1_000_000.0,
+                repo_result.clearing_stats.weighted_avg_rate
+            );
+
+            let mut repo_effects = Vec::new();
+            for trade in &repo_result.matches {
+                let collateral = trade.collateral.as_ref().unwrap();
+                let action = SimAction::Banking(BankingAction::ExecuteRepoAgreement {
+                    lender_id: trade.lender,
+                    borrower_id: trade.borrower,
+                    amount: trade.amount,
+                    rate_bps: trade.rate_bps,
+                    collateral_id: collateral.instrument_id,
+                    collateral_qty: collateral.quantity,
+                    haircut_pct: collateral.haircut_pct,
+                });
+
+                let result = banking_domain.execute(&action, &engine.state);
+                if result.success {
+                    repo_effects.extend(result.effects);
+                } else {
+                    tracing::warn!("Failed to execute repo agreement: {:?}", result.errors);
+                }
+            }
+
+            engine.state.apply_effects(&repo_effects).map_err(|e| e.to_string())?;
+
+            if repo_result.clearing_stats.unfilled_borrow_demand > 1e6 {
+                tracing::warn!(
+                    "Unmet repo demand: ${:.2}M (insufficient collateral or no lenders)",
+                    repo_result.clearing_stats.unfilled_borrow_demand / 1_000_000.0
+                );
+            }
+
+            Ok(StepTelemetry::single("fedfunds_cleared", ff_result.clearing_stats.num_matches)
+                .with_metric("fedfunds_volume", ff_result.clearing_stats.total_volume as usize)
+                .with_metric("repos_cleared", repo_result.clearing_stats.num_matches)
+                .with_metric("repos_volume", repo_result.clearing_stats.total_volume as usize))
         })
     }
 }

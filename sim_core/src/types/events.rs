@@ -537,6 +537,9 @@ fn compact_financial_effect(effect: &FinancialEffect) -> Value {
             "debtor": short_agent(*debtor),
             "qty": round_qty(*quantity),
         }),
+        FinancialEffect::RedeemInstrument { instrument_id } => json!({
+            "instrument": short_instrument(*instrument_id),
+        }),
         FinancialEffect::RecordTransaction(tx) => compact_transaction_payload(tx),
         FinancialEffect::RecordSettlementInstruction(instr) => json!({
             "instruction": short_uuid(instr.instruction_id),
