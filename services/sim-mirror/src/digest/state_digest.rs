@@ -342,7 +342,15 @@ pub fn build_state_digest_with_metrics(
         profiler.time("instrument_registry", || build_instrument_registry(&engine.state.financial_system));
     let infrastructure =
         profiler.time("market_infrastructure", || build_market_infrastructure(&engine.state, &markets, &instruments));
-    if !infrastructure.listings.is_empty() || !infrastructure.omo_actions.is_empty() {
+    // Always include infrastructure if we have any data (listings, omo_actions, or system states)
+    if !infrastructure.listings.is_empty()
+        || !infrastructure.omo_actions.is_empty()
+        || infrastructure.csd.is_some()
+        || infrastructure.rtgs.is_some()
+        || infrastructure.credit_registry.is_some()
+        || infrastructure.overnight_markets.is_some()
+        || infrastructure.labour_markets.is_some()
+    {
         markets.infrastructure = Some(infrastructure);
     }
 
