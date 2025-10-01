@@ -1,9 +1,10 @@
 use crate::prelude::*;
-// Runtime layer for instruments: concrete, mutable state composed with identifiers and markets.
 use crate::types::instrument::archetypes::{
     BondArchetype, BondType, CashFlow, CashType, Covenant, CreditRating, LoanArchetype, RateIndex,
 };
-use crate::types::instrument::credit::{ConsumerLoanCategory, CreditFacilityState, LoanType, TradeCreditState};
+use crate::types::instrument::credit::{
+    ConsumerLoanCategory, CreditFacilityState, LoanType, OvernightCreditState, OvernightCreditType, TradeCreditState,
+};
 use crate::types::instrument::inst_registry::{LotId, SeriesId, TemplateId};
 use crate::types::instrument::instrument::{
     Currency, DerivativeState, EquityState, RealAssetState, RepoState, StructuredTrancheState,
@@ -311,6 +312,7 @@ pub enum CreditState {
     TradeCredit(TradeCreditState),
     #[serde(alias = "CreditLine")]
     Facility(CreditFacilityState),
+    OvernightCredit(OvernightCreditState),
 }
 
 impl CreditState {
@@ -321,6 +323,7 @@ impl CreditState {
             CreditState::ConsumerCreditCard(facility) => facility.drawn_amount,
             CreditState::Facility(facility) => facility.drawn_amount,
             CreditState::TradeCredit(trade) => trade.amount,
+            CreditState::OvernightCredit(overnight) => overnight.amount,
         }
     }
 
@@ -331,6 +334,11 @@ impl CreditState {
             CreditState::ConsumerCreditCard(_) => "Credit Card",
             CreditState::TradeCredit(_) => "Trade Credit",
             CreditState::Facility(_) => "Credit Facility",
+            CreditState::OvernightCredit(overnight) => match overnight.credit_type {
+                OvernightCreditType::InterbankLoan => "Interbank Loan",
+                OvernightCreditType::FedFunds => "Fed Funds",
+                OvernightCreditType::Repo => "Repo",
+            },
         }
     }
 }

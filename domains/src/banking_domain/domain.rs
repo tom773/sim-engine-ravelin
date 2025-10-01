@@ -174,40 +174,39 @@ impl BankingDomain {
             decision: LoanDecision::Reject { reason },
         })]
     }
-    fn execute_interbank_loan(
+    pub fn execute_interbank_loan(
         &self, lender_id: AgentId, borrower_id: AgentId, amount: f64, rate_bps: BasisPoints, state: &SimState,
     ) -> DomainResult {
         let current_date = state.current_date;
         let maturity_date = current_date + chrono::Duration::days(1);
 
-        let face_value = Money::from_f64(amount.max(1.0)).unwrap_or_else(|| Money::from(1_u64));
-        let loan_instrument = match Instrument::bond(
-            InstrumentId(Uuid::new_v4()),
-            borrower_id,
-            BondType::InterbankLoan,
-            face_value,
-            current_date,
+        let loan_amount = Money::from_f64(amount.max(1.0)).unwrap_or_else(|| Money::from(1_u64));
+
+        let overnight_credit = OvernightCreditState {
+            credit_type: OvernightCreditType::InterbankLoan,
+            lender: lender_id,
+            borrower: borrower_id,
+            amount: loan_amount,
+            rate_bps,
+            issue_date: current_date,
             maturity_date,
-        )
-        .coupon_bps(rate_bps)
-        .frequency(1)
-        .rating(CreditRating::Corporate(SpCreditRating::A))
-        .outstanding_units(1.0)
-        .build()
-        {
-            Ok(inst) => inst,
-            Err(e) => {
-                return DomainResult::failure(vec![format!("Failed to create interbank loan: {}", e)]);
-            }
+            collateral: None,
+            collateral_quantity: None,
         };
 
-        let loan_id = loan_instrument.instrument_id();
+        let loan_id = InstrumentId(Uuid::new_v4());
+        let loan_instrument = Instrument::new(
+            InstrumentIdentifiers::from(loan_id),
+            MarketProfile::unlisted(),
+            Listability::Unlisted,
+            InstrumentRuntime::Credit(CreditState::OvernightCredit(overnight_credit)),
+        );
 
         let mut effects = vec![StateEffect::Financial(FinancialEffect::CreateInstrument {
             instrument: loan_instrument,
             creditor: lender_id,
             debtor: borrower_id,
-            quantity: 1.0,
+            quantity: amount,
         })];
 
         let payment_instruction = PaymentInstruction {
@@ -222,14 +221,6 @@ impl BankingDomain {
             earliest_release_tick: state.ticknum,
             deadline_tick: state.ticknum + 1,
         };
-
-        tracing::info!(
-            "Fed Funds loan: {} lends ${:.2}M to {} at {}bps, payment queued to RTGS",
-            lender_id,
-            amount / 1_000_000.0,
-            borrower_id,
-            rate_bps
-        );
 
         effects.push(StateEffect::Financial(FinancialEffect::QueuePayment(payment_instruction)));
 
@@ -247,38 +238,40 @@ impl BankingDomain {
         DomainResult::success(effects)
     }
 
-    fn execute_repo_agreement(
+    pub fn execute_repo_agreement(
         &self, lender_id: AgentId, borrower_id: AgentId, amount: f64, rate_bps: BasisPoints,
-        collateral_id: InstrumentId, collateral_qty: f64, haircut_pct: f64, state: &SimState,
+        collateral_id: InstrumentId, collateral_qty: f64, _haircut_pct: f64, state: &SimState,
     ) -> DomainResult {
         let current_date = state.current_date;
         let maturity_date = current_date + chrono::Duration::days(1);
 
         let cash_principal = Money::from_f64(amount.max(1.0)).unwrap_or_else(|| Money::from(1_u64));
-        let haircut_rate = rust_decimal::Decimal::from_f64_retain(haircut_pct / 100.0)
-            .unwrap_or_else(|| rust_decimal_macros::dec!(0.02));
 
-        let repo_instrument = Instrument::repo(
-            InstrumentId(Uuid::new_v4()),
-            lender_id,
-            borrower_id,
-            collateral_id,
-            collateral_qty,
-            cash_principal,
+        let repo_credit = OvernightCreditState {
+            credit_type: OvernightCreditType::Repo,
+            lender: lender_id,
+            borrower: borrower_id,
+            amount: cash_principal,
             rate_bps,
-            current_date,
+            issue_date: current_date,
             maturity_date,
-            haircut_rate,
-        )
-        .build();
+            collateral: Some(collateral_id),
+            collateral_quantity: Some(collateral_qty),
+        };
 
-        let repo_id = repo_instrument.instrument_id();
+        let repo_id = InstrumentId(Uuid::new_v4());
+        let repo_instrument = Instrument::new(
+            InstrumentIdentifiers::from(repo_id),
+            MarketProfile::unlisted(),
+            Listability::Unlisted,
+            InstrumentRuntime::Credit(CreditState::OvernightCredit(repo_credit)),
+        );
 
         let mut effects = vec![StateEffect::Financial(FinancialEffect::CreateInstrument {
             instrument: repo_instrument,
             creditor: lender_id,
             debtor: borrower_id,
-            quantity: 1.0,
+            quantity: amount,
         })];
 
         let trade_id = Uuid::new_v4();

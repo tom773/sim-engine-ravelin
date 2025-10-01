@@ -1,4 +1,5 @@
-use super::{StepContext, StepHandler, StepResult, StepTelemetry};
+
+use super::{PhaseContext, PhaseHandler, StepResult, StepTelemetry};
 use crate::executor::SimulationEngine;
 use domains::{ResolutionContext, ResolutionPhase};
 use rand::prelude::*;
@@ -25,14 +26,96 @@ where
 }
 
 #[derive(Debug)]
+pub struct BankBalanceSheetSummaryHandler;
+
+impl PhaseHandler for BankBalanceSheetSummaryHandler {
+    fn execute(&self, engine: &mut SimulationEngine, _ctx: &mut PhaseContext, _rng: &mut dyn RngCore) -> StepResult {
+        execute_step(|| {
+            let state = &engine.state;
+            let fs = &state.financial_system;
+
+            tracing::info!("\n=== Bank Balance Sheet Summary (Date: {}) ===", state.current_date);
+
+            for (bank_id, _bank) in &state.agents.banks {
+                let bs = match fs.balance_sheets.get(bank_id) {
+                    Some(bs) => bs,
+                    None => continue,
+                };
+
+                let reserves: f64 = bs.assets.iter()
+                    .filter_map(|(inst_id, pos)| {
+                        fs.instruments.instruments.get(inst_id).and_then(|inst| {
+                            if let InstrumentRuntime::Cash(cash) = inst.state() {
+                                if cash.cash_type == CashType::CentralBankReserves {
+                                    return Some(pos.quantity);
+                                }
+                            }
+                            None
+                        })
+                    })
+                    .sum();
+
+                let (ib_loans_lent, repos_lent): (f64, f64) = bs.assets.iter()
+                    .filter_map(|(inst_id, pos)| {
+                        fs.instruments.instruments.get(inst_id).and_then(|inst| {
+                            if let InstrumentRuntime::Credit(CreditState::OvernightCredit(credit)) = inst.state() {
+                                match credit.credit_type {
+                                    OvernightCreditType::InterbankLoan | OvernightCreditType::FedFunds => Some((pos.quantity, 0.0)),
+                                    OvernightCreditType::Repo => Some((0.0, pos.quantity)),
+                                }
+                            } else {
+                                None
+                            }
+                        })
+                    })
+                    .fold((0.0, 0.0), |(ib, repo), (ib_new, repo_new)| (ib + ib_new, repo + repo_new));
+
+                let (ib_loans_borrowed, repos_borrowed): (f64, f64) = bs.liabilities.iter()
+                    .filter_map(|(inst_id, pos)| {
+                        fs.instruments.instruments.get(inst_id).and_then(|inst| {
+                            if let InstrumentRuntime::Credit(CreditState::OvernightCredit(credit)) = inst.state() {
+                                match credit.credit_type {
+                                    OvernightCreditType::InterbankLoan | OvernightCreditType::FedFunds => Some((pos.quantity, 0.0)),
+                                    OvernightCreditType::Repo => Some((0.0, pos.quantity)),
+                                }
+                            } else {
+                                None
+                            }
+                        })
+                    })
+                    .fold((0.0, 0.0), |(ib, repo), (ib_new, repo_new)| (ib + ib_new, repo + repo_new));
+
+                let total_assets: f64 = bs.assets.values().map(|pos| pos.quantity).sum();
+                let total_liabilities: f64 = bs.liabilities.values().map(|pos| pos.quantity).sum();
+                let equity = total_assets - total_liabilities;
+
+                tracing::info!(
+                    "  Bank {:?}: Reserves=${:.0}k | IB Loans: +${:.0}k/-${:.0}k | Repos: +${:.0}k/-${:.0}k | Assets=${:.0}k | Liab=${:.0}k | Equity=${:.0}k",
+                    bank_id,
+                    reserves / 1000.0,
+                    ib_loans_lent / 1000.0,
+                    ib_loans_borrowed / 1000.0,
+                    repos_lent / 1000.0,
+                    repos_borrowed / 1000.0,
+                    total_assets / 1000.0,
+                    total_liabilities / 1000.0,
+                    equity / 1000.0
+                );
+            }
+
+            Ok(StepTelemetry::default())
+        })
+    }
+}
+
+#[derive(Debug)]
 pub struct UpkeepHandler;
 
-impl StepHandler for UpkeepHandler {
-    fn execute(&self, engine: &mut SimulationEngine, _ctx: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
+impl PhaseHandler for UpkeepHandler {
+    fn execute(&self, engine: &mut SimulationEngine, _ctx: &mut PhaseContext, _rng: &mut dyn RngCore) -> StepResult {
         execute_step(|| {
-            if engine.state.current_session == Session::AM {
-                engine.state.advance_time();
-            }
+            engine.state.advance_time();
+
             let mut telemetry = StepTelemetry::new();
             telemetry.push_metric("current_date", engine.state.current_date.to_string());
             telemetry.push_metric("tick_number", engine.state.ticknum);
@@ -44,17 +127,17 @@ impl StepHandler for UpkeepHandler {
 }
 #[derive(Debug)]
 pub struct GatherIntentionsHandler;
-impl StepHandler for GatherIntentionsHandler {
-    fn execute(&self, engine: &mut SimulationEngine, context: &mut StepContext, rng: &mut dyn RngCore) -> StepResult {
+impl PhaseHandler for GatherIntentionsHandler {
+    fn execute(&self, engine: &mut SimulationEngine, context: &mut PhaseContext, rng: &mut dyn RngCore) -> StepResult {
         execute_step(|| {
             let intentions = engine.gather_intentions(rng);
             let categorized = engine.domain_registry.categorize_intentions_by_phase(intentions.clone());
 
-            context.set_intentions(intentions);
-            context.set_categorized_intentions(categorized);
+            context.tick_context.set_intentions(intentions);
+            context.tick_context.set_categorized_intentions(categorized);
 
             let mut concatted = String::new();
-            let total_intentions = if let Some(stored) = context.intentions() {
+            let total_intentions = if let Some(stored) = context.tick_context.intentions() {
                 for intention in stored {
                     concatted.push_str(&format!("{}; ", intention.name()));
                 }
@@ -71,29 +154,40 @@ impl StepHandler for GatherIntentionsHandler {
 pub struct PhaseResolutionHandler {
     pub phase: ResolutionPhase,
 }
-impl StepHandler for PhaseResolutionHandler {
-    fn execute(&self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
+impl PhaseHandler for PhaseResolutionHandler {
+    fn name(&self) -> &'static str {
+        match self.phase {
+            ResolutionPhase::Independent => "PhaseResolutionHandler(Independent)",
+            ResolutionPhase::Market => "PhaseResolutionHandler(Market)",
+            ResolutionPhase::Dependent => "PhaseResolutionHandler(Dependent)",
+        }
+    }
+
+    fn execute(&self, engine: &mut SimulationEngine, context: &mut PhaseContext, _rng: &mut dyn RngCore) -> StepResult {
         execute_step(|| {
-            let intentions = match context.categorized_intentions().and_then(|categorized| categorized.get(&self.phase))
+            let intentions = match context
+                .tick_context
+                .categorized_intentions()
+                .and_then(|categorized| categorized.get(&self.phase))
             {
                 Some(list) if !list.is_empty() => list,
                 _ => return Ok(StepTelemetry::single("actions", 0usize).with_metric("effects", 0usize)),
             };
 
             let resolution_context = ResolutionContext { state: &engine.state, current_tick: engine.state.ticknum };
-            let action_offset = context.actions_len();
-            let effect_offset = context.effects_len();
+            let action_offset = context.tick_context.actions_len();
+            let effect_offset = context.tick_context.effects_len();
 
             let (action_records, action_to_effect_indices, effects) =
                 engine.resolve_and_execute_phase(intentions, &resolution_context, action_offset, effect_offset);
 
             let action_count = action_records.len();
-            context.actions_mut().extend(action_records.into_iter());
+            context.tick_context.actions_mut().extend(action_records.into_iter());
 
             let effect_count = effects.len();
-            context.effects_mut().extend(effects.into_iter());
+            context.tick_context.effects_mut().extend(effects.into_iter());
 
-            context.action_to_effect_indices_mut().extend(action_to_effect_indices);
+            context.tick_context.action_to_effect_indices_mut().extend(action_to_effect_indices);
 
             Ok(StepTelemetry::single("actions", action_count).with_metric("effects", effect_count))
         })
@@ -101,18 +195,23 @@ impl StepHandler for PhaseResolutionHandler {
 }
 #[derive(Debug)]
 pub struct ApplyMarketEffectsHandler;
-impl StepHandler for ApplyMarketEffectsHandler {
+impl PhaseHandler for ApplyMarketEffectsHandler {
     #[instrument(skip(self, engine, context, _rng))]
-    fn execute(&self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
+    fn execute(&self, engine: &mut SimulationEngine, context: &mut PhaseContext, _rng: &mut dyn RngCore) -> StepResult {
         execute_step(|| {
-            let market_effects: Vec<StateEffect> =
-                context.effects().iter().filter(|e| matches!(e, StateEffect::Market(_))).cloned().collect();
+            let market_effects: Vec<StateEffect> = context
+                .tick_context
+                .effects()
+                .iter()
+                .filter(|e| matches!(e, StateEffect::Market(_)))
+                .cloned()
+                .collect();
 
             engine.state.apply_effects(&market_effects).map_err(|e| e.to_string())?;
 
             let staged = std::mem::take(&mut engine.state.financial_system.exchange.recent_trades);
             if !staged.is_empty() {
-                context.trades_mut().extend(staged);
+                context.tick_context.trades_mut().extend(staged);
             }
             Ok(StepTelemetry::single("market_effects_applied", market_effects.len()))
         })
@@ -120,9 +219,9 @@ impl StepHandler for ApplyMarketEffectsHandler {
 }
 #[derive(Debug)]
 pub struct ClearMarketsHandler;
-impl StepHandler for ClearMarketsHandler {
+impl PhaseHandler for ClearMarketsHandler {
     #[instrument(skip(self, engine, context, _rng))]
-    fn execute(&self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
+    fn execute(&self, engine: &mut SimulationEngine, context: &mut PhaseContext, _rng: &mut dyn RngCore) -> StepResult {
         execute_step(|| {
             let (market_trades, snapshots) = engine.clear_all_markets();
             if !market_trades.is_empty() {
@@ -133,9 +232,9 @@ impl StepHandler for ClearMarketsHandler {
                 }
             }
             let trades_generated = market_trades.len();
-            context.trades_mut().extend(market_trades.into_iter());
+            context.tick_context.trades_mut().extend(market_trades.into_iter());
 
-            context.set_market_snapshots(snapshots);
+            context.tick_context.set_market_snapshots(snapshots);
             Ok(StepTelemetry::single("trades_generated", trades_generated))
         })
     }
@@ -143,8 +242,8 @@ impl StepHandler for ClearMarketsHandler {
 #[derive(Debug)]
 pub struct GovCouponsHandler;
 
-impl StepHandler for GovCouponsHandler {
-    fn execute(&self, engine: &mut SimulationEngine, _ctx: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
+impl PhaseHandler for GovCouponsHandler {
+    fn execute(&self, engine: &mut SimulationEngine, _ctx: &mut PhaseContext, _rng: &mut dyn RngCore) -> StepResult {
         execute_step(|| {
             let mut effects: Vec<StateEffect> = Vec::new();
             let state = &engine.state;
@@ -180,13 +279,7 @@ impl StepHandler for GovCouponsHandler {
 
                         let payee_bank = match fs.find_agent_liquid_account(agent_id) {
                             Some((_, bank_id)) => bank_id,
-                            None => {
-                                tracing::warn!(
-                                    "Could not find liquid account for bond holder {}, skipping payment.",
-                                    agent_id
-                                );
-                                continue;
-                            }
+                            None => continue,
                         };
 
                         if is_coupon {
@@ -240,23 +333,43 @@ impl StepHandler for GovCouponsHandler {
 #[derive(Debug)]
 pub struct SettleTradesHandler;
 
-impl StepHandler for SettleTradesHandler {
-    fn execute(&self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
+impl PhaseHandler for SettleTradesHandler {
+    fn execute(&self, engine: &mut SimulationEngine, context: &mut PhaseContext, _rng: &mut dyn RngCore) -> StepResult {
         execute_step(|| {
-            let settlement_effects = {
-                let trades = context.trades();
-                if trades.is_empty() {
-                    return Ok(
-                        StepTelemetry::single("trades_processed", 0usize).with_metric("settlement_effects", 0usize)
-                    );
-                }
-                engine.settle_trades(trades)
-            };
+            let all_trades = context.tick_context.trades();
+            if all_trades.is_empty() {
+                return Ok(
+                    StepTelemetry::single("trades_processed", 0usize).with_metric("settlement_effects", 0usize)
+                );
+            }
 
+            let already_settled: std::collections::HashSet<Uuid> = engine
+                .state
+                .financial_system
+                .clearing_house
+                .csd
+                .pending_settlements
+                .keys()
+                .copied()
+                .collect();
+
+            let unsettled_trades: Vec<Trade> = all_trades
+                .iter()
+                .filter(|trade| !already_settled.contains(&trade.trade_id))
+                .cloned()
+                .collect();
+
+            if unsettled_trades.is_empty() {
+                return Ok(
+                    StepTelemetry::single("trades_processed", 0usize).with_metric("settlement_effects", 0usize)
+                );
+            }
+
+            let settlement_effects = engine.settle_trades(&unsettled_trades);
             let effect_count = settlement_effects.len();
-            context.effects_mut().extend(settlement_effects.into_iter());
+            context.tick_context.effects_mut().extend(settlement_effects.into_iter());
 
-            Ok(StepTelemetry::single("trades_processed", context.trades().len())
+            Ok(StepTelemetry::single("trades_processed", unsettled_trades.len())
                 .with_metric("settlement_effects", effect_count))
         })
     }
@@ -264,9 +377,9 @@ impl StepHandler for SettleTradesHandler {
 #[derive(Debug)]
 pub struct CreditReconciliationHandler;
 
-impl StepHandler for CreditReconciliationHandler {
+impl PhaseHandler for CreditReconciliationHandler {
     fn execute(
-        &self, engine: &mut SimulationEngine, _ctx: &mut StepContext, _rng: &mut dyn rand::RngCore,
+        &self, engine: &mut SimulationEngine, _ctx: &mut PhaseContext, _rng: &mut dyn rand::RngCore,
     ) -> StepResult {
         execute_step(|| {
             let state = &mut engine.state;
@@ -355,9 +468,9 @@ impl StepHandler for CreditReconciliationHandler {
 #[derive(Debug)]
 pub struct CreditServicingHandler;
 
-impl StepHandler for CreditServicingHandler {
+impl PhaseHandler for CreditServicingHandler {
     fn execute(
-        &self, engine: &mut SimulationEngine, _ctx: &mut StepContext, _rng: &mut dyn rand::RngCore,
+        &self, engine: &mut SimulationEngine, _ctx: &mut PhaseContext, _rng: &mut dyn rand::RngCore,
     ) -> StepResult {
         execute_step(|| {
             let state = &mut engine.state;
@@ -439,36 +552,22 @@ impl StepHandler for CreditServicingHandler {
 #[derive(Debug)]
 pub struct InterbankLoanServicingHandler;
 
-impl StepHandler for InterbankLoanServicingHandler {
-    fn execute(&self, engine: &mut SimulationEngine, _ctx: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
+impl PhaseHandler for InterbankLoanServicingHandler {
+    fn execute(&self, engine: &mut SimulationEngine, _ctx: &mut PhaseContext, _rng: &mut dyn RngCore) -> StepResult {
         execute_step(|| {
             let mut effects: Vec<StateEffect> = Vec::new();
             let state = &engine.state;
             let fs = &state.financial_system;
             let current_date = state.current_date;
 
-            let interbank_loans: Vec<(InstrumentId, BondState, AgentId, AgentId)> = fs
+            let interbank_loans: Vec<(InstrumentId, OvernightCreditState, AgentId, AgentId)> = fs
                 .instruments
                 .instruments
                 .iter()
                 .filter_map(|(inst_id, inst)| {
-                    if let InstrumentRuntime::Bond(bond) = inst.state() {
-                        if bond.bond_type() == BondType::InterbankLoan {
-                            let mut lender = None;
-                            let mut borrower = None;
-
-                            for (agent_id, bs) in &fs.balance_sheets {
-                                if bs.assets.contains_key(inst_id) {
-                                    lender = Some(*agent_id);
-                                }
-                                if bs.liabilities.contains_key(inst_id) {
-                                    borrower = Some(*agent_id);
-                                }
-                            }
-
-                            if let (Some(l), Some(b)) = (lender, borrower) {
-                                return Some((*inst_id, bond.clone(), l, b));
-                            }
+                    if let InstrumentRuntime::Credit(CreditState::OvernightCredit(credit)) = inst.state() {
+                        if credit.credit_type == OvernightCreditType::InterbankLoan {
+                            return Some((*inst_id, credit.clone(), credit.lender, credit.borrower));
                         }
                     }
                     None
@@ -476,24 +575,24 @@ impl StepHandler for InterbankLoanServicingHandler {
                 .collect();
 
             let loans_matured_count =
-                interbank_loans.iter().filter(|(_id, bond, _, _)| current_date == bond.maturity_date).count();
+                interbank_loans.iter().filter(|(_id, credit, _, _)| current_date >= credit.maturity_date).count();
 
-            for (inst_id, bond, lender_id, borrower_id) in interbank_loans {
-                let is_maturity = current_date == bond.maturity_date;
+            for (inst_id, credit, lender_id, borrower_id) in interbank_loans {
+                let is_maturity = current_date >= credit.maturity_date;
 
                 if !is_maturity {
                     continue;
                 }
 
-                let principal = bond.archetype.face_value.to_f64();
-                let coupon_rate = bps_to_decimal(bond.archetype.coupon_rate_bps).to_f64().unwrap_or(0.0);
+                let principal = credit.amount.to_f64();
+                let coupon_rate = bps_to_decimal(credit.rate_bps).to_f64().unwrap_or(0.0);
                 let interest = principal * coupon_rate / 365.0;
                 let total_payment = principal + interest;
 
                 let (_borrower_account_id, borrower_bank) = match fs.find_agent_liquid_account(&borrower_id) {
                     Some(account) => account,
                     None => {
-                        tracing::warn!("Borrower {} has no liquid account, cannot repay loan", borrower_id);
+                        tracing::warn!("Cannot service interbank loan {}: borrower {} has no liquid account", inst_id, borrower_id);
                         continue;
                     }
                 };
@@ -501,7 +600,7 @@ impl StepHandler for InterbankLoanServicingHandler {
                 let (_lender_account_id, lender_bank) = match fs.find_agent_liquid_account(&lender_id) {
                     Some(account) => account,
                     None => {
-                        tracing::warn!("Lender {} has no liquid account, cannot receive repayment", lender_id);
+                        tracing::warn!("Cannot service interbank loan {}: lender {} has no liquid account", inst_id, lender_id);
                         continue;
                     }
                 };
@@ -520,19 +619,9 @@ impl StepHandler for InterbankLoanServicingHandler {
                 })));
 
                 effects.push(StateEffect::Financial(FinancialEffect::RedeemInstrument { instrument_id: inst_id }));
-
-                tracing::info!(
-                    "Maturing interbank loan: {} repays ${:.2}M to {} (principal: ${:.2}M, interest: ${:.2}k)",
-                    borrower_id,
-                    total_payment / 1_000_000.0,
-                    lender_id,
-                    principal / 1_000_000.0,
-                    interest / 1_000.0
-                );
             }
 
-            let payment_count = effects.len();
-            if payment_count > 0 {
+            if !effects.is_empty() {
                 engine.state.apply_effects(&effects).map_err(|e| e.to_string())?;
             }
             Ok(StepTelemetry::single("loans_matured", loans_matured_count))
@@ -543,34 +632,22 @@ impl StepHandler for InterbankLoanServicingHandler {
 #[derive(Debug)]
 pub struct RepoServicingHandler;
 
-impl StepHandler for RepoServicingHandler {
-    fn execute(&self, engine: &mut SimulationEngine, _ctx: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
+impl PhaseHandler for RepoServicingHandler {
+    fn execute(&self, engine: &mut SimulationEngine, _ctx: &mut PhaseContext, _rng: &mut dyn RngCore) -> StepResult {
         execute_step(|| {
             let mut effects: Vec<StateEffect> = Vec::new();
             let state = &engine.state;
             let fs = &state.financial_system;
             let current_date = state.current_date;
 
-            let repo_agreements: Vec<(InstrumentId, RepoState, AgentId, AgentId)> = fs
+            let repo_agreements: Vec<(InstrumentId, OvernightCreditState, AgentId, AgentId)> = fs
                 .instruments
                 .instruments
                 .iter()
                 .filter_map(|(inst_id, inst)| {
-                    if let InstrumentRuntime::Repo(repo) = inst.state() {
-                        let mut lender = None;
-                        let mut borrower = None;
-
-                        for (agent_id, bs) in &fs.balance_sheets {
-                            if bs.assets.contains_key(inst_id) {
-                                lender = Some(*agent_id);
-                            }
-                            if bs.liabilities.contains_key(inst_id) {
-                                borrower = Some(*agent_id);
-                            }
-                        }
-
-                        if let (Some(l), Some(b)) = (lender, borrower) {
-                            return Some((*inst_id, repo.clone(), l, b));
+                    if let InstrumentRuntime::Credit(CreditState::OvernightCredit(credit)) = inst.state() {
+                        if credit.credit_type == OvernightCreditType::Repo {
+                            return Some((*inst_id, credit.clone(), credit.lender, credit.borrower));
                         }
                     }
                     None
@@ -578,34 +655,31 @@ impl StepHandler for RepoServicingHandler {
                 .collect();
 
             let repos_matured_count =
-                repo_agreements.iter().filter(|(_id, repo, _, _)| current_date >= repo.end_date).count();
+                repo_agreements.iter().filter(|(_id, credit, _, _)| current_date >= credit.maturity_date).count();
 
-            for (inst_id, repo, lender_id, borrower_id) in repo_agreements {
-                let is_maturity = current_date >= repo.end_date;
+            for (inst_id, credit, lender_id, borrower_id) in repo_agreements {
+                let is_maturity = current_date >= credit.maturity_date;
 
                 if !is_maturity {
                     continue;
                 }
 
-                let principal = repo.cash_principal.to_f64();
-                let coupon_rate = bps_to_decimal(repo.interest_bps).to_f64().unwrap_or(0.0);
+                let principal = credit.amount.to_f64();
+                let coupon_rate = bps_to_decimal(credit.rate_bps).to_f64().unwrap_or(0.0);
                 let interest = principal * coupon_rate / 365.0;
                 let total_repayment = principal + interest;
 
+                let collateral_id = credit.collateral.expect("Repo must have collateral");
+                let collateral_qty = credit.collateral_quantity.expect("Repo must have collateral quantity");
+
                 let (_borrower_account_id, borrower_bank) = match fs.find_agent_liquid_account(&borrower_id) {
                     Some(account) => account,
-                    None => {
-                        tracing::warn!("Borrower {} has no liquid account, cannot repay repo", borrower_id);
-                        continue;
-                    }
+                    None => continue,
                 };
 
                 let (_lender_account_id, lender_bank) = match fs.find_agent_liquid_account(&lender_id) {
                     Some(account) => account,
-                    None => {
-                        tracing::warn!("Lender {} has no liquid account, cannot receive repo repayment", lender_id);
-                        continue;
-                    }
+                    None => continue,
                 };
 
                 effects.push(StateEffect::Financial(FinancialEffect::QueuePayment(PaymentInstruction {
@@ -627,8 +701,8 @@ impl StepHandler for RepoServicingHandler {
                     trade_id,
                     seller: lender_id,
                     buyer: borrower_id,
-                    instrument_id: repo.collateral_id,
-                    quantity: repo.collateral_quantity,
+                    instrument_id: collateral_id,
+                    quantity: collateral_qty,
                     cash_amount: 0.0,
                     settlement_date: current_date,
                     status: SettlementStatus::Pending,
@@ -651,19 +725,9 @@ impl StepHandler for RepoServicingHandler {
                 })));
 
                 effects.push(StateEffect::Financial(FinancialEffect::RedeemInstrument { instrument_id: inst_id }));
-
-                tracing::info!(
-                    "Maturing repo: {} repays ${:.2}M to {}, returning {:.2} units of collateral {}",
-                    borrower_id,
-                    total_repayment / 1_000_000.0,
-                    lender_id,
-                    repo.collateral_quantity,
-                    repo.collateral_id
-                );
             }
 
-            let effect_count = effects.len();
-            if effect_count > 0 {
+            if repos_matured_count > 0 {
                 engine.state.apply_effects(&effects).map_err(|e| e.to_string())?;
             }
             Ok(StepTelemetry::single("repos_matured", repos_matured_count))
@@ -674,8 +738,8 @@ impl StepHandler for RepoServicingHandler {
 #[derive(Debug)]
 pub struct DepositServicingHandler;
 
-impl StepHandler for DepositServicingHandler {
-    fn execute(&self, engine: &mut SimulationEngine, _ctx: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
+impl PhaseHandler for DepositServicingHandler {
+    fn execute(&self, engine: &mut SimulationEngine, _ctx: &mut PhaseContext, _rng: &mut dyn RngCore) -> StepResult {
         execute_step(|| {
             if !is_last_day_of_month(engine.state.current_date) {
                 return Ok(StepTelemetry::single("payments_generated", 0usize));
@@ -738,10 +802,10 @@ impl StepHandler for DepositServicingHandler {
 
 #[derive(Debug)]
 pub struct ApplyPaymentQueuingHandler;
-impl StepHandler for ApplyPaymentQueuingHandler {
-    fn execute(&self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
+impl PhaseHandler for ApplyPaymentQueuingHandler {
+    fn execute(&self, engine: &mut SimulationEngine, context: &mut PhaseContext, _rng: &mut dyn RngCore) -> StepResult {
         execute_step(|| {
-            let count = engine.consume_effects(context, |effect| {
+            let count = engine.consume_effects(context.tick_context, |effect| {
                 matches!(
                     effect,
                     StateEffect::Financial(
@@ -757,42 +821,51 @@ impl StepHandler for ApplyPaymentQueuingHandler {
 #[derive(Debug)]
 pub struct RunRTGSHandler;
 
-impl StepHandler for RunRTGSHandler {
+impl PhaseHandler for RunRTGSHandler {
     #[instrument(skip(self, engine, context, _rng))]
-    fn execute(&self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
+    fn execute(&self, engine: &mut SimulationEngine, context: &mut PhaseContext, _rng: &mut dyn RngCore) -> StepResult {
         execute_step(|| {
             let initial_pending = engine.state.financial_system.rtgs.pending.len();
+            let initial_settled = engine.state.financial_system.rtgs.settled.len();
 
             let finalization_effects =
                 run_rtgs(&mut engine.state).map_err(|e| format!("RTGS execution failed: {:?}", e))?;
 
-            context.effects_mut().extend(finalization_effects.into_iter());
+            let final_settled = engine.state.financial_system.rtgs.settled.len();
+            let settled_this_session = final_settled - initial_settled;
 
+            if settled_this_session > 0 {
+                tracing::info!("RTGS settled {} payments this session (total this tick: {})",
+                    settled_this_session, final_settled);
+            }
+
+            context.tick_context.effects_mut().extend(finalization_effects.into_iter());
             let final_pending = engine.state.financial_system.rtgs.pending.len();
-            let settled_this_tick = initial_pending - final_pending;
+            let settled_this_run = initial_pending - final_pending;
 
-            Ok(StepTelemetry::single("payments_settled", settled_this_tick)
-                .with_metric("payments_remaining", final_pending))
+            Ok(StepTelemetry::single("payments_settled", settled_this_run)
+                .with_metric("payments_remaining", final_pending)
+                .with_metric("total_settled_this_tick", final_settled))
         })
     }
 }
 #[derive(Debug)]
 pub struct ApplyAllEffectsHandler;
-impl StepHandler for ApplyAllEffectsHandler {
+impl PhaseHandler for ApplyAllEffectsHandler {
     #[instrument(skip(self, engine, context, rng))]
-    fn execute(&self, engine: &mut SimulationEngine, context: &mut StepContext, rng: &mut dyn RngCore) -> StepResult {
+    fn execute(&self, engine: &mut SimulationEngine, context: &mut PhaseContext, rng: &mut dyn RngCore) -> StepResult {
         execute_step(|| {
             let labour_effects = engine.match_labour_markets(rng);
             let total_effects = {
-                let effects = context.effects_mut();
+                let effects = context.tick_context.effects_mut();
                 effects.extend(labour_effects.into_iter());
                 effects.len()
             };
 
-            let actions = context.actions();
-            let intentions = context.intentions_slice();
-            let effects_snapshot = context.effects();
-            let mapping = context.action_to_effect_indices_ref();
+            let actions = context.tick_context.actions();
+            let intentions = context.tick_context.intentions_slice();
+            let effects_snapshot = context.tick_context.effects();
+            let mapping = context.tick_context.action_to_effect_indices_ref();
 
             let mut new_events: Vec<SimEvent> = Vec::new();
 
@@ -828,8 +901,7 @@ impl StepHandler for ApplyAllEffectsHandler {
             }
 
             engine.event_log = new_events;
-
-            engine.state.apply_effects(context.effects()).map_err(|e| e.to_string())?;
+            engine.state.apply_effects(context.tick_context.effects()).map_err(|e| e.to_string())?;
 
             Ok(StepTelemetry::single("total_effects_applied", total_effects))
         })
@@ -837,25 +909,25 @@ impl StepHandler for ApplyAllEffectsHandler {
 }
 #[derive(Debug)]
 pub struct UpdateHistoryHandler;
-impl StepHandler for UpdateHistoryHandler {
+impl PhaseHandler for UpdateHistoryHandler {
     #[instrument(skip(self, engine, context, _rng))]
-    fn execute(&self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
+    fn execute(&self, engine: &mut SimulationEngine, context: &mut PhaseContext, _rng: &mut dyn RngCore) -> StepResult {
         execute_step(|| {
-            let trades = context.trades();
-            let snapshots = context.market_snapshots_ref();
+            let trades = context.tick_context.trades();
+            let snapshots = context.tick_context.market_snapshots_ref();
             engine.update_market_history(trades, snapshots);
             engine.refresh_pricing_feeds();
             let action_to_effect_indices =
-                context.take_action_to_effect_indices().into_iter().collect::<StdHashMap<_, _>>();
+                context.tick_context.take_action_to_effect_indices().into_iter().collect::<StdHashMap<_, _>>();
 
             let tick_record = TickRecord {
                 tick_number: engine.state.ticknum,
                 date: engine.state.current_date,
-                intentions: context.take_intentions(),
-                actions: context.take_actions(),
-                effects: context.take_effects(),
+                intentions: context.tick_context.take_intentions(),
+                actions: context.tick_context.take_actions(),
+                effects: context.tick_context.take_effects(),
                 action_to_effect_indices,
-                trades: context.take_trades(),
+                trades: context.tick_context.take_trades(),
                 events: engine.event_log.clone(),
             };
             engine.state.history.add_tick_record(tick_record);
@@ -866,8 +938,8 @@ impl StepHandler for UpdateHistoryHandler {
 
 #[derive(Debug)]
 pub struct DebtAuctionsHandler;
-impl StepHandler for DebtAuctionsHandler {
-    fn execute(&self, engine: &mut SimulationEngine, context: &mut StepContext, _rng: &mut dyn RngCore) -> StepResult {
+impl PhaseHandler for DebtAuctionsHandler {
+    fn execute(&self, engine: &mut SimulationEngine, context: &mut PhaseContext, _rng: &mut dyn RngCore) -> StepResult {
         execute_step(|| {
             let open_auctions: Vec<_> = engine
                 .state
@@ -972,7 +1044,7 @@ impl StepHandler for DebtAuctionsHandler {
                     tape.entry(t.market_id.clone()).or_default().push(TimedTrade { ts: now, trade: t.clone() });
                 }
 
-                context.trades_mut().extend(all_auction_trades.into_iter());
+                context.tick_context.trades_mut().extend(all_auction_trades.into_iter());
             }
 
             Ok(StepTelemetry::single("auctions_processed", true))
@@ -980,32 +1052,102 @@ impl StepHandler for DebtAuctionsHandler {
     }
 }
 
+fn generate_fallback_repo_quotes(state: &SimState) -> Vec<ONQuote> {
+    let mut quotes = Vec::new();
+    let fs = &state.financial_system;
+    let policy_rate_bps = fs.central_bank.policy_rate_bps;
+    let typical_spread = dec!(20);
+
+    for (bank_id, _bank) in &state.agents.banks {
+        let bank_bs = match fs.balance_sheets.get(bank_id) {
+            Some(bs) => bs,
+            None => continue,
+        };
+
+        let total_deposits: f64 = bank_bs
+            .liabilities
+            .iter()
+            .filter_map(|(id, pos)| {
+                fs.instruments.instruments.get(id).and_then(|inst| {
+                    if let InstrumentRuntime::Cash(d) = inst.state() {
+                        if matches!(d.cash_type, CashType::DemandDeposit | CashType::SavingsDeposit) {
+                            return Some(pos.quantity);
+                        }
+                    }
+                    None
+                })
+            })
+            .sum();
+
+        let required_reserves = total_deposits * fs.central_bank.reserve_requirement;
+        let desired_buffer = total_deposits * 0.02;
+        let target_reserve_level = required_reserves + desired_buffer;
+        let current_reserves = fs.get_bank_reserves(bank_id).unwrap_or(0.0);
+        let reserve_gap = current_reserves - target_reserve_level;
+
+        if reserve_gap < -100.0 {
+            let amount_needed = -reserve_gap;
+
+            let has_govt_bonds = bank_bs.assets.iter().any(|(inst_id, _)| {
+                fs.instruments.instruments.get(inst_id).map_or(false, |inst| {
+                    if let InstrumentRuntime::Bond(bond_state) = inst.state() {
+                        bond_state.bond_type() == BondType::Government
+                    } else {
+                        false
+                    }
+                })
+            });
+
+            if has_govt_bonds {
+                let repo_borrow_rate = policy_rate_bps + typical_spread;
+                quotes.push(ONQuote {
+                    venue: OvernightVenue::RepoGC1D,
+                    agent: *bank_id,
+                    side: ONQuoteSide::Borrow,
+                    notional: amount_needed,
+                    limit_rate_bps: repo_borrow_rate,
+                    haircut: Some(dec!(0.02)),
+                    preferred_collateral: None,
+                    min_fill: 100.0,
+                    ts: 0,
+                });
+            }
+        } else if reserve_gap > 100.0 {
+            let amount_to_lend = reserve_gap * 0.75;
+            if amount_to_lend > 100.0 {
+                let repo_lend_rate = policy_rate_bps - typical_spread + dec!(5);
+                quotes.push(ONQuote {
+                    venue: OvernightVenue::RepoGC1D,
+                    agent: *bank_id,
+                    side: ONQuoteSide::Lend,
+                    notional: amount_to_lend,
+                    limit_rate_bps: repo_lend_rate,
+                    haircut: Some(dec!(0.02)),
+                    preferred_collateral: Some(vec![]),
+                    min_fill: 100.0,
+                    ts: 0,
+                });
+            }
+        }
+    }
+
+    quotes
+}
+
 #[derive(Debug)]
 pub struct ClearOvernightHandler;
 
-impl StepHandler for ClearOvernightHandler {
+impl PhaseHandler for ClearOvernightHandler {
     fn execute(
-        &self, engine: &mut crate::executor::SimulationEngine, _context: &mut super::StepContext,
+        &self, engine: &mut crate::executor::SimulationEngine, _context: &mut PhaseContext,
         _rng: &mut dyn rand::RngCore,
     ) -> StepResult {
         execute_step(|| {
             use domains::Domain;
             use sim_core::types::markets::overnight_clearing::clear_fedfunds;
 
-            let initial_fedfunds = engine.state.financial_system.funding_markets.fedfunds_on.len();
-            let initial_repo = engine.state.financial_system.funding_markets.repo_gc1d.len();
-
-            tracing::info!("Clearing overnight funding markets: {} fedfunds, {} repos", initial_fedfunds, initial_repo);
-
             let fedfunds_quotes = engine.state.financial_system.funding_markets.take_fedfunds();
             let ff_result = clear_fedfunds(fedfunds_quotes);
-
-            tracing::info!(
-                "Fed Funds clearing: {} matches, ${:.2}M volume, {:.2}bps avg rate",
-                ff_result.clearing_stats.num_matches,
-                ff_result.clearing_stats.total_volume / 1_000_000.0,
-                ff_result.clearing_stats.weighted_avg_rate
-            );
 
             let banking_domain = domains::banking_domain::BankingDomain {};
             let mut all_effects = Vec::new();
@@ -1021,34 +1163,17 @@ impl StepHandler for ClearOvernightHandler {
                 let result = banking_domain.execute(&action, &engine.state);
                 if result.success {
                     all_effects.extend(result.effects);
-                } else {
-                    tracing::warn!("Failed to execute fedfunds loan: {:?}", result.errors);
                 }
             }
 
             engine.state.apply_effects(&all_effects).map_err(|e| e.to_string())?;
 
-            if ff_result.clearing_stats.unfilled_borrow_demand > 1e6 {
-                tracing::warn!(
-                    "Unmet borrowing demand: ${:.2}M at lowest rate {}bps",
-                    ff_result.clearing_stats.unfilled_borrow_demand / 1_000_000.0,
-                    ff_result.unmatched_bids.first().map(|q| q.limit_rate_bps).unwrap_or(dec!(0))
-                );
-            }
+            let mut auto_repo_quotes = generate_fallback_repo_quotes(&engine.state);
+            let manual_repo_quotes = engine.state.financial_system.funding_markets.take_repo_gc1d();
+            auto_repo_quotes.extend(manual_repo_quotes);
 
-            let repo_quotes = engine.state.financial_system.funding_markets.take_repo_gc1d();
-            let repo_result = sim_core::types::markets::overnight_clearing::clear_repo_gc1d(
-                repo_quotes,
-                &engine.state,
-                2.0,
-            );
-
-            tracing::info!(
-                "Repo GC1D clearing: {} matches, ${:.2}M volume, {:.2}bps avg rate",
-                repo_result.clearing_stats.num_matches,
-                repo_result.clearing_stats.total_volume / 1_000_000.0,
-                repo_result.clearing_stats.weighted_avg_rate
-            );
+            let repo_result =
+                sim_core::types::markets::overnight_clearing::clear_repo_gc1d(auto_repo_quotes, &engine.state, 2.0);
 
             let mut repo_effects = Vec::new();
             for trade in &repo_result.matches {
@@ -1066,17 +1191,18 @@ impl StepHandler for ClearOvernightHandler {
                 let result = banking_domain.execute(&action, &engine.state);
                 if result.success {
                     repo_effects.extend(result.effects);
-                } else {
-                    tracing::warn!("Failed to execute repo agreement: {:?}", result.errors);
                 }
             }
 
             engine.state.apply_effects(&repo_effects).map_err(|e| e.to_string())?;
 
-            if repo_result.clearing_stats.unfilled_borrow_demand > 1e6 {
-                tracing::warn!(
-                    "Unmet repo demand: ${:.2}M (insufficient collateral or no lenders)",
-                    repo_result.clearing_stats.unfilled_borrow_demand / 1_000_000.0
+            if ff_result.matches.len() > 0 || repo_result.matches.len() > 0 {
+                tracing::info!(
+                    "Overnight markets: FedFunds {} matches ${:.0}, Repo {} matches ${:.0}",
+                    ff_result.matches.len(),
+                    ff_result.clearing_stats.total_volume,
+                    repo_result.matches.len(),
+                    repo_result.clearing_stats.total_volume
                 );
             }
 
@@ -1084,6 +1210,166 @@ impl StepHandler for ClearOvernightHandler {
                 .with_metric("fedfunds_volume", ff_result.clearing_stats.total_volume as usize)
                 .with_metric("repos_cleared", repo_result.clearing_stats.num_matches)
                 .with_metric("repos_volume", repo_result.clearing_stats.total_volume as usize))
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct ReserveCalcHandler;
+
+impl PhaseHandler for ReserveCalcHandler {
+    fn execute(&self, engine: &mut SimulationEngine, _context: &mut PhaseContext, _rng: &mut dyn RngCore) -> StepResult {
+        execute_step(|| {
+            let state = &engine.state;
+            let fs = &state.financial_system;
+            let cb_id = fs.central_bank.id;
+            let reserve_requirement = fs.central_bank.reserve_requirement;
+
+            let mut reserve_diagnostics = Vec::new();
+            let mut total_reserves = 0.0;
+            let mut total_deposits = 0.0;
+            let mut banks_short = 0;
+            let mut banks_excess = 0;
+
+            for (agent_id, bs) in &fs.balance_sheets {
+                if *agent_id == cb_id || *agent_id == fs.government.id {
+                    continue;
+                }
+
+                let mut agent_deposits = 0.0;
+                for (inst_id, pos) in &bs.liabilities {
+                    if let Some(inst) = fs.instruments.instruments.get(inst_id) {
+                        if let InstrumentRuntime::Cash(cash) = inst.state() {
+                            if matches!(cash.cash_type, CashType::DemandDeposit | CashType::SavingsDeposit) {
+                                agent_deposits += pos.quantity * pos.book_value_per_unit.to_f64();
+                            }
+                        }
+                    }
+                }
+
+                let mut agent_reserves = 0.0;
+                for (inst_id, pos) in &bs.assets {
+                    if let Some(inst) = fs.instruments.instruments.get(inst_id) {
+                        if let InstrumentRuntime::Cash(cash) = inst.state() {
+                            if cash.cash_type == CashType::CentralBankReserves {
+                                agent_reserves += pos.quantity * pos.book_value_per_unit.to_f64();
+                            }
+                        }
+                    }
+                }
+
+                if agent_deposits > 0.0 {
+                    let required_reserves = agent_deposits * reserve_requirement;
+                    let shortfall = (required_reserves - agent_reserves).max(0.0);
+                    let excess = (agent_reserves - required_reserves).max(0.0);
+
+                    if shortfall > 0.01 {
+                        banks_short += 1;
+                    } else if excess > 0.01 {
+                        banks_excess += 1;
+                    }
+
+                    total_reserves += agent_reserves;
+                    total_deposits += agent_deposits;
+
+                    reserve_diagnostics.push((*agent_id, agent_deposits, agent_reserves, required_reserves));
+                }
+            }
+
+            let system_reserve_ratio = if total_deposits > 0.0 {
+                total_reserves / total_deposits
+            } else {
+                0.0
+            };
+
+            Ok(StepTelemetry::single("total_reserves", total_reserves as usize)
+                .with_metric("total_deposits", total_deposits as usize)
+                .with_metric("system_reserve_ratio", (system_reserve_ratio * 10000.0) as usize)
+                .with_metric("banks_short", banks_short)
+                .with_metric("banks_excess", banks_excess))
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct CorridorFacilitiesHandler;
+
+impl PhaseHandler for CorridorFacilitiesHandler {
+    fn execute(&self, engine: &mut SimulationEngine, _context: &mut PhaseContext, _rng: &mut dyn RngCore) -> StepResult {
+        execute_step(|| {
+            let state = &mut engine.state;
+            let fs = &state.financial_system;
+            let cb_id = fs.central_bank.id;
+            let policy_rate_bps = fs.central_bank.policy_rate_bps;
+
+            let _deposit_facility_rate_bps = (policy_rate_bps - dec!(50)).max(dec!(0));
+            let _lending_facility_rate_bps = policy_rate_bps + dec!(100);
+
+            let effects: Vec<StateEffect> = Vec::new();
+            let mut deposit_facility_usage = 0.0;
+            let mut lending_facility_usage = 0.0;
+            let mut agents_using_deposit = 0;
+            let mut agents_using_lending = 0;
+
+            for (agent_id, bs) in fs.balance_sheets.iter() {
+                if *agent_id == cb_id || *agent_id == fs.government.id {
+                    continue;
+                }
+
+                let mut agent_deposits = 0.0;
+                for (inst_id, pos) in &bs.liabilities {
+                    if let Some(inst) = fs.instruments.instruments.get(inst_id) {
+                        if let InstrumentRuntime::Cash(cash) = inst.state() {
+                            if matches!(cash.cash_type, CashType::DemandDeposit | CashType::SavingsDeposit) {
+                                agent_deposits += pos.quantity * pos.book_value_per_unit.to_f64();
+                            }
+                        }
+                    }
+                }
+
+                let mut agent_reserves = 0.0;
+                for (inst_id, pos) in &bs.assets {
+                    if let Some(inst) = fs.instruments.instruments.get(inst_id) {
+                        if let InstrumentRuntime::Cash(cash) = inst.state() {
+                            if cash.cash_type == CashType::CentralBankReserves {
+                                agent_reserves += pos.quantity * pos.book_value_per_unit.to_f64();
+                            }
+                        }
+                    }
+                }
+
+                if agent_deposits > 0.0 {
+                    let reserve_requirement = fs.central_bank.reserve_requirement;
+                    let required_reserves = agent_deposits * reserve_requirement;
+                    let excess = agent_reserves - required_reserves;
+
+                    if excess > required_reserves * 0.1 {
+                        let facility_amount = (excess * 0.5).max(0.0);
+                        if facility_amount > 1.0 {
+                            deposit_facility_usage += facility_amount;
+                            agents_using_deposit += 1;
+                            tracing::debug!("Agent {:?} using deposit facility: ${:.2}", agent_id, facility_amount);
+                        }
+                    }
+
+                    let shortfall = required_reserves - agent_reserves;
+                    if shortfall > 0.01 {
+                        let facility_amount = shortfall * 1.0;
+                        lending_facility_usage += facility_amount;
+                        agents_using_lending += 1;
+                        tracing::debug!("Agent {:?} using lending facility: ${:.2}", agent_id, facility_amount);
+                    }
+                }
+            }
+
+            if !effects.is_empty() {
+                engine.state.apply_effects(&effects).map_err(|e| e.to_string())?;
+            }
+
+            Ok(StepTelemetry::single("deposit_facility_usage", deposit_facility_usage as usize)
+                .with_metric("lending_facility_usage", lending_facility_usage as usize)
+                .with_metric("agents_using_deposit", agents_using_deposit)
+                .with_metric("agents_using_lending", agents_using_lending))
         })
     }
 }

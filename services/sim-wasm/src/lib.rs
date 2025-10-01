@@ -9,7 +9,7 @@ use chrono::Utc;
 #[cfg(target_arch = "wasm32")]
 use console_error_panic_hook;
 #[cfg(target_arch = "wasm32")]
-use engine_v3::scheduler::{TickExecutionResult, TickStep};
+use engine_v3::scheduler::TickExecutionResult;
 use engine_v3::{Scenario, SimulationEngine};
 #[cfg(target_arch = "wasm32")]
 use js_sys::{Date, Uint8Array};
@@ -305,30 +305,20 @@ impl WasmMirror {
         {
             let label = if was_reset { "reset" } else { "step" };
             let message = format!(
-                "[sim-wasm] {label} tick={tick} run_tick={:.2}ms digest={:.2}ms total={:.2}ms",
+                "[sim-wasm] {label} tick={tick} run_tick={:.2}ms digest={:.2}ms total={:.2}ms\n\n",
                 metrics.run_tick_ms,
                 metrics.digest_build_ms,
                 metrics.run_tick_ms + metrics.digest_build_ms
             );
-            let digest_details = metrics
-                .digest_phases
-                .iter()
-                .map(|phase| format!("{}={:.2}ms", phase.phase, phase.duration_ms))
-                .collect::<Vec<_>>()
-                .join(", ");
             let engine_details = metrics
                 .engine_phases
                 .iter()
-                .map(|phase| format!("{}={:.2}ms", phase.step, phase.duration_ms))
-                .collect::<Vec<_>>()
-                .join(", ");
+                .map(|phase| format!("{}={:.2}ms\n\n", phase.step, phase.duration_ms))
+                .collect::<Vec<_>>().join("");
 
             let mut extended = message;
-            if !digest_details.is_empty() {
-                extended = format!("{extended} digest=[{digest_details}]");
-            }
             if !engine_details.is_empty() {
-                extended = format!("{extended} engine=[{engine_details}]");
+                extended = format!("{extended} engine=[{engine_details}]\n");
             }
 
             web_sys::console::log_1(&JsValue::from_str(&extended));
@@ -343,45 +333,19 @@ impl WasmMirror {
 
 #[cfg(target_arch = "wasm32")]
 fn collect_engine_phases(result: &TickExecutionResult) -> Vec<EnginePhaseTiming> {
-    let mut phases: Vec<EnginePhaseTiming> = TickStep::all()
-        .into_iter()
-        .filter_map(|step| {
-            result.step_results.get(&step).map(|step_result| EnginePhaseTiming {
-                step: tick_step_label(step).to_string(),
-                duration_ms: step_result.duration_ms as f64,
-            })
-        })
-        .collect();
+    let mut phases = Vec::new();
+
+    for session_result in &result.session_results {
+        for (phase, phase_result) in &session_result.phase_results {
+            phases.push(EnginePhaseTiming {
+                step: format!("{:?}/{:?}", session_result.session, phase),
+                duration_ms: phase_result.duration_ms as f64,
+            });
+        }
+    }
 
     phases.sort_by(|a, b| b.duration_ms.partial_cmp(&a.duration_ms).unwrap_or(std::cmp::Ordering::Equal));
     phases
-}
-
-#[cfg(target_arch = "wasm32")]
-fn tick_step_label(step: TickStep) -> &'static str {
-    use TickStep::*;
-    match step {
-        Upkeep => "upkeep",
-        GatherIntentions => "gather_intentions",
-        ResolveIndependentPhase => "resolve_independent",
-        ResolveMarketPhase => "resolve_market",
-        ApplyMarketEffectsForPriceDiscovery => "apply_market_effects",
-        ResolveDependentPhase => "resolve_dependent",
-        Auction => "auction",
-        ClearMarkets => "clear_markets",
-        ClearOvernightMarkets => "clear_overnight",
-        SettleTrades => "settle_trades",
-        ServiceDeposits => "service_deposits",
-        ServiceGovernmentDebt => "service_government_debt",
-        ServiceInterbankLoans => "service_interbank_loans",
-        ServiceRepos => "service_repos",
-        ServiceCredit => "service_credit",
-        ApplyPaymentQueuing => "apply_payment_queuing",
-        RunRTGS => "run_rtgs",
-        ReconcileCredit => "reconcile_credit",
-        ApplyAllEffects => "apply_all_effects",
-        UpdateHistory => "update_history",
-    }
 }
 
 fn get_arrow_pl() -> ArrowResult<Vec<u8>> {

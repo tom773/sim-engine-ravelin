@@ -235,7 +235,6 @@ impl StateEffectApplicator {
                     state.financial_system.clearing_house.csd.debit_securities(agent_id, *instrument_id, qty).map_err(
                         |e| EffectError::InvalidState(format!("Failed to debit securities for {}: {}", agent_id, e)),
                     )?;
-                    tracing::debug!("Debited {} units of {} from {} custody account", qty, instrument_id, agent_id);
                 }
 
                 let mut agents_with_liabilities = Vec::new();
@@ -248,7 +247,6 @@ impl StateEffectApplicator {
                 for agent_id in agents_with_liabilities {
                     if let Some(bs) = state.financial_system.balance_sheets.get_mut(&agent_id) {
                         bs.liabilities.remove(instrument_id);
-                        tracing::debug!("Removed {} from {} balance sheet liabilities", instrument_id, agent_id);
                     }
                 }
 
@@ -262,7 +260,6 @@ impl StateEffectApplicator {
                 for agent_id in agents_with_assets {
                     if let Some(bs) = state.financial_system.balance_sheets.get_mut(&agent_id) {
                         bs.assets.remove(instrument_id);
-                        tracing::debug!("Removed {} from {} balance sheet assets", instrument_id, agent_id);
                     }
                 }
 
@@ -271,7 +268,6 @@ impl StateEffectApplicator {
                         state.financial_system.instrument_registry.redeem_lot(*instrument_id).map_err(|e| {
                             EffectError::InvalidState(format!("Failed to redeem lot in registry: {}", e))
                         })?;
-                        tracing::debug!("Redeemed lot {} from InstrumentRegistry", instrument_id);
                     }
                 }
 
@@ -281,7 +277,6 @@ impl StateEffectApplicator {
                     .redeem_instrument(*instrument_id)
                     .map_err(|e| EffectError::InvalidState(format!("Failed to remove from catalog: {}", e)))?;
 
-                tracing::info!("Redeemed instrument: {}", instrument_id);
                 Ok(())
             }
 

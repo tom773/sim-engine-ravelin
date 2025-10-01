@@ -691,6 +691,19 @@ fn build_instrument_registry(system: &FinancialSystem) -> InstrumentRegistryDige
                     meta.maturity_date = Some(trade.due_date.format("%Y-%m-%d").to_string());
                     meta.extra.insert("invoice_amount".into(), json!(sanitize_f64(trade.amount.to_f64())));
                 }
+                CreditState::OvernightCredit(overnight) => {
+                    meta.issuer_id = Some(overnight.lender.0);
+                    meta.borrower_id = Some(overnight.borrower.0);
+                    meta.maturity_date = Some(overnight.maturity_date.format("%Y-%m-%d").to_string());
+                    meta.extra.insert("credit_type".into(), json!(format!("{:?}", overnight.credit_type)));
+                    meta.extra.insert("rate_bps".into(), json!(rate_to_f64(overnight.rate_bps)));
+                    if let Some(collateral_id) = overnight.collateral {
+                        meta.extra.insert("collateral_id".into(), json!(collateral_id.0.to_string()));
+                    }
+                    if let Some(qty) = overnight.collateral_quantity {
+                        meta.extra.insert("collateral_quantity".into(), json!(sanitize_f64(qty)));
+                    }
+                }
             },
             InstrumentRuntime::Equity(equity) => {
                 meta.issuer_id = Some(equity.profile.issuer.0);

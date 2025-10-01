@@ -5,7 +5,7 @@ members = [
     "engine_v3",
     "services/sim-wasm",
     "services/sim-mirror",
-    "services/sim-profiler",
+    "services/sim-tests",
 ]
 resolver = "3"
 

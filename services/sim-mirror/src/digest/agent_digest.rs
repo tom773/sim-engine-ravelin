@@ -404,6 +404,7 @@ fn credit_label(credit: &CreditState) -> String {
         CreditState::ConsumerCreditCard(facility) => credit_card_label(facility),
         CreditState::TradeCredit(trade) => trade_credit_label(trade),
         CreditState::Facility(facility) => credit_facility_label(facility),
+        CreditState::OvernightCredit(overnight) => overnight_credit_label(overnight),
     }
 }
 
@@ -491,6 +492,23 @@ fn structured_label(tranche: &StructuredTrancheState) -> String {
     }
 
     base.trim().to_string()
+}
+
+fn overnight_credit_label(overnight: &OvernightCreditState) -> String {
+    let type_label = match overnight.credit_type {
+        OvernightCreditType::InterbankLoan => "Interbank",
+        OvernightCreditType::FedFunds => "Fed Funds",
+        OvernightCreditType::Repo => "Repo",
+    };
+
+    let tenor = (overnight.maturity_date - overnight.issue_date).num_days();
+    let tenor_label = if tenor == 1 { "1D".to_string() } else { format!("{}D", tenor) };
+
+    if let Some(rate) = format_rate_bps(overnight.rate_bps) {
+        format!("{} {} @ {}", type_label, tenor_label, rate)
+    } else {
+        format!("{} {}", type_label, tenor_label)
+    }
 }
 
 fn derivative_label(derivative: &DerivativeState, financial_system: &FinancialSystem) -> String {

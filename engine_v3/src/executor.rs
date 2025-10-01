@@ -65,35 +65,10 @@ impl SimulationEngine {
     }
     fn create_scheduler(&self) -> TickScheduler {
         let mut scheduler = TickScheduler::new();
-        scheduler.register_handler(TickStep::Upkeep, UpkeepHandler);
-        scheduler.register_handler(TickStep::GatherIntentions, GatherIntentionsHandler);
-        scheduler.register_handler(
-            TickStep::ResolveIndependentPhase,
-            PhaseResolutionHandler { phase: ResolutionPhase::Independent },
-        );
-        scheduler
-            .register_handler(TickStep::ResolveMarketPhase, PhaseResolutionHandler { phase: ResolutionPhase::Market });
-        scheduler.register_handler(TickStep::ApplyMarketEffectsForPriceDiscovery, ApplyMarketEffectsHandler);
-        scheduler.register_handler(
-            TickStep::ResolveDependentPhase,
-            PhaseResolutionHandler { phase: ResolutionPhase::Dependent },
-        );
-        scheduler.register_handler(TickStep::Auction, DebtAuctionsHandler);
-        scheduler.register_handler(TickStep::ClearMarkets, ClearMarketsHandler);
-        scheduler.register_handler(TickStep::ClearOvernightMarkets, ClearOvernightHandler);
-        scheduler.register_handler(TickStep::SettleTrades, SettleTradesHandler);
-        scheduler.register_handler(TickStep::ServiceCredit, CreditServicingHandler);
-        scheduler.register_handler(TickStep::ServiceDeposits, DepositServicingHandler);
-        scheduler.register_handler(TickStep::ServiceGovernmentDebt, GovCouponsHandler);
-        scheduler.register_handler(TickStep::ServiceInterbankLoans, InterbankLoanServicingHandler);
-        scheduler.register_handler(TickStep::ServiceRepos, RepoServicingHandler);
-        scheduler.register_handler(TickStep::ApplyPaymentQueuing, ApplyPaymentQueuingHandler);
-        scheduler.register_handler(TickStep::RunRTGS, RunRTGSHandler);
-        scheduler.register_handler(TickStep::ReconcileCredit, CreditReconciliationHandler);
-        scheduler.register_handler(TickStep::ApplyAllEffects, ApplyAllEffectsHandler);
-        scheduler.register_handler(TickStep::UpdateHistory, UpdateHistoryHandler);
+        register_legacy_handlers_as_phases(&mut scheduler);
         scheduler
     }
+
 
     pub fn run_tick(&mut self, rng: &mut dyn RngCore) -> (TickExecutionResult, Vec<SimEvent>) {
         self.event_log.clear();
@@ -107,21 +82,18 @@ impl SimulationEngine {
         }
         if self.tick_logging_enabled {
             let total_ms = execution_result.total_duration.as_secs_f64() * 1_000.0;
-            let phase_summary = TickStep::all()
-                .into_iter()
-                .filter_map(|step| {
-                    execution_result
-                        .step_results
-                        .get(&step)
-                        .map(|result| format!("{}={}ms", tick_step_label(step), result.duration_ms))
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
 
-            if !execution_result.failed_steps.is_empty() {
+            let mut session_summaries = Vec::new();
+            for session_result in &execution_result.session_results {
+                let session_ms = session_result.duration.as_secs_f64() * 1_000.0;
+                let phase_count = session_result.phase_results.len();
+                session_summaries.push(format!("{:?}={:.1}ms({} phases)", session_result.session, session_ms, phase_count));
+            }
+            let session_summary = session_summaries.join(", ");
+
+            if !execution_result.success {
                 tracing::warn!(
                     tick = execution_result.tick_number,
-                    ?execution_result.failed_steps,
                     "tick encountered failures"
                 );
             }
@@ -129,29 +101,24 @@ impl SimulationEngine {
             tracing::info!(
                 tick = execution_result.tick_number,
                 total_ms,
-                phases = phase_summary,
-                "tick execution timings"
+                sessions = session_summary,
+                "tick execution completed"
             );
         }
         (execution_result, std::mem::take(&mut self.event_log))
     }
     pub fn run_day(&mut self, rng: &mut dyn rand::RngCore) -> (Vec<TickExecutionResult>, Vec<SimEvent>) {
         self.event_log.clear();
-        let mut results = Vec::with_capacity(3);
-        let mut day_events = Vec::new();
 
-        for session in Session::ALL {
-            self.state.current_session = session;
-            let scheduler = std::mem::take(&mut self.scheduler);
-            let result = scheduler.execute_tick(self, rng);
-            self.scheduler = scheduler;
-            self.scheduler_metrics.record_tick(&result);
-            results.push(result);
-            day_events.extend(self.event_log.drain(..));
-        }
+        let scheduler = std::mem::take(&mut self.scheduler);
+        let result = scheduler.execute_tick(self, rng);
+        self.scheduler = scheduler;
+        self.scheduler_metrics.record_tick(&result);
+
+        let day_events = std::mem::take(&mut self.event_log);
 
         self.state.ticknum += 1;
-        (results, day_events)
+        (vec![result], day_events)
     }
     pub fn gather_intentions(&self, rng: &mut dyn RngCore) -> Vec<SimIntention> {
         let mut all_intentions = Vec::new();
@@ -735,31 +702,6 @@ impl SimulationEngine {
     }
 }
 
-fn tick_step_label(step: TickStep) -> &'static str {
-    use TickStep::*;
-    match step {
-        Upkeep => "upkeep",
-        GatherIntentions => "gather_intentions",
-        ResolveIndependentPhase => "resolve_independent",
-        ResolveMarketPhase => "resolve_market",
-        ApplyMarketEffectsForPriceDiscovery => "apply_market_effects",
-        ResolveDependentPhase => "resolve_dependent",
-        Auction => "auction",
-        ClearMarkets => "clear_markets",
-        ClearOvernightMarkets => "clear_overnight",
-        SettleTrades => "settle_trades",
-        ServiceDeposits => "service_deposits",
-        ServiceGovernmentDebt => "service_government_debt",
-        ServiceInterbankLoans => "service_interbank_loans",
-        ServiceRepos => "service_repos",
-        ServiceCredit => "service_credit",
-        ApplyPaymentQueuing => "apply_payment_queuing",
-        RunRTGS => "run_rtgs",
-        ReconcileCredit => "reconcile_credit",
-        ApplyAllEffects => "apply_all_effects",
-        UpdateHistory => "update_history",
-    }
-}
 
 pub fn run_simulation(engine: &mut SimulationEngine) -> Vec<TickExecutionResult> {
     let mut rng = ThreadRng::default();

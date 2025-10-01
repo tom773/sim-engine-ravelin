@@ -375,7 +375,6 @@ impl FinancialSystem {
     }
 
     fn get_instrument_type_code(&self, inst: &Instrument) -> &str {
-        // Runtime-based codes now that InstrumentType wrappers are gone.
         match inst.state() {
             InstrumentRuntime::Cash(d) => match d.cash_type {
                 CashType::DemandDeposit => "DD",
@@ -400,6 +399,7 @@ impl FinancialSystem {
                 CreditState::ConsumerCreditCard(_) => "CL",
                 CreditState::Facility(_) => "CL",
                 CreditState::TradeCredit(_) => "TC",
+                CreditState::OvernightCredit(_) => "LN",
             },
             InstrumentRuntime::RealAsset(asset) => match asset {
                 RealAssetState::Inventory { .. } => "INV",

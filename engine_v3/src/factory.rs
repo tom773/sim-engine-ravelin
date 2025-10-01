@@ -145,6 +145,18 @@ impl<'a> AgentFactory<'a> {
 
     fn populate_liability(&mut self, owner_id: AgentId, liability_config: &LiabilityConfig) {
         match liability_config {
+            LiabilityConfig::Deposit { creditor_id: _, amount, rate_bps: _ } => {
+                let instrument = self.get_or_create_deposit_instrument(owner_id);
+
+                let synthetic_depositor = AgentId(Uuid::new_v4());
+
+                self.pending_effects.push(StateEffect::Financial(FinancialEffect::CreateInstrument {
+                    instrument: instrument.clone(),
+                    creditor: synthetic_depositor,
+                    debtor: owner_id,
+                    quantity: *amount,
+                }));
+            }
             LiabilityConfig::Loan { creditor_id, principal, rate_bps, maturity_days } => {
                 let creditor_agent_id = *self.agent_ids.get(creditor_id).unwrap();
                 self.create_loan_via_effects(
@@ -193,7 +205,6 @@ impl<'a> AgentFactory<'a> {
 
         let amortization = Amortization::Annuity;
 
-        // Convert supplied maturity in days to an approximate whole-month tenor.
         let term_months = ((maturity_days as f64) / 30.4375).round().max(1.0) as u32;
 
         let loan_archetype = LoanArchetype {

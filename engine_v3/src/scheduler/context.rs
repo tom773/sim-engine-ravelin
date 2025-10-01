@@ -1,4 +1,3 @@
-use super::{StepResult, TickStep};
 use ahash::AHashMap;
 use domains::ResolutionPhase;
 use sim_core::*;
@@ -7,9 +6,8 @@ use std::collections::HashMap as StdHashMap;
 use std::mem;
 
 #[derive(Debug)]
-pub struct StepContext {
+pub struct TickContext {
     pub tick_number: u32,
-    pub step_data: AHashMap<TickStep, StepResult>,
     categorized_intentions: Option<AHashMap<ResolutionPhase, Vec<SimIntention>>>,
     intentions: Option<SmallVec<[SimIntention; 8]>>,
     all_actions: SmallVec<[ActionRecord; 16]>,
@@ -19,11 +17,10 @@ pub struct StepContext {
     market_snapshots: StdHashMap<Symbol, MarketView>,
 }
 
-impl StepContext {
+impl TickContext {
     pub fn new(tick_number: u32) -> Self {
         Self {
             tick_number,
-            step_data: AHashMap::new(),
             categorized_intentions: None,
             intentions: None,
             all_actions: SmallVec::new(),

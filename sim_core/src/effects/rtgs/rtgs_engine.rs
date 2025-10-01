@@ -1,5 +1,4 @@
 use crate::*;
-use tracing::{Level, event};
 use uuid::Uuid;
 
 pub fn run_rtgs(state: &mut SimState) -> Result<Vec<StateEffect>, EffectError> {
@@ -7,8 +6,6 @@ pub fn run_rtgs(state: &mut SimState) -> Result<Vec<StateEffect>, EffectError> {
         return Ok(vec![]);
     }
 
-    state.financial_system.rtgs.settled.clear();
-    state.financial_system.rtgs.rejected.clear();
 
     let finalization_effects = match state.financial_system.rtgs_policy.mode {
         RtgsMode::PureRTGS => run_pure_rtgs(state)?,
@@ -80,24 +77,6 @@ fn run_pure_rtgs(state: &mut SimState) -> Result<Vec<StateEffect>, EffectError> 
                 StepDecision::Settle => {
                     let pi = state.financial_system.rtgs.pending.remove(i);
 
-                    if let TransactionContext::InterbankLoan { loan_id, lender, borrower } = pi.context {
-                        event!(Level::INFO,
-                            payment_id = %pi.id.to_string()[..8],
-                            loan_id = %loan_id.to_string()[..8],
-                            lender = ?lender,
-                            borrower = ?borrower,
-                            amount = %format!("${:.2}M", pi.amount / 1_000_000.0),
-                            "✅ RTGS settled interbank loan"
-                        );
-                        #[cfg(target_arch = "wasm32")]
-                        web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(&format!(
-                            "✅ RTGS settled interbank loan: {} -> {}, ${:.2}M",
-                            &lender.to_string()[..8],
-                            &borrower.to_string()[..8],
-                            pi.amount / 1_000_000.0
-                        )));
-                    }
-
                     apply_cash_movements_immediately(state, &pi)?;
 
                     if let TransactionContext::TradeSettlement { trade_id } = pi.context {
@@ -112,12 +91,6 @@ fn run_pure_rtgs(state: &mut SimState) -> Result<Vec<StateEffect>, EffectError> 
 
                     if let TransactionContext::TradeSettlement { trade_id } = expired_payment.context {
                         finalization_effects.push(StateEffect::Financial(FinancialEffect::DvPCancel { trade_id }));
-
-                        event!(Level::WARN,
-                            payment_id = %expired_payment.id.to_string()[..8],
-                            trade_id = %trade_id.to_string()[..8],
-                            "❌ Payment failed - generating DvP cancellation effect"
-                        );
                     }
 
                     state.financial_system.rtgs.rejected.push((expired_payment, "Deadline exceeded".to_string()));
@@ -408,6 +381,58 @@ fn apply_interbank_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Re
         return Ok(());
     }
 
+    let is_bank_to_bank = pi.payer == pi.from_bank && pi.payee == pi.to_bank;
+
+    if is_bank_to_bank {
+        let from_bank_reserves = state
+            .financial_system
+            .find_bank_reserves_account(&pi.from_bank)
+            .ok_or_else(|| EffectError::InvalidState("From bank reserves not found".to_string()))?;
+
+        let to_bank_reserves = state
+            .financial_system
+            .find_bank_reserves_account(&pi.to_bank)
+            .ok_or_else(|| EffectError::InvalidState("To bank reserves not found".to_string()))?;
+
+        StateEffectApplicator::apply_cash_position_adjustment(
+            state,
+            pi.from_bank,
+            from_bank_reserves,
+            -pi.amount,
+            &PositionSide::Asset,
+            None,
+        )?;
+
+        StateEffectApplicator::apply_cash_position_adjustment(
+            state,
+            cb_id,
+            from_bank_reserves,
+            -pi.amount,
+            &PositionSide::Liability,
+            None,
+        )?;
+
+        StateEffectApplicator::apply_cash_position_adjustment(
+            state,
+            pi.to_bank,
+            to_bank_reserves,
+            pi.amount,
+            &PositionSide::Asset,
+            None,
+        )?;
+
+        StateEffectApplicator::apply_cash_position_adjustment(
+            state,
+            cb_id,
+            to_bank_reserves,
+            pi.amount,
+            &PositionSide::Liability,
+            None,
+        )?;
+
+        return Ok(());
+    }
+
     let from_bank_reserves = state
         .financial_system
         .find_bank_reserves_account(&pi.from_bank)
@@ -440,9 +465,27 @@ fn apply_interbank_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Re
     StateEffectApplicator::apply_cash_position_adjustment(
         state,
         pi.from_bank,
+        payer_account_id,
+        -pi.amount,
+        &PositionSide::Liability,
+        None,
+    )?;
+
+    StateEffectApplicator::apply_cash_position_adjustment(
+        state,
+        pi.from_bank,
         from_bank_reserves,
         -pi.amount,
         &PositionSide::Asset,
+        None,
+    )?;
+
+    StateEffectApplicator::apply_cash_position_adjustment(
+        state,
+        cb_id,
+        from_bank_reserves,
+        -pi.amount,
+        &PositionSide::Liability,
         None,
     )?;
 
@@ -457,19 +500,19 @@ fn apply_interbank_transfer(state: &mut SimState, pi: &PaymentInstruction) -> Re
 
     StateEffectApplicator::apply_cash_position_adjustment(
         state,
-        pi.payee,
-        payee_account_id,
+        cb_id,
+        to_bank_reserves,
         pi.amount,
-        &PositionSide::Asset,
+        &PositionSide::Liability,
         None,
     )?;
 
     StateEffectApplicator::apply_cash_position_adjustment(
         state,
-        pi.from_bank,
-        payer_account_id,
-        -pi.amount,
-        &PositionSide::Liability,
+        pi.payee,
+        payee_account_id,
+        pi.amount,
+        &PositionSide::Asset,
         None,
     )?;
 

@@ -13,7 +13,6 @@ use std::hash::Hash;
 use std::sync::Arc;
 use uuid::Uuid;
 
-// TODO Interbank Lending and Repo
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimedTrade {
@@ -126,6 +125,7 @@ pub fn listing_key_from_instrument(inst: &Instrument) -> ListingKey {
             CreditState::ConsumerCreditCard(_) => ListingKey::CreditCard,
             CreditState::TradeCredit(_) => ListingKey::TradeCredit,
             CreditState::Facility(facility) => ListingKey::CreditFacility { facility_type: facility.facility_type },
+            CreditState::OvernightCredit(_) => ListingKey::CreditLoan { loan_type: LoanType::WorkingCapital },
         },
         InstrumentRuntime::RealAsset(_) => ListingKey::RealAsset,
         InstrumentRuntime::Equity(e) => ListingKey::Equity { issuer: e.profile.issuer },
@@ -163,6 +163,7 @@ fn instrument_listing_agent(inst: &Instrument) -> Option<AgentId> {
             CreditState::ConsumerCreditCard(facility) => Some(facility.lender),
             CreditState::TradeCredit(trade) => Some(trade.creditor),
             CreditState::Facility(facility) => Some(facility.lender),
+            CreditState::OvernightCredit(overnight) => Some(overnight.lender),
         },
         InstrumentRuntime::Equity(equity) => Some(equity.profile.issuer),
         InstrumentRuntime::Structured(tranche) => Some(tranche.issuer),
@@ -463,7 +464,6 @@ impl Exchange {
         }
     }
 
-    /// New: also refresh pricers for *existing* financial markets using instrument registry.
     pub fn attach_pricing_feeds_with_registry(
         &mut self, feeds: PricingFeeds, instruments: &std::collections::HashMap<InstrumentId, Instrument>,
     ) {
@@ -746,7 +746,6 @@ impl<'de> Deserialize<'de> for Exchange {
     where
         D: Deserializer<'de>,
     {
-        // Consume input but reject: Exchange must be reconstructed, not deserialized.
         let _ = serde::de::IgnoredAny::deserialize(deserializer)?;
         Err(serde::de::Error::custom(
             "Exchange does not support direct deserialization. \

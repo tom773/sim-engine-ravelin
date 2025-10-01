@@ -1,0 +1,51 @@
+name = "Interbank Lending Test"
+description = "Minimal scenario for testing interbank lending"
+
+[config]
+seed = 42
+iterations = 100
+
+[[goods]]
+id = "test_good"
+name = "Test Good"
+unit = "unit"
+category = "ConsumerGood"
+cpi_weight = 1.0
+
+[[recipes]]
+id = "test_recipe"
+name = "Test Recipe"
+inputs = []
+outputs = [{ good_id = "test_good", quantity = 1.0 }]
+labour_hours = 1.0
+
+[[banks]]
+id = "bank_01"
+name = "Bank 01"
+initial_assets = [
+    { type = "Bond", tenor = "T2Y", quantity = 1_000 }
+]
+initial_liabilities = [
+    { type = "Deposit", creditor_id = "depositor_01", amount = 500_000.0 }
+]
+reserves = { type = "ratio_of_liabilities", min_ratio = 0.1, max_ratio = 0.2 }
+
+[[banks]]
+id = "bank_02"
+name = "Bank 02"
+initial_assets = [
+    { type = "Bond", tenor = "T2Y", quantity = 500 }
+]
+initial_liabilities = [
+    { type = "Deposit", creditor_id = "depositor_02", amount = 300_000.0 }
+]
+reserves = { type = "ratio_of_liabilities", min_ratio = 0.1, max_ratio = 0.2 }
+
+[[banks]]
+id = "bank_03"
+name = "Bank 03"
+initial_assets = []
+initial_liabilities = [
+    { type = "Deposit", creditor_id = "depositor_03", amount = 200_000.0 }
+]
+reserves = { type = "ratio_of_liabilities", min_ratio = 0.1, max_ratio = 0.2 }

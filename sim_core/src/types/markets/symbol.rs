@@ -46,7 +46,7 @@ impl std::str::FromStr for Symbol {
         Ok(Symbol(s.to_string()))
     }
 }
-#[derive(Debug, Default, Clone)] // This derive will now work
+#[derive(Debug, Default, Clone)]
 pub struct SymbolRegistry {
     inst: Arc<RwLock<DashMap<InstrumentId, (Symbol, ShortId)>>>,
     goods: Arc<RwLock<DashMap<GoodId, (Symbol, ShortId)>>>,
@@ -137,7 +137,6 @@ fn slugify(s: &str) -> String {
 }
 
 fn derive_instrument_symbol(inst: &Instrument) -> Symbol {
-    // Updated symbol derivation to match on InstrumentRuntime now that legacy InstrumentType was removed.
     match inst.state() {
         InstrumentRuntime::Bond(bond) => {
             let base = match bond.bond_type() {
@@ -188,6 +187,10 @@ fn derive_instrument_symbol(inst: &Instrument) -> Symbol {
             CreditState::TradeCredit(details) => {
                 let d = details.due_date.format("%Y%m%d");
                 Symbol(format!("TCR_{}_{}", short_agent(details.debtor), d))
+            }
+            CreditState::OvernightCredit(overnight) => {
+                let d = overnight.maturity_date.format("%Y%m%d");
+                Symbol(format!("IBL_{}_{}", short_agent(overnight.borrower), d))
             }
         },
         InstrumentRuntime::Equity(equity) => Symbol(format!("EQ_{}", short_agent(equity.profile.issuer))),

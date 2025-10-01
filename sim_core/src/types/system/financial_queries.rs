@@ -146,6 +146,11 @@ impl Instrument {
                         subtype: format!("{:?}_{:?}", loan.loan_type, loan.loan_id),
                     }
                 }
+                CreditState::OvernightCredit(overnight) => ConsolidationKey {
+                    issuer: overnight.lender,
+                    instrument_type: "OvernightCredit".to_string(),
+                    subtype: format!("{:?}", overnight.credit_type),
+                },
             },
             InstrumentRuntime::RealAsset(asset) => {
                 let (owner, subtype) = match asset {
@@ -328,6 +333,11 @@ impl FinancialSystem {
                     info.face_value = Some(details.amount);
                     info.maturity_date = Some(details.due_date);
                     Some(details.creditor)
+                }
+                CreditState::OvernightCredit(overnight) => {
+                    info.face_value = Some(overnight.amount);
+                    info.maturity_date = Some(overnight.maturity_date);
+                    Some(overnight.lender)
                 }
             },
             InstrumentRuntime::Equity(equity) => Some(equity.profile.issuer),

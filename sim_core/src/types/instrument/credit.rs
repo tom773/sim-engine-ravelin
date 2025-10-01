@@ -198,6 +198,26 @@ pub enum LoanType {
     PersonalLoan,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum OvernightCreditType {
+    InterbankLoan,
+    FedFunds,
+    Repo,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OvernightCreditState {
+    pub credit_type: OvernightCreditType,
+    pub lender: AgentId,
+    pub borrower: AgentId,
+    pub amount: Money,
+    pub rate_bps: BasisPoints,
+    pub issue_date: NaiveDate,
+    pub maturity_date: NaiveDate,
+    pub collateral: Option<InstrumentId>,
+    pub collateral_quantity: Option<f64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ImpairmentState {
     pub stage: ImpairmentStage,

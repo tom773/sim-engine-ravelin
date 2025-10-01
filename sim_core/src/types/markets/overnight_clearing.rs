@@ -53,18 +53,11 @@ pub fn clear_fedfunds(quotes: Vec<ONQuote>) -> ClearingResult {
     let mut lender_remaining: HashMap<usize, f64> = HashMap::new();
     let mut borrower_remaining: HashMap<usize, f64> = HashMap::new();
 
-    tracing::info!("Fed Funds matching: {} lenders, {} borrowers", lenders.len(), borrowers.len());
-
     while lender_idx < lenders.len() && borrower_idx < borrowers.len() {
         let lender = &lenders[lender_idx];
         let borrower = &borrowers[borrower_idx];
 
         if borrower.limit_rate_bps < lender.limit_rate_bps {
-            tracing::warn!(
-                "Rates don't cross: borrower {}bps < lender {}bps - no match",
-                borrower.limit_rate_bps,
-                lender.limit_rate_bps
-            );
             break;
         }
 
@@ -145,7 +138,6 @@ pub fn clear_fedfunds(quotes: Vec<ONQuote>) -> ClearingResult {
     }
 
     let weighted_avg_rate = if total_volume > 0.0 { total_rate_volume / total_volume } else { 0.0 };
-
     let num_matches = matches.len();
 
     ClearingResult {
@@ -200,7 +192,6 @@ pub fn clear_repo_gc1d(quotes: Vec<ONQuote>, state: &crate::state::SimState, fix
         }
 
         let (collateral_id, collateral_qty, collateral_value) = collateral.unwrap();
-
         let max_borrowable = collateral_value * (1.0 - fixed_haircut_pct / 100.0);
         let trade_amount = lender_available.min(borrower_needed).min(max_borrowable);
 
@@ -282,7 +273,6 @@ pub fn clear_repo_gc1d(quotes: Vec<ONQuote>, state: &crate::state::SimState, fix
     }
 
     let weighted_avg_rate = if total_volume > 0.0 { total_rate_volume / total_volume } else { 0.0 };
-
     let num_matches = matches.len();
 
     ClearingResult {
